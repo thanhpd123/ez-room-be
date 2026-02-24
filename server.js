@@ -4,17 +4,44 @@ const bodyParser = require('body-parser');
 require('dotenv').config();
 
 const supabase = require('./config/supabase');
+const prisma = require('./config/prisma');
+const authRoutes = require('./routes/auth');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
-app.use(cors());
+// Middleware – allow frontend origin for auth (Bearer token)
+app.use(cors({
+    origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
+    credentials: true,
+}));
 app.use(bodyParser.json());
+
+// Routes
+app.use('/auth', authRoutes);
 
 // Test route
 app.get('/', (req, res) => {
     res.json({ message: 'EZ-Room API is running!' });
+});
+
+// Test Prisma connection (requires DATABASE_URL and migrated DB)
+app.get('/test-prisma', async (req, res) => {
+    try {
+        await prisma.$connect();
+        const count = await prisma.user.count();
+        res.json({
+            success: true,
+            message: 'Prisma connected successfully!',
+            usersCount: count,
+        });
+    } catch (err) {
+        res.status(500).json({
+            success: false,
+            message: 'Prisma connection or query failed (run db:migrate or db:push?)',
+            error: err.message,
+        });
+    }
 });
 
 // Test Supabase connection
