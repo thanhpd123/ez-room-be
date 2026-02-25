@@ -1,7 +1,20 @@
 const express = require('express');
 const { requireAuth } = require('../middleware/auth');
+const { register, login } = require('../controllers/auth.controller');
 
 const router = express.Router();
+
+/**
+ * POST /auth/register
+ * Body: { fullName, email, phone?, password, confirmPassword }
+ */
+router.post('/register', register);
+
+/**
+ * POST /auth/login
+ * Body: { email, password }
+ */
+router.post('/login', login);
 
 /**
  * GET /auth/me
@@ -22,5 +35,6 @@ router.get('/me', requireAuth, (req, res) => {
         },
     });
 });
+
 
 module.exports = router;
