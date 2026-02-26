@@ -1,8 +1,25 @@
+const jwt = require('jsonwebtoken');
 const supabase = require('../config/supabase');
+const prisma = require('../config/prisma');
+
+const JWT_SECRET = process.env.JWT_SECRET || 'ez-room-default-secret';
 
 /**
- * Verify Supabase JWT from Authorization: Bearer <access_token>
- * and attach user to req.auth (user object from Supabase Auth).
+ * Normalize user for /auth/me response: { id, email, full_name, avatar_url, created_at }
+ */
+function normalizeSupabaseUser(user) {
+    return {
+        id: user.id,
+        email: user.email ?? null,
+        full_name: user.user_metadata?.full_name ?? user.user_metadata?.name ?? null,
+        avatar_url: user.user_metadata?.avatar_url ?? null,
+        created_at: user.created_at ?? null,
+    };
+}
+
+/**
+ * Verify Supabase JWT or backend JWT from Authorization: Bearer <token>
+ * Attaches normalized user to req.auth.user for /auth/me.
  */
 async function requireAuth(req, res, next) {
     const authHeader = req.headers.authorization;
@@ -22,26 +39,74 @@ async function requireAuth(req, res, next) {
     }
 
     try {
-        const { data: { user }, error } = await supabase.auth.getUser(token);
+        // 1) Try Supabase JWT (Google/Facebook OAuth) – require matching Prisma user
+        const { data: { user: supaUser }, error } = await supabase.auth.getUser(token);
+        if (!error && supaUser) {
+            const email = (supaUser.email || '').toLowerCase();
+            const dbUser = await prisma.user.findUnique({
+                where: { email },
+            });
+            if (!dbUser || dbUser.status !== 'ACTIVE') {
+                return res.status(404).json({
+                    success: false,
+                    code: 'NEED_REGISTER',
+                    message: 'Tài khoản chưa đăng ký. Vui lòng đăng ký trước.',
+                    email: supaUser.email ?? null,
+                    full_name: supaUser.user_metadata?.full_name ?? supaUser.user_metadata?.name ?? null,
+                    avatar_url: supaUser.user_metadata?.avatar_url ?? null,
+                });
+            }
+            req.auth = {
+                user: {
+                    id: dbUser.id,
+                    email: dbUser.email,
+                    full_name: dbUser.fullName,
+                    avatar_url: dbUser.avatarUrl ?? null,
+                    created_at: dbUser.createdAt,
+                    role: dbUser.role,
+                    phone: dbUser.phone ?? null,
+                },
+            };
+            return next();
+        }
 
-        if (error) {
+        // 2) Try backend JWT (email/password login)
+        const payload = jwt.verify(token, JWT_SECRET);
+        const userId = payload.userId || payload.sub;
+        if (!userId) {
+            return res.status(401).json({
+                success: false,
+                message: 'Invalid token payload',
+            });
+        }
+        const dbUser = await prisma.user.findUnique({
+            where: { id: userId },
+        });
+        if (!dbUser || dbUser.status !== 'ACTIVE') {
+            return res.status(401).json({
+                success: false,
+                message: 'User not found or inactive',
+            });
+        }
+        req.auth = {
+            user: {
+                id: dbUser.id,
+                email: dbUser.email,
+                full_name: dbUser.fullName,
+                avatar_url: dbUser.avatarUrl ?? null,
+                created_at: dbUser.createdAt,
+                role: dbUser.role,
+                phone: dbUser.phone ?? null,
+            },
+        };
+        next();
+    } catch (err) {
+        if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
             return res.status(401).json({
                 success: false,
                 message: 'Invalid or expired token',
-                error: error.message,
             });
         }
-
-        if (!user) {
-            return res.status(401).json({
-                success: false,
-                message: 'User not found',
-            });
-        }
-
-        req.auth = { user };
-        next();
-    } catch (err) {
         res.status(500).json({
             success: false,
             message: 'Auth verification failed',
