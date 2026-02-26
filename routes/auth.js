@@ -1,5 +1,5 @@
 const express = require('express');
-const { requireAuth } = require('../middleware/auth');
+const { verifyJWT } = require('../middleware/auth');
 const { register, registerOAuth, login, forgotPassword, resetPassword, updateProfile, getLifestyle, upsertLifestyle, getPreference, upsertPreference, suggestPassword } = require('../controllers/auth.controller');
 
 const router = express.Router();
@@ -43,19 +43,19 @@ router.post('/register-oauth', registerOAuth);
 /**
  * PATCH /auth/profile – Body: { fullName?, phone?, avatarUrl? }
  */
-router.patch('/profile', requireAuth, updateProfile);
+router.patch('/profile', verifyJWT, updateProfile);
 
-router.get('/lifestyle', requireAuth, getLifestyle);
-router.put('/lifestyle', requireAuth, upsertLifestyle);
-router.get('/preference', requireAuth, getPreference);
-router.put('/preference', requireAuth, upsertPreference);
+router.get('/lifestyle', verifyJWT, getLifestyle);
+router.put('/lifestyle', verifyJWT, upsertLifestyle);
+router.get('/preference', verifyJWT, getPreference);
+router.put('/preference', verifyJWT, upsertPreference);
 
 /**
  * GET /auth/me
- * Returns the current user (Supabase or backend JWT).
- * Requires: Authorization: Bearer <access_token>
+ * Returns the current user (Supabase OAuth or Backend JWT).
+ * Requires: Authorization: Bearer <token>
  */
-router.get('/me', requireAuth, (req, res) => {
+router.get('/me', verifyJWT, (req, res) => {
     const { user } = req.auth;
     res.json({
         success: true,

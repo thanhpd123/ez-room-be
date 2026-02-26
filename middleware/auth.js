@@ -5,36 +5,25 @@ const prisma = require('../config/prisma');
 const JWT_SECRET = process.env.JWT_SECRET || 'ez-room-default-secret';
 
 /**
- * Normalize user for /auth/me response: { id, email, full_name, avatar_url, created_at }
+ * Verify Supabase JWT (Google/Facebook OAuth) or Backend JWT (email/password)
+ * Attaches user info to req.auth.user
  */
-function normalizeSupabaseUser(user) {
-    return {
-        id: user.id,
-        email: user.email ?? null,
-        full_name: user.user_metadata?.full_name ?? user.user_metadata?.name ?? null,
-        avatar_url: user.user_metadata?.avatar_url ?? null,
-        created_at: user.created_at ?? null,
-    };
-}
-
-/**
- * Verify Supabase JWT or backend JWT from Authorization: Bearer <token>
- * Attaches normalized user to req.auth.user for /auth/me.
- */
-async function requireAuth(req, res, next) {
+async function verifyJWT(req, res, next) {
     const authHeader = req.headers.authorization;
+
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
         return res.status(401).json({
             success: false,
-            message: 'Missing or invalid Authorization header. Use: Bearer <access_token>',
+            message: 'Thiếu hoặc sai định dạng header Authorization. Định dạng: Bearer <token>',
         });
     }
 
-    const token = authHeader.replace('Bearer ', '').trim();
+    const token = authHeader.split(' ')[1];
+
     if (!token) {
         return res.status(401).json({
             success: false,
-            message: 'Missing token',
+            message: 'Không tìm thấy token',
         });
     }
 
@@ -76,7 +65,7 @@ async function requireAuth(req, res, next) {
         if (!userId) {
             return res.status(401).json({
                 success: false,
-                message: 'Invalid token payload',
+                message: 'Token payload không hợp lệ',
             });
         }
         const dbUser = await prisma.user.findUnique({
@@ -85,7 +74,7 @@ async function requireAuth(req, res, next) {
         if (!dbUser || dbUser.status !== 'ACTIVE') {
             return res.status(401).json({
                 success: false,
-                message: 'User not found or inactive',
+                message: 'Người dùng không tồn tại hoặc đã bị khóa',
             });
         }
         req.auth = {
@@ -101,39 +90,118 @@ async function requireAuth(req, res, next) {
         };
         next();
     } catch (err) {
-        if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
+        if (err.name === 'JsonWebTokenError') {
             return res.status(401).json({
                 success: false,
-                message: 'Invalid or expired token',
+                message: 'Token không hợp lệ',
+            });
+        }
+        if (err.name === 'TokenExpiredError') {
+            return res.status(401).json({
+                success: false,
+                message: 'Token đã hết hạn',
             });
         }
         res.status(500).json({
             success: false,
-            message: 'Auth verification failed',
+            message: 'Xác thực token thất bại',
             error: err.message,
         });
     }
 }
 
 /**
- * Optional auth: attach user if token present, do not 401 if missing.
+ * Middleware Factory: Check if user role is in allowedRoles
+ * Usage: requireRole('ADMIN', 'MODERATOR')
+ * @param  {...string} allowedRoles - Roles allowed to access the route
  */
-async function optionalAuth(req, res, next) {
+function requireRole(...allowedRoles) {
+    return (req, res, next) => {
+        // Lấy user từ req.auth.user (được set bởi verifyJWT)
+        const user = req.auth?.user;
+
+        if (!user) {
+            return res.status(401).json({
+                success: false,
+                message: 'Chưa xác thực. Vui lòng đăng nhập',
+            });
+        }
+
+        const userRole = user.role;
+
+        if (!allowedRoles.includes(userRole)) {
+            return res.status(403).json({
+                success: false,
+                message: `Bạn không có quyền truy cập. Yêu cầu role: ${allowedRoles.join(' hoặc ')}`,
+            });
+        }
+
+        next();
+    };
+}
+
+/**
+ * Optional JWT: attach user if token present, do not 401 if missing.
+ * Useful for routes that work for both authenticated and guest users.
+ */
+async function optionalJWT(req, res, next) {
     const authHeader = req.headers.authorization;
+
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
         req.auth = null;
         return next();
     }
 
-    const token = authHeader.replace('Bearer ', '').trim();
+    const token = authHeader.split(' ')[1];
+
     if (!token) {
         req.auth = null;
         return next();
     }
 
     try {
-        const { data: { user }, error } = await supabase.auth.getUser(token);
-        req.auth = error || !user ? null : { user };
+        // 1) Try Supabase JWT first
+        const { data: { user: supaUser }, error } = await supabase.auth.getUser(token);
+        if (!error && supaUser) {
+            const email = (supaUser.email || '').toLowerCase();
+            const dbUser = await prisma.user.findUnique({ where: { email } });
+            if (dbUser && dbUser.status === 'ACTIVE') {
+                req.auth = {
+                    user: {
+                        id: dbUser.id,
+                        email: dbUser.email,
+                        full_name: dbUser.fullName,
+                        avatar_url: dbUser.avatarUrl ?? null,
+                        created_at: dbUser.createdAt,
+                        role: dbUser.role,
+                        phone: dbUser.phone ?? null,
+                    },
+                };
+                return next();
+            }
+        }
+
+        // 2) Try backend JWT
+        const payload = jwt.verify(token, JWT_SECRET);
+        const userId = payload.userId || payload.sub;
+        if (userId) {
+            const dbUser = await prisma.user.findUnique({ where: { id: userId } });
+            if (dbUser && dbUser.status === 'ACTIVE') {
+                req.auth = {
+                    user: {
+                        id: dbUser.id,
+                        email: dbUser.email,
+                        full_name: dbUser.fullName,
+                        avatar_url: dbUser.avatarUrl ?? null,
+                        created_at: dbUser.createdAt,
+                        role: dbUser.role,
+                        phone: dbUser.phone ?? null,
+                    },
+                };
+                return next();
+            }
+        }
+        req.auth = null;
         next();
     } catch {
         req.auth = null;
@@ -141,4 +209,4 @@ async function optionalAuth(req, res, next) {
     }
 }
 
-module.exports = { requireAuth, optionalAuth };
+module.exports = { verifyJWT, requireRole, optionalJWT };
