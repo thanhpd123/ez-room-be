@@ -1,79 +1,109 @@
-const supabase = require('../config/supabase');
+const jwt = require('jsonwebtoken');
+
+const JWT_SECRET = process.env.JWT_SECRET || 'ez-room-default-secret';
 
 /**
- * Verify Supabase JWT from Authorization: Bearer <access_token>
- * and attach user to req.auth (user object from Supabase Auth).
+ * Middleware: Verify JWT token from Authorization: Bearer <token>
+ * Decodes token and attaches payload to req.user
  */
-async function requireAuth(req, res, next) {
+function verifyJWT(req, res, next) {
     const authHeader = req.headers.authorization;
+
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
         return res.status(401).json({
             success: false,
-            message: 'Missing or invalid Authorization header. Use: Bearer <access_token>',
+            message: 'Thiếu hoặc sai định dạng header Authorization. Định dạng: Bearer <token>',
         });
     }
 
-    const token = authHeader.replace('Bearer ', '').trim();
+    const token = authHeader.split(' ')[1];
+
     if (!token) {
         return res.status(401).json({
             success: false,
-            message: 'Missing token',
+            message: 'Không tìm thấy token',
         });
     }
 
     try {
-        const { data: { user }, error } = await supabase.auth.getUser(token);
-
-        if (error) {
-            return res.status(401).json({
-                success: false,
-                message: 'Invalid or expired token',
-                error: error.message,
-            });
-        }
-
-        if (!user) {
-            return res.status(401).json({
-                success: false,
-                message: 'User not found',
-            });
-        }
-
-        req.auth = { user };
+        const decoded = jwt.verify(token, JWT_SECRET);
+        req.user = decoded; // { userId, email, role, iat, exp }
         next();
     } catch (err) {
-        res.status(500).json({
+        if (err.name === 'TokenExpiredError') {
+            return res.status(401).json({
+                success: false,
+                message: 'Token đã hết hạn',
+            });
+        }
+        if (err.name === 'JsonWebTokenError') {
+            return res.status(401).json({
+                success: false,
+                message: 'Token không hợp lệ',
+            });
+        }
+        return res.status(401).json({
             success: false,
-            message: 'Auth verification failed',
+            message: 'Xác thực token thất bại',
             error: err.message,
         });
     }
 }
 
 /**
- * Optional auth: attach user if token present, do not 401 if missing.
+ * Middleware Factory: Check if user role is in allowedRoles
+ * Usage: requireRole('ADMIN', 'MODERATOR')
+ * @param  {...string} allowedRoles - Roles allowed to access the route
  */
-async function optionalAuth(req, res, next) {
+function requireRole(...allowedRoles) {
+    return (req, res, next) => {
+        if (!req.user) {
+            return res.status(401).json({
+                success: false,
+                message: 'Chưa xác thực. Vui lòng đăng nhập',
+            });
+        }
+
+        const userRole = req.user.role;
+
+        if (!allowedRoles.includes(userRole)) {
+            return res.status(403).json({
+                success: false,
+                message: `Bạn không có quyền truy cập. Yêu cầu role: ${allowedRoles.join(' hoặc ')}`,
+            });
+        }
+
+        next();
+    };
+}
+
+/**
+ * Optional JWT: attach user if token present, do not 401 if missing.
+ * Useful for routes that work for both authenticated and guest users.
+ */
+function optionalJWT(req, res, next) {
     const authHeader = req.headers.authorization;
+
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        req.auth = null;
+        req.user = null;
         return next();
     }
 
-    const token = authHeader.replace('Bearer ', '').trim();
+    const token = authHeader.split(' ')[1];
+
     if (!token) {
-        req.auth = null;
+        req.user = null;
         return next();
     }
 
     try {
-        const { data: { user }, error } = await supabase.auth.getUser(token);
-        req.auth = error || !user ? null : { user };
-        next();
+        const decoded = jwt.verify(token, JWT_SECRET);
+        req.user = decoded;
     } catch {
-        req.auth = null;
-        next();
+        req.user = null;
     }
+
+    next();
 }
 
-module.exports = { requireAuth, optionalAuth };
+module.exports = { verifyJWT, requireRole, optionalJWT };
