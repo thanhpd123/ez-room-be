@@ -126,7 +126,7 @@ async function updateUserRole(req, res) {
     try {
         const { userId } = req.params;
         const { role } = req.body;
-        const adminId = req.user.userId;
+        const adminId = req.auth.user.id;
 
         // Validate role
         if (!role || !VALID_ROLES.includes(role.toUpperCase())) {
@@ -207,7 +207,7 @@ async function updateUserStatus(req, res) {
     try {
         const { userId } = req.params;
         const { status } = req.body;
-        const adminId = req.user.userId;
+        const adminId = req.auth.user.id;
 
         const VALID_STATUSES = ['ACTIVE', 'INACTIVE', 'SUSPENDED', 'BANNED'];
 

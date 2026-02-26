@@ -7,13 +7,26 @@ const supabase = require('./config/supabase');
 const prisma = require('./config/prisma');
 const authRoutes = require('./routes/auth');
 const adminRoutes = require('./routes/admin');
+const uploadRoutes = require('./routes/upload');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Middleware – allow frontend origin for auth (Bearer token)
+const allowedOrigins = [
+    'http://localhost:5173',
+    'http://localhost:5174',
+    'http://127.0.0.1:5173',
+    'http://127.0.0.1:5174',
+];
+const corsOrigin = process.env.CORS_ORIGIN
+    ? process.env.CORS_ORIGIN.split(',').map((o) => o.trim()).filter(Boolean)
+    : allowedOrigins;
 app.use(cors({
-    origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
+    origin: (origin, cb) => {
+        if (!origin || corsOrigin.includes(origin)) cb(null, true);
+        else cb(null, corsOrigin[0]);
+    },
     credentials: true,
 }));
 app.use(bodyParser.json());
@@ -21,6 +34,7 @@ app.use(bodyParser.json());
 // Routes
 app.use('/auth', authRoutes);
 app.use('/admin', adminRoutes);
+app.use('/upload', uploadRoutes);
 
 // Test route
 app.get('/', (req, res) => {
@@ -72,6 +86,16 @@ app.get('/test-db', async (req, res) => {
             error: err.message
         });
     }
+});
+
+// Error handler (e.g. multer fileFilter, Cloudinary errors)
+app.use((err, req, res, next) => {
+    console.error(err);
+    const status = err.statusCode || err.status || 500;
+    res.status(status).json({
+        success: false,
+        message: err.message || 'Server error',
+    });
 });
 
 app.listen(PORT, () => {
