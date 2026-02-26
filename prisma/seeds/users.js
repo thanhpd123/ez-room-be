@@ -1,9 +1,20 @@
 /**
- * Seed data cho Users (Chủ trọ, Người thuê)
+ * Seed data cho Users (Admin, Chủ trọ, Người thuê)
  */
 
 // Data mẫu cho Users
 const usersData = {
+    // Admin: admin@ezroom.vn / Admin@123
+    admins: [
+        {
+            fullName: 'Admin EZ-Room',
+            email: 'admin@ezroom.vn',
+            password_hash: '$2b$10$vODTDddeyeCWRKOPszJdOOmYJHGAsJBq7De0MgQMCc3pYb/uQ4pp2',
+            phone: '0900000000',
+            role: 'ADMIN',
+            status: 'ACTIVE',
+        },
+    ],
     landlords: [
         {
             fullName: 'Nguyễn Văn Chủ Trọ',
@@ -45,13 +56,25 @@ const usersData = {
 /**
  * Seed users vào database
  * @param {import('@prisma/client').PrismaClient} prisma
- * @returns {Promise<{landlords: any[], tenants: any[]}>}
+ * @returns {Promise<{admins: any[], landlords: any[], tenants: any[]}>}
  */
 async function seedUsers(prisma) {
     console.log('\n👥 Seeding Users...');
 
+    const admins = [];
     const landlords = [];
     const tenants = [];
+
+    // Tạo Admins
+    for (const data of usersData.admins) {
+        const user = await prisma.user.upsert({
+            where: { email: data.email },
+            update: { password_hash: data.password_hash },
+            create: data,
+        });
+        admins.push(user);
+        console.log(`   ✅ Admin: ${user.fullName} (${user.email})`);
+    }
 
     // Tạo Landlords
     for (const data of usersData.landlords) {
@@ -88,7 +111,7 @@ async function seedUsers(prisma) {
     }
     console.log(`   ✅ Tạo ví cho ${landlords.length} chủ trọ`);
 
-    return { landlords, tenants };
+    return { admins, landlords, tenants };
 }
 
 module.exports = { seedUsers, usersData };
