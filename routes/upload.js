@@ -1,6 +1,6 @@
 const express = require('express');
 const multer = require('multer');
-const { requireAuth } = require('../middleware/auth');
+const { verifyJWT } = require('../middleware/auth');
 const cloudinary = require('../config/cloudinary');
 
 const router = express.Router();
@@ -20,7 +20,7 @@ const upload = multer({
  * multipart/form-data, field name: "file"
  * Returns: { success: true, url: string } (Cloudinary secure_url)
  */
-router.post('/image', requireAuth, upload.single('file'), (req, res) => {
+router.post('/image', verifyJWT, upload.single('file'), (req, res) => {
     if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
         return res.status(503).json({
             success: false,
