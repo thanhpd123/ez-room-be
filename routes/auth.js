@@ -1,8 +1,14 @@
 const express = require('express');
 const { requireAuth } = require('../middleware/auth');
-const { register, registerOAuth, login, forgotPassword, resetPassword, updateProfile, getLifestyle, upsertLifestyle, getPreference, upsertPreference } = require('../controllers/auth.controller');
+const { register, registerOAuth, login, forgotPassword, resetPassword, updateProfile, getLifestyle, upsertLifestyle, getPreference, upsertPreference, suggestPassword } = require('../controllers/auth.controller');
 
 const router = express.Router();
+
+/**
+ * GET /auth/suggest-password
+ * Returns a suggested strong password (8+ chars, upper, number, special).
+ */
+router.get('/suggest-password', suggestPassword);
 
 /**
  * POST /auth/register

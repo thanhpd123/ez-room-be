@@ -1,6 +1,31 @@
 const ALLOWED_ROLES = ['TENANT', 'LANDLORD'];
 
 /**
+ * Validate password strength: 8+ chars, at least 1 uppercase, 1 number, 1 special char.
+ * Returns array of error messages (empty if valid).
+ */
+function validatePasswordStrength(password) {
+    const errors = [];
+    if (!password || typeof password !== 'string') {
+        errors.push('Mật khẩu là bắt buộc');
+        return errors;
+    }
+    if (password.length < 8) {
+        errors.push('Mật khẩu phải có ít nhất 8 ký tự');
+    }
+    if (!/[A-Z]/.test(password)) {
+        errors.push('Mật khẩu phải có ít nhất 1 chữ in hoa');
+    }
+    if (!/[0-9]/.test(password)) {
+        errors.push('Mật khẩu phải có ít nhất 1 chữ số');
+    }
+    if (!/[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?]/.test(password)) {
+        errors.push('Mật khẩu phải có ít nhất 1 ký tự đặc biệt (!@#$%^&*...)');
+    }
+    return errors;
+}
+
+/**
  * Validate register input
  * Fields: fullName, email, phone (optional), password, confirmPassword, role (optional: TENANT | LANDLORD)
  */
@@ -34,9 +59,10 @@ function validateRegister(body) {
         }
     }
 
-    // password: required, min 6 chars
-    if (!password || typeof password !== 'string' || password.length < 6) {
-        errors.push('Mật khẩu phải có ít nhất 6 ký tự');
+    // password: required, 8+ chars, 1 uppercase, 1 number, 1 special
+    const passwordErrors = validatePasswordStrength(password);
+    if (passwordErrors.length > 0) {
+        errors.push(...passwordErrors);
     }
 
     // confirmPassword: must match password
@@ -127,8 +153,9 @@ function validateResetPassword(body) {
     if (!token || typeof token !== 'string' || !token.trim()) {
         errors.push('Link đặt lại mật khẩu không hợp lệ');
     }
-    if (!newPassword || typeof newPassword !== 'string' || newPassword.length < 6) {
-        errors.push('Mật khẩu mới phải có ít nhất 6 ký tự');
+    const newPasswordErrors = validatePasswordStrength(newPassword);
+    if (newPasswordErrors.length > 0) {
+        errors.push(...newPasswordErrors);
     }
     if (newPassword !== confirmPassword) {
         errors.push('Xác nhận mật khẩu không khớp');
@@ -136,4 +163,4 @@ function validateResetPassword(body) {
     return { valid: errors.length === 0, errors };
 }
 
-module.exports = { validateRegister, validateRegisterOAuth, validateLogin, validateForgotPassword, validateResetPassword };
+module.exports = { validateRegister, validateRegisterOAuth, validateLogin, validateForgotPassword, validateResetPassword, validatePasswordStrength };

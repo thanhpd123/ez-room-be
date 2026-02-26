@@ -7,6 +7,53 @@ const JWT_SECRET = process.env.JWT_SECRET || 'ez-room-default-secret';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5174';
 const RESET_TOKEN_EXPIRY = '1h';
+const EMAIL_VERIFY_EXPIRY = '24h';
+
+function getTransporter() {
+    const hasMail = !!(process.env.MAIL_HOST && process.env.MAIL_USER && process.env.MAIL_PASS);
+    if (!hasMail) return null;
+    const nodemailer = require('nodemailer');
+    return nodemailer.createTransport({
+        host: process.env.MAIL_HOST,
+        port: Number(process.env.MAIL_PORT) || 587,
+        secure: process.env.MAIL_SECURE === 'true',
+        auth: { user: process.env.MAIL_USER, pass: process.env.MAIL_PASS },
+    });
+}
+
+async function sendEmail(to, subject, text, html) {
+    const transporter = getTransporter();
+    if (!transporter) return false;
+    try {
+        await transporter.sendMail({
+            from: process.env.MAIL_FROM || process.env.MAIL_USER,
+            to,
+            subject,
+            text,
+            html: html || text,
+        });
+        return true;
+    } catch (err) {
+        console.error('Send email error:', err);
+        return false;
+    }
+}
+
+async function createNotification(userId, type, title, body) {
+    try {
+        await prisma.notification.create({
+            data: {
+                userId,
+                type,
+                title: title || null,
+                body: body || null,
+                status: 'UNREAD',
+            },
+        });
+    } catch (err) {
+        console.error('Create notification error:', err);
+    }
+}
 
 /**
  * POST /auth/register
@@ -57,7 +104,37 @@ async function register(req, res) {
 
         console.log('[Register] Created user id=', newUser.id, 'email=', newUser.email);
 
-        // 5. Return user info (exclude password_hash)
+        // 5. Send verification email + welcome email, store in notifications
+        const verificationToken = jwt.sign(
+            { userId: newUser.id, purpose: 'email_verify' },
+            JWT_SECRET,
+            { expiresIn: EMAIL_VERIFY_EXPIRY }
+        );
+        const verifyLink = `${FRONTEND_URL.replace(/\/$/, '')}/verify-email?token=${verificationToken}`;
+
+        const verificationSubject = 'EzRoom - Xác thực email của bạn';
+        const verificationText = `Chào ${newUser.fullName},\n\nVui lòng xác thực email bằng cách truy cập link sau (có hiệu lực 24 giờ):\n\n${verifyLink}\n\nNếu bạn không đăng ký tài khoản EzRoom, hãy bỏ qua email này.`;
+        const verificationHtml = `<p>Chào <strong>${newUser.fullName}</strong>,</p><p>Vui lòng xác thực email bằng cách <a href="${verifyLink}">nhấn vào đây</a> (link có hiệu lực 24 giờ).</p><p>Nếu bạn không đăng ký tài khoản EzRoom, hãy bỏ qua email này.</p>`;
+        const verificationSent = await sendEmail(newUser.email, verificationSubject, verificationText, verificationHtml);
+        await createNotification(
+            newUser.id,
+            'SYSTEM',
+            'Email xác thực đã gửi',
+            verificationSent ? `Đã gửi email xác thực đến ${newUser.email}. Vui lòng kiểm tra hộp thư.` : `Gửi email xác thực đến ${newUser.email} thất bại (kiểm tra cấu hình SMTP).`
+        );
+
+        const welcomeSubject = 'Chào mừng bạn đến với EzRoom';
+        const welcomeText = `Chào ${newUser.fullName},\n\nChúc mừng bạn đã đăng ký tài khoản EzRoom thành công. Chúng tôi hy vọng bạn sẽ tìm được chỗ ở phù hợp.\n\nTrân trọng,\nĐội ngũ EzRoom`;
+        const welcomeHtml = `<p>Chào <strong>${newUser.fullName}</strong>,</p><p>Chúc mừng bạn đã đăng ký tài khoản EzRoom thành công. Chúng tôi hy vọng bạn sẽ tìm được chỗ ở phù hợp.</p><p>Trân trọng,<br/>Đội ngũ EzRoom</p>`;
+        const welcomeSent = await sendEmail(newUser.email, welcomeSubject, welcomeText, welcomeHtml);
+        await createNotification(
+            newUser.id,
+            'SYSTEM',
+            'Chào mừng bạn đến với EzRoom',
+            welcomeSent ? `Email chào mừng đã gửi đến ${newUser.email}.` : `Gửi email chào mừng đến ${newUser.email} thất bại.`
+        );
+
+        // 6. Return user info (exclude password_hash)
         return res.status(201).json({
             success: true,
             message: 'Đăng ký thành công',
@@ -542,4 +619,26 @@ async function upsertPreference(req, res) {
     }
 }
 
-module.exports = { register, registerOAuth, login, forgotPassword, resetPassword, updateProfile, getLifestyle, upsertLifestyle, getPreference, upsertPreference };
+/**
+ * GET /auth/suggest-password
+ * Returns a random strong password (12 chars: upper, lower, number, special).
+ */
+function suggestPassword(req, res) {
+    const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+    const lower = 'abcdefghjkmnpqrstuvwxyz';
+    const numbers = '23456789';
+    const special = '!@#$%&*';
+    const all = upper + lower + numbers + special;
+    const pick = (str, n) => {
+        let result = '';
+        for (let i = 0; i < n; i++) result += str[Math.floor(Math.random() * str.length)];
+        return result;
+    };
+    const password = (pick(upper, 1) + pick(lower, 1) + pick(numbers, 1) + pick(special, 1) + pick(all, 8))
+        .split('')
+        .sort(() => Math.random() - 0.5)
+        .join('');
+    return res.json({ success: true, suggestedPassword: password });
+}
+
+module.exports = { register, registerOAuth, login, forgotPassword, resetPassword, updateProfile, getLifestyle, upsertLifestyle, getPreference, upsertPreference, suggestPassword };
