@@ -10,8 +10,7 @@ const adminRoutes = require('./routes/admin');
 const uploadRoutes = require('./routes/upload');
 const amenitiesRoutes = require('./routes/amenities');
 const locationsRoutes = require('./routes/locations');
-const rentalsRoutes = require('./routes/rental');
-// const rentalRoutes = require('./routes/rental');
+const rentalRoutes = require('./routes/rental');
 const roomRoutes = require('./routes/room');
 
 const app = express();
@@ -42,7 +41,7 @@ app.use('/admin', adminRoutes);
 app.use('/upload', uploadRoutes);
 app.use('/amenities', amenitiesRoutes);
 app.use('/locations', locationsRoutes);
-app.use('/rental', rentalsRoutes);
+app.use('/rentals', rentalRoutes);
 app.use('/rooms', roomRoutes);
 
 // Test route
