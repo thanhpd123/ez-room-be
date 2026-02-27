@@ -5,6 +5,7 @@ const {
     getRentals,
     getRentalById,
     getMyRentals,
+    getRentalsForModeration,
     updateRentalStatus,
 } = require('../controllers/rental.controller');
 
@@ -32,6 +33,13 @@ router.post('/', requireRole('LANDLORD'), createRental);
  * Query: ?page=1&limit=10&status=AVAILABLE&search=keyword
  */
 router.get('/', getRentals);
+
+/**
+ * GET /rentals/moderation
+ * Moderator/Admin lấy danh sách rentals để duyệt
+ * Query: ?status=PENDING&search=keyword&page=1&limit=50
+ */
+router.get('/moderation', requireRole('MODERATOR', 'ADMIN'), getRentalsForModeration);
 
 /**
  * GET /rentals/:rentalId

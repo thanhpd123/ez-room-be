@@ -301,6 +301,94 @@ async function getMyRentals(req, res) {
 }
 
 /**
+ * GET /rentals/moderation
+ * Moderator/Admin lấy danh sách rentals để duyệt (có filter status, phân trang).
+ * Query: ?page=1&limit=50&status=PENDING&search=keyword
+ */
+async function getRentalsForModeration(req, res) {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 50;
+        const skip = (page - 1) * limit;
+
+        const where = {};
+
+        // Filter by status (mặc định không filter => lấy tất cả)
+        if (req.query.status) {
+            where.status = req.query.status;
+        }
+
+        // Search by title
+        if (req.query.search) {
+            where.title = { contains: req.query.search, mode: 'insensitive' };
+        }
+
+        const [rentals, total] = await Promise.all([
+            prisma.rental.findMany({
+                where,
+                skip,
+                take: limit,
+                orderBy: { createdAt: 'desc' },
+                include: {
+                    location: true,
+                    images: true,
+                    rooms: true,
+                    users: {
+                        select: {
+                            id: true,
+                            fullName: true,
+                            avatarUrl: true,
+                            email: true,
+                            phone: true,
+                        },
+                    },
+                },
+            }),
+            prisma.rental.count({ where }),
+        ]);
+
+        return res.json({
+            success: true,
+            data: rentals.map((r) => ({
+                id: r.id,
+                title: r.title,
+                description: r.description,
+                status: r.status,
+                createdAt: r.createdAt,
+                owner: r.users ? {
+                    id: r.users.id,
+                    fullName: r.users.fullName,
+                    avatarUrl: r.users.avatarUrl,
+                    email: r.users.email,
+                    phone: r.users.phone,
+                } : null,
+                location: r.location ? {
+                    id: r.location.id,
+                    address: r.location.address,
+                    district: r.location.district,
+                    city: r.location.city,
+                } : null,
+                images: (r.images || []).map((img) => img.imageUrl),
+                roomsCount: r.rooms ? r.rooms.length : 0,
+            })),
+            pagination: {
+                page,
+                limit,
+                total,
+                totalPages: Math.ceil(total / limit),
+            },
+        });
+    } catch (err) {
+        console.error('Get rentals for moderation error:', err);
+        return res.status(500).json({
+            success: false,
+            message: 'Lỗi khi lấy danh sách bài đăng cho duyệt',
+            error: err.message,
+        });
+    }
+}
+
+/**
  * PATCH /rentals/:rentalId/status
  * Moderator/Admin duyệt rental: đổi status (HIDDEN → AVAILABLE, etc.)
  * Body: { status: 'AVAILABLE' | 'HIDDEN' | ... }
@@ -362,5 +450,6 @@ module.exports = {
     getRentals,
     getRentalById,
     getMyRentals,
+    getRentalsForModeration,
     updateRentalStatus,
 };
