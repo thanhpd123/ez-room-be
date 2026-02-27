@@ -9,6 +9,7 @@ const authRoutes = require('./routes/auth');
 const adminRoutes = require('./routes/admin');
 const uploadRoutes = require('./routes/upload');
 const rentalRoutes = require('./routes/rental');
+const roomRoutes = require('./routes/room');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -37,6 +38,7 @@ app.use('/auth', authRoutes);
 app.use('/admin', adminRoutes);
 app.use('/upload', uploadRoutes);
 app.use('/rentals', rentalRoutes);
+app.use('/rooms', roomRoutes);
 
 // Test route
 app.get('/', (req, res) => {
