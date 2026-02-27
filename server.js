@@ -6,7 +6,10 @@ require('dotenv').config();
 const supabase = require('./config/supabase');
 const prisma = require('./config/prisma');
 const authRoutes = require('./routes/auth');
+const adminRoutes = require('./routes/admin');
 const uploadRoutes = require('./routes/upload');
+const rentalRoutes = require('./routes/rental');
+const roomRoutes = require('./routes/room');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -32,7 +35,10 @@ app.use(bodyParser.json());
 
 // Routes
 app.use('/auth', authRoutes);
+app.use('/admin', adminRoutes);
 app.use('/upload', uploadRoutes);
+app.use('/rentals', rentalRoutes);
+app.use('/rooms', roomRoutes);
 
 // Test route
 app.get('/', (req, res) => {
