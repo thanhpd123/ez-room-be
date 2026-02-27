@@ -8,6 +8,8 @@ const prisma = require('./config/prisma');
 const authRoutes = require('./routes/auth');
 const adminRoutes = require('./routes/admin');
 const uploadRoutes = require('./routes/upload');
+const amenitiesRoutes = require('./routes/amenities');
+const locationsRoutes = require('./routes/locations');
 const rentalRoutes = require('./routes/rental');
 const roomRoutes = require('./routes/room');
 
@@ -37,6 +39,8 @@ app.use(bodyParser.json());
 app.use('/auth', authRoutes);
 app.use('/admin', adminRoutes);
 app.use('/upload', uploadRoutes);
+app.use('/amenities', amenitiesRoutes);
+app.use('/locations', locationsRoutes);
 app.use('/rentals', rentalRoutes);
 app.use('/rooms', roomRoutes);
 
