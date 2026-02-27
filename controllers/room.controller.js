@@ -220,7 +220,7 @@ async function getRoomById(req, res) {
                 rentals: {
                     include: {
                         location: true,
-                        users: { select: { id: true, fullName: true, phone: true, avatarUrl: true } },
+                        users: { select: { id: true, fullName: true, email: true, phone: true, avatarUrl: true } },
                     },
                 },
             },
@@ -247,6 +247,7 @@ async function getRoomById(req, res) {
                     owner: room.rentals.users ? {
                         id: room.rentals.users.id,
                         fullName: room.rentals.users.fullName,
+                        email: room.rentals.users.email,
                         phone: room.rentals.users.phone,
                         avatarUrl: room.rentals.users.avatarUrl,
                     } : null,
