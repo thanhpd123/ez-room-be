@@ -1,0 +1,435 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                                                    String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  fullName                                              String            @map("full_name") @db.VarChar(100)
+  email                                                 String            @unique @db.Citext
+  password_hash                                         String
+  phone                                                 String?           @db.VarChar(20)
+  avatarUrl                                             String?           @map("avatar_url")
+  role                                                  user_role_enum?   @default(TENANT)
+  status                                                user_status_enum? @default(ACTIVE)
+  createdAt                                             DateTime?         @default(now()) @map("created_at") @db.Timestamp(6)
+  updated_at                                            DateTime?         @default(now()) @db.Timestamp(6)
+  favoriteRooms                                         FavoriteRoom[]
+  feedback                                              feedback[]
+  lifestyleProfile                                      LifestyleProfile?
+  receivedMessages                                      Message[]         @relation("MessageReceiver")
+  sentMessages                                          Message[]         @relation("MessageSender")
+  notifications                                         Notification[]
+  preorders                                             Preorder[]
+  rentals                                               Rental[]
+  room_compare                                          room_compare[]
+  roommate_matches_roommate_matches_requester_idTousers RoommateMatch[]   @relation("roommate_matches_requester_idTousers")
+  roommate_matches_roommate_matches_target_idTousers    RoommateMatch[]   @relation("roommate_matches_target_idTousers")
+  searchPrompts                                         SearchPrompt[]
+  preference                                            UserPreference?
+  wallet                                                Wallet?
+
+  @@index([role], map: "idx_users_role")
+  @@map("users")
+}
+
+model LifestyleProfile {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId          String    @unique @map("user_id") @db.Uuid
+  smoking         Boolean?  @default(false)
+  drinking        Boolean?  @default(false)
+  pets_allowed    Boolean?  @default(false)
+  sleep_schedule  String?   @db.VarChar(50)
+  personalityType String?   @map("personality_type") @db.VarChar(50)
+  created_at      DateTime? @default(now()) @db.Timestamp(6)
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@map("lifestyle_profiles")
+}
+
+model UserPreference {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId            String    @unique @map("user_id") @db.Uuid
+  budget_min        Decimal?  @db.Decimal(12, 2)
+  budget_max        Decimal?  @db.Decimal(12, 2)
+  preferredLocation String?   @map("preferred_location")
+  preferred_gender  String?   @db.VarChar(20)
+  created_at        DateTime? @default(now()) @db.Timestamp(6)
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@map("user_preferences")
+}
+
+model Wallet {
+  id           String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String              @unique @map("user_id") @db.Uuid
+  balance      Decimal?            @default(0) @db.Decimal(14, 2)
+  created_at   DateTime?           @default(now()) @db.Timestamp(6)
+  transactions WalletTransaction[]
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@map("wallets")
+}
+
+model WalletTransaction {
+  id               String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  walletId         String                   @map("wallet_id") @db.Uuid
+  transaction_type transaction_type_enum
+  status           transaction_status_enum? @default(PENDING)
+  amount           Decimal                  @db.Decimal(14, 2)
+  description      String?
+  createdAt        DateTime?                @default(now()) @map("created_at") @db.Timestamp(6)
+  wallet           Wallet                   @relation(fields: [walletId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([walletId], map: "idx_wallet_tx_wallet")
+  @@map("wallet_transactions")
+}
+
+model Location {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  address   String
+  district  String?  @db.VarChar(100)
+  city      String?  @db.VarChar(100)
+  latitude  Float?
+  longitude Float?
+  rentals   Rental[]
+
+  @@map("locations")
+}
+
+model Rental {
+  id          String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  owner_id    String              @db.Uuid
+  locationId  String?             @map("location_id") @db.Uuid
+  title       String              @db.VarChar(200)
+  description String?
+  status      rental_status_enum? @default(PENDING)
+  createdAt   DateTime?           @default(now()) @map("created_at") @db.Timestamp(6)
+  location    Location?           @relation(fields: [locationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users       User                @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  rooms       rooms[]
+  images      RentalImage[]
+
+  @@index([owner_id], map: "idx_rentals_owner")
+  @@map("rentals")
+}
+
+model RentalImage {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  rentalId   String    @map("rental_id") @db.Uuid
+  imageUrl   String    @map("image_url")
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+  rental     Rental    @relation(fields: [rentalId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@map("rental_images")
+}
+
+model RoomImage {
+  id           String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  roomId       String       @map("room_id") @db.Uuid
+  imageUrl     String       @map("image_url")
+  created_at   DateTime?    @default(now()) @db.Timestamp(6)
+  clip_vectors ClipVector[]
+  room         rooms        @relation(fields: [roomId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@map("room_images")
+}
+
+model RoomAmenity {
+  roomId    String    @map("room_id") @db.Uuid
+  amenityId String    @map("amenity_id") @db.Uuid
+  amenity   amenities @relation("RoomAmenities", fields: [amenityId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  room      rooms     @relation("RoomAmenities", fields: [roomId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([roomId, amenityId])
+  @@map("room_amenities")
+}
+
+model RoomRentalPeriod {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  roomId    String    @map("room_id") @db.Uuid
+  startDate DateTime  @map("start_date") @db.Date
+  endDate   DateTime  @map("end_date") @db.Date
+  createdAt DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+  room      rooms     @relation(fields: [roomId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@map("room_rental_periods")
+}
+
+model FavoriteRoom {
+  userId    String    @map("user_id") @db.Uuid
+  roomId    String    @map("room_id") @db.Uuid
+  createdAt DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+  room      rooms     @relation(fields: [roomId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([userId, roomId])
+  @@map("favorite_rooms")
+}
+
+model Preorder {
+  id             String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId         String                 @map("user_id") @db.Uuid
+  roomId         String                 @map("room_id") @db.Uuid
+  status         preorder_status_enum?  @default(PENDING)
+  payment_status preorder_payment_enum? @default(UNPAID)
+  deposit_amount Decimal?               @db.Decimal(12, 2)
+  createdAt      DateTime?              @default(now()) @map("created_at") @db.Timestamp(6)
+  room           rooms                  @relation(fields: [roomId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user           User                   @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([userId], map: "idx_preorders_user")
+  @@map("preorders")
+}
+
+model Message {
+  id           String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  senderId     String               @map("sender_id") @db.Uuid
+  receiverId   String               @map("receiver_id") @db.Uuid
+  message_type message_type_enum?   @default(TEXT)
+  status       message_status_enum? @default(SENT)
+  content      String
+  created_at   DateTime?            @default(now()) @db.Timestamp(6)
+  receiver     User                 @relation("MessageReceiver", fields: [receiverId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sender       User                 @relation("MessageSender", fields: [senderId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([receiverId], map: "idx_messages_receiver")
+  @@map("messages")
+}
+
+model Notification {
+  id        String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String                    @map("user_id") @db.Uuid
+  type      notification_type_enum
+  status    notification_status_enum? @default(UNREAD)
+  title     String?                   @db.VarChar(200)
+  body      String?
+  createdAt DateTime?                 @default(now()) @map("created_at") @db.Timestamp(6)
+  user      User                      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@map("notifications")
+}
+
+model RoommateMatch {
+  id                                         String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  requester_id                               String             @db.Uuid
+  target_id                                  String             @db.Uuid
+  status                                     match_status_enum? @default(PENDING)
+  created_at                                 DateTime?          @default(now()) @db.Timestamp(6)
+  users_roommate_matches_requester_idTousers User               @relation("roommate_matches_requester_idTousers", fields: [requester_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users_roommate_matches_target_idTousers    User               @relation("roommate_matches_target_idTousers", fields: [target_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([requester_id, target_id])
+  @@map("roommate_matches")
+}
+
+model SearchPrompt {
+  id          String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String?                 @map("user_id") @db.Uuid
+  prompt_type search_prompt_type_enum
+  prompt_text String?
+  createdAt   DateTime?               @default(now()) @map("created_at") @db.Timestamp(6)
+  user        User?                   @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@map("search_prompts")
+}
+
+model ClipVector {
+  id            String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  room_image_id String                @db.Uuid
+  model         embedding_model_enum? @default(CLIP)
+  embedding     Unsupported("vector")
+  createdAt     DateTime?             @default(now()) @map("created_at") @db.Timestamp(6)
+  room_images   RoomImage             @relation(fields: [room_image_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  // Index on embedding (vector) exists in DB; Prisma can't index Unsupported() so we don't declare it here
+  @@map("clip_vectors")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model amenities {
+  id            String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name          String        @unique @db.VarChar(100)
+  roomAmenities RoomAmenity[] @relation("RoomAmenities")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model feedback {
+  id          String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id     String               @db.Uuid
+  target_type feedback_target_enum
+  target_id   String               @db.Uuid
+  rating      Int?
+  comment     String?
+  created_at  DateTime?            @default(now()) @db.Timestamp(6)
+  users       User                 @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model room_compare {
+  user_id    String    @db.Uuid
+  room_id    String    @db.Uuid
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+  rooms      rooms     @relation(fields: [room_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users      User      @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([user_id, room_id])
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model rooms {
+  id            String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  rental_id     String             @db.Uuid
+  room_name     String?            @db.VarChar(100)
+  room_type     room_type_enum?    @default(PRIVATE)
+  price         Decimal            @db.Decimal(12, 2)
+  size_m2       Decimal?           @db.Decimal(8, 2)
+  max_people    Int?               @default(1)
+  created_at    DateTime?          @default(now()) @db.Timestamp(6)
+  favorites     FavoriteRoom[]
+  preorders     Preorder[]
+  roomAmenities RoomAmenity[]      @relation("RoomAmenities")
+  room_compare  room_compare[]
+  images        RoomImage[]
+  rentalPeriods RoomRentalPeriod[]
+  rentals       Rental             @relation(fields: [rental_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([rental_id], map: "idx_rooms_rental")
+}
+
+model VerificationCode {
+  id        String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email     String                 @db.Citext
+  code      String                 @db.VarChar(6)
+  type      verification_type_enum
+  expiresAt DateTime               @map("expires_at") @db.Timestamp(6)
+  used      Boolean                @default(false)
+  createdAt DateTime               @default(now()) @map("created_at") @db.Timestamp(6)
+
+  @@index([email, type])
+  @@map("verification_codes")
+}
+
+enum verification_type_enum {
+  REGISTER
+  LOGIN
+}
+
+enum embedding_model_enum {
+  CLIP
+  OPENAI
+  CUSTOM
+}
+
+enum feedback_target_enum {
+  ROOM
+  RENTAL
+  LANDLORD
+  SYSTEM
+}
+
+enum match_status_enum {
+  PENDING
+  ACCEPTED
+  REJECTED
+  BLOCKED
+}
+
+enum message_status_enum {
+  SENT
+  DELIVERED
+  READ
+}
+
+enum message_type_enum {
+  TEXT
+  IMAGE
+  SYSTEM
+}
+
+enum notification_status_enum {
+  UNREAD
+  READ
+  ARCHIVED
+}
+
+enum notification_type_enum {
+  SYSTEM
+  MESSAGE
+  PAYMENT
+  PREORDER
+  ROOM_MATCH
+  FAVORITE
+  ADMIN_ALERT
+}
+
+enum preorder_payment_enum {
+  UNPAID
+  PAID
+  REFUNDED
+}
+
+enum preorder_status_enum {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  EXPIRED
+}
+
+enum rental_status_enum {
+  AVAILABLE
+  UNAVAILABLE
+  HIDDEN
+  VIOLATE
+  PENDING
+  SUSPEND
+}
+
+enum room_type_enum {
+  PRIVATE
+  SHARED
+  STUDIO
+  APARTMENT
+}
+
+enum search_prompt_type_enum {
+  TEXT
+  VOICE
+  IMAGE
+}
+
+enum transaction_status_enum {
+  PENDING
+  SUCCESS
+  FAILED
+  CANCELLED
+}
+
+enum transaction_type_enum {
+  DEPOSIT
+  WITHDRAW
+  TRANSFER
+  PREORDER
+  REFUND
+  PAYMENT
+}
+
+enum user_role_enum {
+  ADMIN
+  LANDLORD
+  TENANT
+  GUEST
+  MODERATOR
+}
+
+enum user_status_enum {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  BANNED
+}
