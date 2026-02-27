@@ -16,6 +16,7 @@ model User {
   avatarUrl                                             String?           @map("avatar_url")
   role                                                  user_role_enum?   @default(TENANT)
   status                                                user_status_enum? @default(ACTIVE)
+  isVip                                                 Boolean?          @default(false) @map("is_vip")
   createdAt                                             DateTime?         @default(now()) @map("created_at") @db.Timestamp(6)
   updated_at                                            DateTime?         @default(now()) @db.Timestamp(6)
   favoriteRooms                                         FavoriteRoom[]

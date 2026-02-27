@@ -10,6 +10,8 @@ const adminRoutes = require('./routes/admin');
 const uploadRoutes = require('./routes/upload');
 const rentalRoutes = require('./routes/rental');
 const roomRoutes = require('./routes/room');
+const publicRoutes = require('./routes/public');
+const searchRoutes = require('./routes/search');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -39,6 +41,8 @@ app.use('/admin', adminRoutes);
 app.use('/upload', uploadRoutes);
 app.use('/rentals', rentalRoutes);
 app.use('/rooms', roomRoutes);
+app.use('/public', publicRoutes);
+app.use('/search', searchRoutes);
 
 // Test route
 app.get('/', (req, res) => {

@@ -445,6 +445,282 @@ async function updateRentalStatus(req, res) {
     }
 }
 
+/**
+ * GET /rentals/stats
+ * Rental stats for admin dashboard. Requires MODERATOR or ADMIN.
+ * Returns: total, byStatus (available, rented, hidden, archived), thisMonth
+ */
+async function getRentalStats(req, res) {
+    try {
+        const now = new Date();
+        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+        const [
+            total,
+            available,
+            unavailable,
+            hidden,
+            suspendedOrViolate,
+            thisMonth,
+        ] = await Promise.all([
+            prisma.rental.count(),
+            prisma.rental.count({ where: { status: 'AVAILABLE' } }),
+            prisma.rental.count({ where: { status: 'UNAVAILABLE' } }),
+            prisma.rental.count({ where: { status: 'HIDDEN' } }),
+            prisma.rental.count({
+                where: {
+                    status: { in: ['SUSPEND', 'VIOLATE'] },
+                },
+            }),
+            prisma.rental.count({
+                where: { createdAt: { gte: startOfMonth } },
+            }),
+        ]);
+
+        return res.json({
+            success: true,
+            data: {
+                total,
+                byStatus: {
+                    available,
+                    rented: unavailable,
+                    hidden,
+                    archived: suspendedOrViolate,
+                },
+                thisMonth,
+            },
+        });
+    } catch (err) {
+        console.error('Get rental stats error:', err);
+        return res.status(500).json({
+            success: false,
+            message: 'Lỗi khi lấy thống kê bài đăng',
+            error: err.message,
+        });
+    }
+}
+
+/**
+ * GET (public) /public/rentals/:rentalId – Chi tiết một rental. No auth.
+ */
+async function getPublicRentalById(req, res) {
+    try {
+        let rentalId = req.params.rentalId ? String(req.params.rentalId).trim() : '';
+        if (!rentalId) {
+            return res.status(400).json({
+                success: false,
+                message: 'Thiếu ID nhà trọ',
+            });
+        }
+        // Normalize UUID to lowercase (PostgreSQL may return lowercase; comparison can be case-sensitive)
+        rentalId = rentalId.toLowerCase();
+
+        let rental = await prisma.rental.findUnique({
+            where: { id: rentalId },
+            include: {
+                location: true,
+                images: true,
+                users: {
+                    select: {
+                        id: true,
+                        fullName: true,
+                        avatarUrl: true,
+                        email: true,
+                        phone: true,
+                    },
+                },
+                rooms: {
+                    include: {
+                        images: true,
+                        roomAmenities: { include: { amenity: true } },
+                    },
+                },
+            },
+        });
+
+        // Fallback: raw query in case Prisma UUID handling differs (e.g. driver returns id in different format)
+        if (!rental) {
+            const rawRows = await prisma.$queryRawUnsafe(
+                'SELECT id FROM rentals WHERE id::text = $1 LIMIT 1',
+                rentalId
+            );
+            if (rawRows && rawRows.length > 0) {
+                const idFromDb = rawRows[0].id;
+                const idStr = typeof idFromDb === 'string' ? idFromDb : String(idFromDb);
+                rental = await prisma.rental.findUnique({
+                    where: { id: idStr },
+                    include: {
+                        location: true,
+                        images: true,
+                        users: {
+                            select: {
+                                id: true,
+                                fullName: true,
+                                avatarUrl: true,
+                                email: true,
+                                phone: true,
+                            },
+                        },
+                        rooms: {
+                            include: {
+                                images: true,
+                                roomAmenities: { include: { amenity: true } },
+                            },
+                        },
+                    },
+                });
+            }
+        }
+
+        if (!rental) {
+            console.warn('[getPublicRentalById] 404 – rentalId not found:', rentalId);
+            return res.status(404).json({
+                success: false,
+                message: 'Không tìm thấy nhà trọ',
+                rentalId,
+            });
+        }
+
+        const placeholderImage = 'https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?w=800';
+        const imgs = (rental.images || []).map((img) => img.imageUrl);
+
+        const roomsWithDetails = (rental.rooms || []).map((r) => {
+            const roomImgs = (r.images || []).map((img) => img.imageUrl);
+            const amenityNames = (r.roomAmenities || []).map((ra) => ra.amenity?.name).filter(Boolean);
+            return {
+                id: r.id,
+                rental_id: r.rental_id,
+                room_name: r.room_name,
+                room_type: r.room_type,
+                price: Number(r.price),
+                size_m2: r.size_m2 ? Number(r.size_m2) : null,
+                max_people: r.max_people,
+                images: roomImgs.length > 0 ? roomImgs : [placeholderImage],
+                amenities: amenityNames,
+            };
+        });
+
+        const allAmenityNames = [...new Set(roomsWithDetails.flatMap((r) => r.amenities || []))];
+
+        return res.json({
+            success: true,
+            data: {
+                id: rental.id,
+                title: rental.title || '',
+                description: rental.description ?? null,
+                status: rental.status != null ? String(rental.status) : 'PENDING',
+                createdAt: rental.createdAt,
+                owner: rental.users ? {
+                    id: rental.users.id,
+                    fullName: rental.users.fullName,
+                    avatarUrl: rental.users.avatarUrl,
+                    email: rental.users.email,
+                    phone: rental.users.phone,
+                } : null,
+                location: rental.location ? {
+                    id: rental.location.id,
+                    address: rental.location.address,
+                    district: rental.location.district,
+                    city: rental.location.city,
+                } : null,
+                rooms: roomsWithDetails,
+                amenities: allAmenityNames,
+                images: imgs.length > 0 ? imgs : [placeholderImage],
+            },
+        });
+    } catch (err) {
+        console.error('Get public rental by id error:', err);
+        return res.status(500).json({
+            success: false,
+            message: 'Lỗi khi lấy chi tiết',
+            error: err.message,
+        });
+    }
+}
+
+/**
+ * GET (public) – List rentals for home/browse. No auth.
+ * Query: ?page=1&limit=20&district=...&city=...&sort=createdAt_desc|createdAt_asc|title_asc|title_desc
+ */
+function getPublicRentalsOrderBy(sortParam) {
+    const map = {
+        createdAt_desc: { createdAt: 'desc' },
+        createdAt_asc: { createdAt: 'asc' },
+        title_asc: { title: 'asc' },
+        title_desc: { title: 'desc' },
+    };
+    return map[sortParam] || { createdAt: 'desc' };
+}
+
+async function getPublicRentals(req, res) {
+    try {
+        const page = Math.max(1, parseInt(req.query.page) || 1);
+        const limit = Math.min(Math.max(1, parseInt(req.query.limit) || 20), 1000);
+        const skip = (page - 1) * limit;
+        const sort = getPublicRentalsOrderBy(req.query.sort);
+
+        const where = {};
+        if (req.query.district && String(req.query.district).trim()) {
+            where.location = where.location || {};
+            where.location.district = { equals: String(req.query.district).trim(), mode: 'insensitive' };
+        }
+        if (req.query.city && String(req.query.city).trim()) {
+            where.location = where.location || {};
+            where.location.city = { equals: String(req.query.city).trim(), mode: 'insensitive' };
+        }
+
+        const [rentals, total] = await Promise.all([
+            prisma.rental.findMany({
+                where,
+                skip,
+                take: limit,
+                orderBy: sort,
+                include: {
+                    location: true,
+                    images: true,
+                },
+            }),
+            prisma.rental.count({ where }),
+        ]);
+
+        const placeholderImage = 'https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?w=800';
+
+        return res.json({
+            success: true,
+            data: rentals.map((r) => {
+                const imgs = (r.images || []).map((img) => img.imageUrl);
+                return {
+                    id: r.id,
+                    title: r.title,
+                    description: r.description,
+                    status: r.status,
+                    createdAt: r.createdAt,
+                    location: r.location ? {
+                        id: r.location.id,
+                        address: r.location.address,
+                        district: r.location.district,
+                        city: r.location.city,
+                    } : null,
+                    images: imgs.length > 0 ? imgs : [placeholderImage],
+                };
+            }),
+            pagination: {
+                page,
+                limit,
+                total,
+                totalPages: Math.ceil(total / limit),
+            },
+        });
+    } catch (err) {
+        console.error('Get public rentals error:', err);
+        return res.status(500).json({
+            success: false,
+            message: 'Lỗi khi lấy danh sách',
+            error: err.message,
+        });
+    }
+}
+
 module.exports = {
     createRental,
     getRentals,
@@ -452,4 +728,7 @@ module.exports = {
     getMyRentals,
     getRentalsForModeration,
     updateRentalStatus,
+    getRentalStats,
+    getPublicRentals,
+    getPublicRentalById,
 };

@@ -67,6 +67,7 @@ router.get('/me', verifyJWT, (req, res) => {
             created_at: user.created_at,
             role: user.role,
             phone: user.phone ?? null,
+            isVip: user.isVip === true,
         },
     });
 });

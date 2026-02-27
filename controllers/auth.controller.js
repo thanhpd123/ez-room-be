@@ -234,6 +234,7 @@ async function login(req, res) {
                 status: user.status,
                 avatarUrl: user.avatarUrl,
                 createdAt: user.createdAt,
+                isVip: user.isVip === true,
             },
         });
     } catch (err) {
@@ -484,53 +485,65 @@ async function updateProfile(req, res) {
     }
 }
 
+function safeDateToISOString(d) {
+    if (d == null) return null;
+    try {
+        const date = d instanceof Date ? d : new Date(d);
+        return isNaN(date.getTime()) ? null : date.toISOString().slice(0, 10);
+    } catch {
+        return null;
+    }
+}
+
 function toLifestyleResponse(profile) {
+    if (!profile) return null;
     return {
         id: profile.id,
         smoking: profile.smoking,
         drinking: profile.drinking,
         pets_allowed: profile.pets_allowed,
-        sleep_schedule: profile.sleep_schedule,
-        personalityType: profile.personalityType,
-        cleanliness: profile.cleanliness,
-        noise_tolerance: profile.noise_tolerance,
-        guest_frequency: profile.guest_frequency,
-        cooking_frequency: profile.cooking_frequency,
-        work_from_home: profile.work_from_home,
-        wake_time: profile.wake_time,
-        bedtime: profile.bedtime,
-        social_level: profile.social_level,
-        occupation_type: profile.occupation_type,
-        interests: profile.interests || [],
-        languages: profile.languages || [],
-        preferred_lease_months: profile.preferred_lease_months,
-        move_in_date: profile.move_in_date ? profile.move_in_date.toISOString().slice(0, 10) : null,
-        temperature_preference: profile.temperature_preference,
-        quiet_hours_preference: profile.quiet_hours_preference,
+        sleep_schedule: profile.sleep_schedule ?? null,
+        personalityType: profile.personalityType ?? null,
+        cleanliness: profile.cleanliness ?? null,
+        noise_tolerance: profile.noise_tolerance ?? null,
+        guest_frequency: profile.guest_frequency ?? null,
+        cooking_frequency: profile.cooking_frequency ?? null,
+        work_from_home: profile.work_from_home ?? false,
+        wake_time: profile.wake_time ?? null,
+        bedtime: profile.bedtime ?? null,
+        social_level: profile.social_level ?? null,
+        occupation_type: profile.occupation_type ?? null,
+        interests: Array.isArray(profile.interests) ? profile.interests : [],
+        languages: Array.isArray(profile.languages) ? profile.languages : [],
+        preferred_lease_months: profile.preferred_lease_months != null ? Number(profile.preferred_lease_months) : null,
+        move_in_date: safeDateToISOString(profile.move_in_date),
+        temperature_preference: profile.temperature_preference ?? null,
+        quiet_hours_preference: profile.quiet_hours_preference ?? null,
     };
 }
 
 function toPreferenceResponse(prefs) {
+    if (!prefs) return null;
     return {
         id: prefs.id,
         budget_min: prefs.budget_min != null ? Number(prefs.budget_min) : null,
         budget_max: prefs.budget_max != null ? Number(prefs.budget_max) : null,
-        preferredLocation: prefs.preferredLocation,
-        preferred_districts: prefs.preferred_districts || [],
-        preferred_gender: prefs.preferred_gender,
-        room_type: prefs.room_type,
-        preferred_amenities: prefs.preferred_amenities || [],
-        must_have_amenities: prefs.must_have_amenities || [],
-        preferred_lease_months: prefs.preferred_lease_months,
-        move_in_date_min: prefs.move_in_date_min ? prefs.move_in_date_min.toISOString().slice(0, 10) : null,
-        move_in_date_max: prefs.move_in_date_max ? prefs.move_in_date_max.toISOString().slice(0, 10) : null,
+        preferredLocation: prefs.preferredLocation ?? null,
+        preferred_districts: Array.isArray(prefs.preferred_districts) ? prefs.preferred_districts : [],
+        preferred_gender: prefs.preferred_gender ?? null,
+        room_type: prefs.room_type ?? null,
+        preferred_amenities: Array.isArray(prefs.preferred_amenities) ? prefs.preferred_amenities : [],
+        must_have_amenities: Array.isArray(prefs.must_have_amenities) ? prefs.must_have_amenities : [],
+        preferred_lease_months: prefs.preferred_lease_months != null ? Number(prefs.preferred_lease_months) : null,
+        move_in_date_min: safeDateToISOString(prefs.move_in_date_min),
+        move_in_date_max: safeDateToISOString(prefs.move_in_date_max),
         max_distance_km: prefs.max_distance_km != null ? Number(prefs.max_distance_km) : null,
-        transport_nearby: prefs.transport_nearby,
-        pet_friendly: prefs.pet_friendly,
-        preferred_roommate_age_min: prefs.preferred_roommate_age_min,
-        preferred_roommate_age_max: prefs.preferred_roommate_age_max,
+        transport_nearby: prefs.transport_nearby ?? null,
+        pet_friendly: prefs.pet_friendly ?? null,
+        preferred_roommate_age_min: prefs.preferred_roommate_age_min != null ? Number(prefs.preferred_roommate_age_min) : null,
+        preferred_roommate_age_max: prefs.preferred_roommate_age_max != null ? Number(prefs.preferred_roommate_age_max) : null,
         lifestyle_match_weight: prefs.lifestyle_match_weight != null ? Number(prefs.lifestyle_match_weight) : null,
-        safety_priority: prefs.safety_priority,
+        safety_priority: prefs.safety_priority != null ? Number(prefs.safety_priority) : null,
     };
 }
 
@@ -539,17 +552,24 @@ function toPreferenceResponse(prefs) {
  */
 async function getLifestyle(req, res) {
     try {
-        const userId = req.auth.user.id;
+        const userId = req.auth?.user?.id;
+        if (!userId) {
+            return res.status(401).json({ success: false, message: 'Chưa đăng nhập' });
+        }
         const profile = await prisma.lifestyleProfile.findUnique({
             where: { userId },
         });
         return res.json({
             success: true,
-            profile: profile ? toLifestyleResponse(profile) : null,
+            profile: toLifestyleResponse(profile),
         });
     } catch (err) {
         console.error('Get lifestyle error:', err);
-        return res.status(500).json({ success: false, message: err.message });
+        return res.status(500).json({
+            success: false,
+            message: err.message || 'Lỗi tải phong cách sống',
+            code: err.code,
+        });
     }
 }
 
@@ -613,17 +633,24 @@ async function upsertLifestyle(req, res) {
  */
 async function getPreference(req, res) {
     try {
-        const userId = req.auth.user.id;
+        const userId = req.auth?.user?.id;
+        if (!userId) {
+            return res.status(401).json({ success: false, message: 'Chưa đăng nhập' });
+        }
         const prefs = await prisma.userPreference.findUnique({
             where: { userId },
         });
         return res.json({
             success: true,
-            preference: prefs ? toPreferenceResponse(prefs) : null,
+            preference: toPreferenceResponse(prefs),
         });
     } catch (err) {
         console.error('Get preference error:', err);
-        return res.status(500).json({ success: false, message: err.message });
+        return res.status(500).json({
+            success: false,
+            message: err.message || 'Lỗi tải sở thích',
+            code: err.code,
+        });
     }
 }
 

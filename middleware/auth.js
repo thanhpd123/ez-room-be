@@ -54,6 +54,7 @@ async function verifyJWT(req, res, next) {
                     created_at: dbUser.createdAt,
                     role: dbUser.role,
                     phone: dbUser.phone ?? null,
+                    isVip: dbUser.isVip === true,
                 },
             };
             return next();
@@ -86,6 +87,7 @@ async function verifyJWT(req, res, next) {
                 created_at: dbUser.createdAt,
                 role: dbUser.role,
                 phone: dbUser.phone ?? null,
+                isVip: dbUser.isVip === true,
             },
         };
         next();
