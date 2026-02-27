@@ -38,28 +38,59 @@ model User {
 }
 
 model LifestyleProfile {
-  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId          String    @unique @map("user_id") @db.Uuid
-  smoking         Boolean?  @default(false)
-  drinking        Boolean?  @default(false)
-  pets_allowed    Boolean?  @default(false)
-  sleep_schedule  String?   @db.VarChar(50)
-  personalityType String?   @map("personality_type") @db.VarChar(50)
-  created_at      DateTime? @default(now()) @db.Timestamp(6)
-  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  id                    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId                String    @unique @map("user_id") @db.Uuid
+  smoking               Boolean?  @default(false)
+  drinking              Boolean?  @default(false)
+  pets_allowed          Boolean?  @default(false)
+  sleep_schedule        String?   @map("sleep_schedule") @db.VarChar(50)
+  personalityType       String?   @map("personality_type") @db.VarChar(50)
+  cleanliness           String?   @db.VarChar(50)
+  noise_tolerance       String?   @map("noise_tolerance") @db.VarChar(50)
+  guest_frequency       String?   @map("guest_frequency") @db.VarChar(50)
+  cooking_frequency     String?   @map("cooking_frequency") @db.VarChar(50)
+  work_from_home        Boolean?  @default(false) @map("work_from_home")
+  wake_time             String?   @map("wake_time") @db.VarChar(50)
+  bedtime               String?   @db.VarChar(50)
+  social_level          String?   @map("social_level") @db.VarChar(50)
+  occupation_type      String?   @map("occupation_type") @db.VarChar(50)
+  interests            String[]  @default([]) @db.VarChar(100)
+  languages             String[]  @default([]) @db.VarChar(20)
+  preferred_lease_months Int?     @map("preferred_lease_months")
+  move_in_date          DateTime? @map("move_in_date") @db.Date
+  temperature_preference String? @map("temperature_preference") @db.VarChar(20)
+  quiet_hours_preference  String? @map("quiet_hours_preference") @db.VarChar(30)
+  created_at            DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+  updated_at            DateTime? @updatedAt @map("updated_at") @db.Timestamp(6)
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@map("lifestyle_profiles")
 }
 
 model UserPreference {
-  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId            String    @unique @map("user_id") @db.Uuid
-  budget_min        Decimal?  @db.Decimal(12, 2)
-  budget_max        Decimal?  @db.Decimal(12, 2)
-  preferredLocation String?   @map("preferred_location")
-  preferred_gender  String?   @db.VarChar(20)
-  created_at        DateTime? @default(now()) @db.Timestamp(6)
-  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  id                         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId                     String    @unique @map("user_id") @db.Uuid
+  budget_min                 Decimal?  @db.Decimal(12, 2)
+  budget_max                 Decimal?  @db.Decimal(12, 2)
+  preferredLocation          String?   @map("preferred_location")
+  preferred_districts        String[]  @default([]) @map("preferred_districts")
+  preferred_gender           String?   @db.VarChar(20)
+  room_type                  String?   @map("room_type") @db.VarChar(30)
+  preferred_amenities        String[]  @default([]) @map("preferred_amenities")
+  must_have_amenities        String[]  @default([]) @map("must_have_amenities")
+  preferred_lease_months     Int?      @map("preferred_lease_months")
+  move_in_date_min           DateTime? @map("move_in_date_min") @db.Date
+  move_in_date_max           DateTime? @map("move_in_date_max") @db.Date
+  max_distance_km            Decimal?  @map("max_distance_km") @db.Decimal(6, 2)
+  transport_nearby            Boolean?  @map("transport_nearby")
+  pet_friendly               Boolean?  @map("pet_friendly")
+  preferred_roommate_age_min Int?      @map("preferred_roommate_age_min")
+  preferred_roommate_age_max Int?      @map("preferred_roommate_age_max")
+  lifestyle_match_weight     Decimal?  @map("lifestyle_match_weight") @db.Decimal(3, 2)
+  safety_priority            Int?      @map("safety_priority")
+  created_at                 DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+  updated_at                 DateTime? @updatedAt @map("updated_at") @db.Timestamp(6)
+  user                       User      @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@map("user_preferences")
 }
