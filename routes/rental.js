@@ -16,7 +16,7 @@ const router = express.Router();
  * Landlord xem danh sách rentals của mình
  * ⚠️ Route này phải đặt TRƯỚC /:rentalId để tránh conflict
  */
-router.get('/my-rentals', verifyJWT, getMyRentals);
+router.get('/my-rentals', verifyJWT, requireRole('LANDLORD'), getMyRentals);
 
 /**
  * GET /rentals
