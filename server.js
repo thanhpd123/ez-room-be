@@ -1,6 +1,5 @@
 const express = require('express');
 const cors = require('cors');
-const bodyParser = require('body-parser');
 require('dotenv').config();
 
 const supabase = require('./config/supabase');
@@ -35,7 +34,7 @@ app.use(cors({
     },
     credentials: true,
 }));
-app.use(bodyParser.json());
+app.use(express.json());
 
 // Routes
 app.use('/auth', authRoutes);

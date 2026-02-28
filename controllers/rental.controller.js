@@ -1,5 +1,8 @@
 const prisma = require('../config/prisma');
+const cache = require('../utils/simple-cache');
+const { getLabelForDb } = require('../utils/room-type-mapper');
 const { validateCreateRental, validateUpdateRentalStatus } = require('../validators/rental.validator');
+const { expandCity, expandDistrict, extractLocationTermsFromQuery } = require('../data/legacy-location-map');
 
 /**
  * POST /rentals
@@ -660,16 +663,32 @@ async function getPublicRentals(req, res) {
         const sort = getPublicRentalsOrderBy(req.query.sort);
 
         const where = {};
-        if (req.query.district && String(req.query.district).trim()) {
-            where.location = where.location || {};
-            where.location.district = { equals: String(req.query.district).trim(), mode: 'insensitive' };
-        }
-        if (req.query.city && String(req.query.city).trim()) {
-            where.location = where.location || {};
-            where.location.city = { equals: String(req.query.city).trim(), mode: 'insensitive' };
+        const districtParam = req.query.district && String(req.query.district).trim();
+        const cityParam = req.query.city && String(req.query.city).trim();
+        if (districtParam || cityParam) {
+            const locConditions = [];
+            if (districtParam) {
+                const districtTerms = expandDistrict(districtParam);
+                locConditions.push(
+                    districtTerms.length === 1
+                        ? { district: { equals: districtTerms[0], mode: 'insensitive' } }
+                        : { OR: districtTerms.map((t) => ({ district: { equals: t, mode: 'insensitive' } })) }
+                );
+            }
+            if (cityParam) {
+                const cityTerms = expandCity(cityParam);
+                locConditions.push(
+                    cityTerms.length === 1
+                        ? { city: { equals: cityTerms[0], mode: 'insensitive' } }
+                        : { OR: cityTerms.map((t) => ({ city: { equals: t, mode: 'insensitive' } })) }
+                );
+            }
+            where.location = { is: locConditions.length === 1 ? locConditions[0] : { AND: locConditions } };
         }
 
-        const [rentals, total] = await Promise.all([
+        // Parallel queries for lower latency (Prisma connection pool handles concurrency)
+        const [total, rentals] = await Promise.all([
+            prisma.rental.count({ where }),
             prisma.rental.findMany({
                 where,
                 skip,
@@ -680,7 +699,6 @@ async function getPublicRentals(req, res) {
                     images: true,
                 },
             }),
-            prisma.rental.count({ where }),
         ]);
 
         const placeholderImage = 'https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?w=800';
@@ -721,6 +739,38 @@ async function getPublicRentals(req, res) {
     }
 }
 
+const ROOM_TYPES_CACHE_KEY = 'public:room-types';
+
+/**
+ * GET /public/room-types – distinct room types from available rentals.
+ */
+async function getPublicRoomTypes(req, res) {
+    try {
+        const cached = cache.get(ROOM_TYPES_CACHE_KEY);
+        if (cached) {
+            return res.json({ success: true, data: cached });
+        }
+        const rows = await prisma.rooms.findMany({
+            where: { rentals: { status: 'AVAILABLE' } },
+            select: { room_type: true },
+            distinct: ['room_type'],
+            orderBy: { room_type: 'asc' },
+        });
+        const data = rows
+            .map((r) => getLabelForDb(r.room_type))
+            .filter(Boolean);
+        cache.set(ROOM_TYPES_CACHE_KEY, data);
+        return res.json({ success: true, data });
+    } catch (err) {
+        console.error('Get room types error:', err);
+        return res.status(500).json({
+            success: false,
+            message: 'Lỗi khi lấy loại phòng',
+            error: err.message,
+        });
+    }
+}
+
 module.exports = {
     createRental,
     getRentals,
@@ -731,4 +781,5 @@ module.exports = {
     getRentalStats,
     getPublicRentals,
     getPublicRentalById,
+    getPublicRoomTypes,
 };

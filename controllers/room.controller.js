@@ -1,30 +1,6 @@
 const prisma = require('../config/prisma');
-
-/**
- * Map room_type từ FE sang DB enum
- */
-function mapRoomTypeToDB(feType) {
-    const map = {
-        'single': 'PRIVATE',
-        'double': 'SHARED',
-        'studio': 'STUDIO',
-        'apartment': 'APARTMENT',
-    };
-    return map[feType?.toLowerCase()] || feType?.toUpperCase() || 'PRIVATE';
-}
-
-/**
- * Map room_type từ DB enum sang FE format
- */
-function mapRoomTypeToFE(dbType) {
-    const map = {
-        'PRIVATE': 'single',
-        'SHARED': 'double',
-        'STUDIO': 'studio',
-        'APARTMENT': 'apartment',
-    };
-    return map[dbType] || dbType?.toLowerCase() || 'single';
-}
+const cache = require('../utils/simple-cache');
+const { mapFeToDb, mapDbToFe } = require('../utils/room-type-mapper');
 
 /**
  * Format room response - trả về cả 2 format (standard + FE room-post)
@@ -35,7 +11,7 @@ function formatRoomResponse(room) {
         id: room.id,
         rentalId: room.rental_id,
         roomName: room.room_name,
-        roomType: mapRoomTypeToFE(room.room_type),
+        roomType: mapDbToFe(room.room_type, 'single'),
         price: Number(room.price),
         sizeM2: room.size_m2 ? Number(room.size_m2) : null,
         maxPeople: room.max_people,
@@ -106,7 +82,7 @@ async function createRoom(req, res) {
             data: {
                 rental_id: rentalId,
                 room_name: roomName ? roomName.trim() : null,
-                room_type: mapRoomTypeToDB(roomType),
+                room_type: mapFeToDb(roomType),
                 price: parseFloat(price),
                 size_m2: sizeM2 ? parseFloat(sizeM2) : null,
                 max_people: maxPeople ? parseInt(maxPeople) : 1,
@@ -159,7 +135,7 @@ async function getRooms(req, res) {
         // Support both rentalId and rental_id
         const filterRentalId = rentalId || rental_id;
         if (filterRentalId) where.rental_id = filterRentalId;
-        if (roomType) where.room_type = mapRoomTypeToDB(roomType);
+        if (roomType) where.room_type = mapFeToDb(roomType);
         if (minPrice || maxPrice) {
             where.price = {};
             if (minPrice) where.price.gte = parseFloat(minPrice);
@@ -285,7 +261,7 @@ async function updateRoom(req, res) {
         const updateData = {};
         const roomName = req.body.roomName || req.body.title;
         if (roomName !== undefined) updateData.room_name = roomName?.trim() || null;
-        if (req.body.roomType !== undefined) updateData.room_type = mapRoomTypeToDB(req.body.roomType);
+        if (req.body.roomType !== undefined) updateData.room_type = mapFeToDb(req.body.roomType);
         if (req.body.price !== undefined) updateData.price = parseFloat(req.body.price);
         const sizeM2 = req.body.sizeM2 || req.body.area;
         if (sizeM2 !== undefined) updateData.size_m2 = parseFloat(sizeM2);
@@ -340,16 +316,24 @@ async function deleteRoom(req, res) {
     }
 }
 
+const AMENITIES_CACHE_KEY = 'rooms:amenities';
+
 /**
  * GET /rooms/amenities
  * Lấy danh sách amenities (public)
  */
 async function getAmenities(req, res) {
     try {
-        const amenities = await prisma.amenity.findMany({ orderBy: { name: 'asc' } });
+        const cached = cache.get(AMENITIES_CACHE_KEY);
+        if (cached) {
+            return res.json({ success: true, data: cached });
+        }
+        const amenities = await prisma.amenities.findMany({ orderBy: { name: 'asc' } });
+        const data = amenities.map((a) => ({ id: a.id, name: a.name }));
+        cache.set(AMENITIES_CACHE_KEY, data);
         return res.json({
             success: true,
-            data: amenities.map((a) => ({ id: a.id, name: a.name, icon: a.icon })),
+            data,
         });
     } catch (err) {
         console.error('Get amenities error:', err);
