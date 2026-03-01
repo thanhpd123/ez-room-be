@@ -7,9 +7,16 @@ const {
     getMyRentals,
     getRentalsForModeration,
     updateRentalStatus,
+    getRentalStats,
 } = require('../controllers/rental.controller');
 
 const router = express.Router();
+
+/**
+ * GET /rentals/stats
+ * Admin/Moderator dashboard rental stats. Must be before /:rentalId
+ */
+router.get('/stats', requireRole('MODERATOR', 'ADMIN'), getRentalStats);
 
 /**
  * GET /rentals/my-rentals

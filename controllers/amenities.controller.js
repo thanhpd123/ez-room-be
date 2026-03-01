@@ -1,4 +1,13 @@
 const prisma = require('../config/prisma');
+const cache = require('../utils/simple-cache');
+
+const CACHE_KEY = 'amenities:all';
+const ROOMS_AMENITIES_KEY = 'rooms:amenities';
+
+function invalidateAmenitiesCache() {
+    cache.invalidate(CACHE_KEY);
+    cache.invalidate(ROOMS_AMENITIES_KEY);
+}
 
 /**
  * GET /amenities
@@ -6,6 +15,15 @@ const prisma = require('../config/prisma');
  */
 async function getAllAmenities(req, res) {
     try {
+        const cached = cache.get(CACHE_KEY);
+        if (cached) {
+            return res.json({
+                success: true,
+                data: cached,
+                total: cached.length,
+            });
+        }
+
         const amenities = await prisma.amenities.findMany({
             orderBy: { name: 'asc' },
             select: {
@@ -13,6 +31,7 @@ async function getAllAmenities(req, res) {
                 name: true,
             },
         });
+        cache.set(CACHE_KEY, amenities);
 
         return res.json({
             success: true,
@@ -114,6 +133,7 @@ async function createAmenity(req, res) {
         const amenity = await prisma.amenities.create({
             data: { name: trimmedName },
         });
+        invalidateAmenitiesCache();
 
         return res.status(201).json({
             success: true,
@@ -189,6 +209,7 @@ async function updateAmenity(req, res) {
             where: { id },
             data: { name: trimmedName },
         });
+        invalidateAmenitiesCache();
 
         return res.json({
             success: true,
@@ -241,6 +262,7 @@ async function deleteAmenity(req, res) {
         await prisma.amenities.delete({
             where: { id },
         });
+        invalidateAmenitiesCache();
 
         return res.json({
             success: true,

@@ -234,6 +234,7 @@ async function login(req, res) {
                 status: user.status,
                 avatarUrl: user.avatarUrl,
                 createdAt: user.createdAt,
+                isVip: user.isVip === true,
             },
         });
     } catch (err) {
@@ -484,69 +485,143 @@ async function updateProfile(req, res) {
     }
 }
 
+function safeDateToISOString(d) {
+    if (d == null) return null;
+    try {
+        const date = d instanceof Date ? d : new Date(d);
+        return isNaN(date.getTime()) ? null : date.toISOString().slice(0, 10);
+    } catch {
+        return null;
+    }
+}
+
+function toLifestyleResponse(profile) {
+    if (!profile) return null;
+    return {
+        id: profile.id,
+        smoking: profile.smoking,
+        drinking: profile.drinking,
+        pets_allowed: profile.pets_allowed,
+        sleep_schedule: profile.sleep_schedule ?? null,
+        personalityType: profile.personalityType ?? null,
+        cleanliness: profile.cleanliness ?? null,
+        noise_tolerance: profile.noise_tolerance ?? null,
+        guest_frequency: profile.guest_frequency ?? null,
+        cooking_frequency: profile.cooking_frequency ?? null,
+        work_from_home: profile.work_from_home ?? false,
+        wake_time: profile.wake_time ?? null,
+        bedtime: profile.bedtime ?? null,
+        social_level: profile.social_level ?? null,
+        occupation_type: profile.occupation_type ?? null,
+        interests: Array.isArray(profile.interests) ? profile.interests : [],
+        languages: Array.isArray(profile.languages) ? profile.languages : [],
+        preferred_lease_months: profile.preferred_lease_months != null ? Number(profile.preferred_lease_months) : null,
+        move_in_date: safeDateToISOString(profile.move_in_date),
+        temperature_preference: profile.temperature_preference ?? null,
+        quiet_hours_preference: profile.quiet_hours_preference ?? null,
+    };
+}
+
+function toPreferenceResponse(prefs) {
+    if (!prefs) return null;
+    return {
+        id: prefs.id,
+        budget_min: prefs.budget_min != null ? Number(prefs.budget_min) : null,
+        budget_max: prefs.budget_max != null ? Number(prefs.budget_max) : null,
+        preferredLocation: prefs.preferredLocation ?? null,
+        preferred_districts: Array.isArray(prefs.preferred_districts) ? prefs.preferred_districts : [],
+        preferred_gender: prefs.preferred_gender ?? null,
+        room_type: prefs.room_type ?? null,
+        preferred_amenities: Array.isArray(prefs.preferred_amenities) ? prefs.preferred_amenities : [],
+        must_have_amenities: Array.isArray(prefs.must_have_amenities) ? prefs.must_have_amenities : [],
+        preferred_lease_months: prefs.preferred_lease_months != null ? Number(prefs.preferred_lease_months) : null,
+        move_in_date_min: safeDateToISOString(prefs.move_in_date_min),
+        move_in_date_max: safeDateToISOString(prefs.move_in_date_max),
+        max_distance_km: prefs.max_distance_km != null ? Number(prefs.max_distance_km) : null,
+        transport_nearby: prefs.transport_nearby ?? null,
+        pet_friendly: prefs.pet_friendly ?? null,
+        preferred_roommate_age_min: prefs.preferred_roommate_age_min != null ? Number(prefs.preferred_roommate_age_min) : null,
+        preferred_roommate_age_max: prefs.preferred_roommate_age_max != null ? Number(prefs.preferred_roommate_age_max) : null,
+        lifestyle_match_weight: prefs.lifestyle_match_weight != null ? Number(prefs.lifestyle_match_weight) : null,
+        safety_priority: prefs.safety_priority != null ? Number(prefs.safety_priority) : null,
+    };
+}
+
 /**
  * GET /auth/lifestyle – get current user lifestyle profile
  */
 async function getLifestyle(req, res) {
     try {
-        const userId = req.auth.user.id;
+        const userId = req.auth?.user?.id;
+        if (!userId) {
+            return res.status(401).json({ success: false, message: 'Chưa đăng nhập' });
+        }
         const profile = await prisma.lifestyleProfile.findUnique({
             where: { userId },
         });
         return res.json({
             success: true,
-            profile: profile ? {
-                id: profile.id,
-                smoking: profile.smoking,
-                drinking: profile.drinking,
-                pets_allowed: profile.pets_allowed,
-                sleep_schedule: profile.sleep_schedule,
-                personalityType: profile.personalityType,
-            } : null,
+            profile: toLifestyleResponse(profile),
         });
     } catch (err) {
         console.error('Get lifestyle error:', err);
-        return res.status(500).json({ success: false, message: err.message });
+        return res.status(500).json({
+            success: false,
+            message: err.message || 'Lỗi tải phong cách sống',
+            code: err.code,
+        });
     }
 }
 
 /**
  * PUT /auth/lifestyle – create or update lifestyle profile
- * Body: { smoking?, drinking?, pets_allowed?, sleep_schedule?, personalityType? }
+ * Body: all LifestyleProfile fields (smoking, drinking, pets_allowed, sleep_schedule, personalityType,
+ * cleanliness, noise_tolerance, guest_frequency, cooking_frequency, work_from_home, wake_time, bedtime,
+ * social_level, occupation_type, interests[], languages[], preferred_lease_months, move_in_date,
+ * temperature_preference, quiet_hours_preference)
  */
 async function upsertLifestyle(req, res) {
     try {
         const userId = req.auth.user.id;
-        const { smoking, drinking, pets_allowed, sleep_schedule, personalityType } = req.body;
+        const body = req.body;
+        const str = (v, len = 50) => (v === '' || v == null ? null : String(v).slice(0, len));
+        const arr = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string').slice(0, 50) : []);
+        const num = (v) => (v === '' || v == null ? null : Number(v));
+        const date = (v) => (v === '' || v == null ? null : new Date(v));
+        const create = {
+            userId,
+            smoking: body.smoking === true,
+            drinking: body.drinking === true,
+            pets_allowed: body.pets_allowed === true,
+            sleep_schedule: str(body.sleep_schedule),
+            personalityType: str(body.personalityType),
+            cleanliness: str(body.cleanliness),
+            noise_tolerance: str(body.noise_tolerance),
+            guest_frequency: str(body.guest_frequency),
+            cooking_frequency: str(body.cooking_frequency),
+            work_from_home: body.work_from_home === true,
+            wake_time: str(body.wake_time),
+            bedtime: str(body.bedtime),
+            social_level: str(body.social_level),
+            occupation_type: str(body.occupation_type),
+            interests: arr(body.interests),
+            languages: arr(body.languages),
+            preferred_lease_months: num(body.preferred_lease_months),
+            move_in_date: date(body.move_in_date),
+            temperature_preference: str(body.temperature_preference, 20),
+            quiet_hours_preference: str(body.quiet_hours_preference, 30),
+        };
+        const update = {};
+        Object.keys(create).forEach((k) => {
+            if (k === 'userId') return;
+            if (body[k] !== undefined) update[k] = create[k];
+        });
         const profile = await prisma.lifestyleProfile.upsert({
             where: { userId },
-            create: {
-                userId,
-                smoking: !!smoking,
-                drinking: !!drinking,
-                pets_allowed: !!pets_allowed,
-                sleep_schedule: sleep_schedule ? String(sleep_schedule).slice(0, 50) : null,
-                personalityType: personalityType ? String(personalityType).slice(0, 50) : null,
-            },
-            update: {
-                ...(smoking !== undefined && { smoking: !!smoking }),
-                ...(drinking !== undefined && { drinking: !!drinking }),
-                ...(pets_allowed !== undefined && { pets_allowed: !!pets_allowed }),
-                ...(sleep_schedule !== undefined && { sleep_schedule: sleep_schedule ? String(sleep_schedule).slice(0, 50) : null }),
-                ...(personalityType !== undefined && { personalityType: personalityType ? String(personalityType).slice(0, 50) : null }),
-            },
+            create,
+            update,
         });
-        return res.json({
-            success: true,
-            profile: {
-                id: profile.id,
-                smoking: profile.smoking,
-                drinking: profile.drinking,
-                pets_allowed: profile.pets_allowed,
-                sleep_schedule: profile.sleep_schedule,
-                personalityType: profile.personalityType,
-            },
-        });
+        return res.json({ success: true, profile: toLifestyleResponse(profile) });
     } catch (err) {
         console.error('Upsert lifestyle error:', err);
         return res.status(500).json({ success: false, message: err.message });
@@ -558,61 +633,74 @@ async function upsertLifestyle(req, res) {
  */
 async function getPreference(req, res) {
     try {
-        const userId = req.auth.user.id;
+        const userId = req.auth?.user?.id;
+        if (!userId) {
+            return res.status(401).json({ success: false, message: 'Chưa đăng nhập' });
+        }
         const prefs = await prisma.userPreference.findUnique({
             where: { userId },
         });
         return res.json({
             success: true,
-            preference: prefs ? {
-                id: prefs.id,
-                budget_min: prefs.budget_min != null ? Number(prefs.budget_min) : null,
-                budget_max: prefs.budget_max != null ? Number(prefs.budget_max) : null,
-                preferredLocation: prefs.preferredLocation,
-                preferred_gender: prefs.preferred_gender,
-            } : null,
+            preference: toPreferenceResponse(prefs),
         });
     } catch (err) {
         console.error('Get preference error:', err);
-        return res.status(500).json({ success: false, message: err.message });
+        return res.status(500).json({
+            success: false,
+            message: err.message || 'Lỗi tải sở thích',
+            code: err.code,
+        });
     }
 }
 
 /**
  * PUT /auth/preference – create or update user preference
- * Body: { budget_min?, budget_max?, preferredLocation?, preferred_gender? }
+ * Body: budget_min?, budget_max?, preferredLocation?, preferred_districts[]?, preferred_gender?,
+ * room_type?, preferred_amenities[]?, must_have_amenities[]?, preferred_lease_months?,
+ * move_in_date_min?, move_in_date_max?, max_distance_km?, transport_nearby?, pet_friendly?,
+ * preferred_roommate_age_min?, preferred_roommate_age_max?, lifestyle_match_weight?, safety_priority?
  */
 async function upsertPreference(req, res) {
     try {
         const userId = req.auth.user.id;
-        const { budget_min, budget_max, preferredLocation, preferred_gender } = req.body;
-        const toNumber = (v) => (v === '' || v === null || v === undefined ? null : Number(v));
+        const body = req.body;
+        const toNumber = (v) => (v === '' || v == null ? null : Number(v));
+        const str = (v, len = 255) => (v === '' || v == null ? null : String(v).slice(0, len));
+        const arr = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string').slice(0, 100) : []);
+        const date = (v) => (v === '' || v == null ? null : new Date(v));
+        const create = {
+            userId,
+            budget_min: toNumber(body.budget_min),
+            budget_max: toNumber(body.budget_max),
+            preferredLocation: str(body.preferredLocation, 255),
+            preferred_districts: arr(body.preferred_districts),
+            preferred_gender: str(body.preferred_gender, 20),
+            room_type: str(body.room_type, 30),
+            preferred_amenities: arr(body.preferred_amenities),
+            must_have_amenities: arr(body.must_have_amenities),
+            preferred_lease_months: toNumber(body.preferred_lease_months),
+            move_in_date_min: date(body.move_in_date_min),
+            move_in_date_max: date(body.move_in_date_max),
+            max_distance_km: toNumber(body.max_distance_km),
+            transport_nearby: body.transport_nearby === true ? true : body.transport_nearby === false ? false : null,
+            pet_friendly: body.pet_friendly === true ? true : body.pet_friendly === false ? false : null,
+            preferred_roommate_age_min: toNumber(body.preferred_roommate_age_min),
+            preferred_roommate_age_max: toNumber(body.preferred_roommate_age_max),
+            lifestyle_match_weight: toNumber(body.lifestyle_match_weight),
+            safety_priority: toNumber(body.safety_priority),
+        };
+        const update = {};
+        Object.keys(create).forEach((k) => {
+            if (k === 'userId') return;
+            if (body[k] !== undefined) update[k] = create[k];
+        });
         const prefs = await prisma.userPreference.upsert({
             where: { userId },
-            create: {
-                userId,
-                budget_min: toNumber(budget_min),
-                budget_max: toNumber(budget_max),
-                preferredLocation: preferredLocation ? String(preferredLocation).slice(0, 200) : null,
-                preferred_gender: preferred_gender ? String(preferred_gender).slice(0, 20) : null,
-            },
-            update: {
-                ...(budget_min !== undefined && { budget_min: toNumber(budget_min) }),
-                ...(budget_max !== undefined && { budget_max: toNumber(budget_max) }),
-                ...(preferredLocation !== undefined && { preferredLocation: preferredLocation ? String(preferredLocation).slice(0, 200) : null }),
-                ...(preferred_gender !== undefined && { preferred_gender: preferred_gender ? String(preferred_gender).slice(0, 20) : null }),
-            },
+            create,
+            update,
         });
-        return res.json({
-            success: true,
-            preference: {
-                id: prefs.id,
-                budget_min: prefs.budget_min != null ? Number(prefs.budget_min) : null,
-                budget_max: prefs.budget_max != null ? Number(prefs.budget_max) : null,
-                preferredLocation: prefs.preferredLocation,
-                preferred_gender: prefs.preferred_gender,
-            },
-        });
+        return res.json({ success: true, preference: toPreferenceResponse(prefs) });
     } catch (err) {
         console.error('Upsert preference error:', err);
         return res.status(500).json({ success: false, message: err.message });
