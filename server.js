@@ -1,6 +1,5 @@
 const express = require('express');
 const cors = require('cors');
-const bodyParser = require('body-parser');
 require('dotenv').config();
 
 const supabase = require('./config/supabase');
@@ -12,6 +11,8 @@ const amenitiesRoutes = require('./routes/amenities');
 const locationsRoutes = require('./routes/locations');
 const rentalRoutes = require('./routes/rental');
 const roomRoutes = require('./routes/room');
+const publicRoutes = require('./routes/public');
+const searchRoutes = require('./routes/search');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -33,7 +34,7 @@ app.use(cors({
     },
     credentials: true,
 }));
-app.use(bodyParser.json());
+app.use(express.json());
 
 // Routes
 app.use('/auth', authRoutes);
@@ -43,6 +44,8 @@ app.use('/amenities', amenitiesRoutes);
 app.use('/locations', locationsRoutes);
 app.use('/rentals', rentalRoutes);
 app.use('/rooms', roomRoutes);
+app.use('/public', publicRoutes);
+app.use('/search', searchRoutes);
 
 // Test route
 app.get('/', (req, res) => {
