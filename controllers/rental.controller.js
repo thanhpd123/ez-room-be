@@ -265,7 +265,17 @@ async function getMyRentals(req, res) {
                 skip,
                 take: limit,
                 orderBy: { createdAt: 'desc' },
-                include: { location: true, images: true },
+                include: {
+                    location: true,
+                    images: true,
+                    users: {
+                        select: {
+                            id: true,
+                            fullName: true,
+                            avatarUrl: true,
+                        },
+                    },
+                },
             }),
             prisma.rental.count({ where }),
         ]);
@@ -278,6 +288,11 @@ async function getMyRentals(req, res) {
                 description: r.description,
                 status: r.status,
                 createdAt: r.createdAt,
+                owner: r.users ? {
+                    id: r.users.id,
+                    fullName: r.users.fullName,
+                    avatarUrl: r.users.avatarUrl,
+                } : null,
                 location: r.location ? {
                     id: r.location.id,
                     address: r.location.address,
