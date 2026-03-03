@@ -786,6 +786,171 @@ async function getPublicRoomTypes(req, res) {
     }
 }
 
+/**
+ * GET /public/landlord/:userId – Public landlord profile page.
+ * Returns user info, rentals (dự án), rooms (phòng cho thuê), feedback/reviews, and stats.
+ */
+async function getLandlordProfile(req, res) {
+    try {
+        const userId = req.params.userId ? String(req.params.userId).trim().toLowerCase() : '';
+        if (!userId) {
+            return res.status(400).json({ success: false, message: 'Thiếu ID chủ nhà' });
+        }
+
+        // 1. Fetch landlord user
+        const user = await prisma.user.findUnique({
+            where: { id: userId },
+            select: {
+                id: true,
+                fullName: true,
+                avatarUrl: true,
+                phone: true,
+                createdAt: true,
+                role: true,
+            },
+        });
+
+        if (!user || user.role !== 'LANDLORD') {
+            return res.status(404).json({ success: false, message: 'Không tìm thấy chủ nhà' });
+        }
+
+        // 2. Fetch rentals (dự án nhà trọ) with their rooms
+        const [activeRentals, totalRentals] = await Promise.all([
+            prisma.rental.findMany({
+                where: { owner_id: userId, status: 'AVAILABLE' },
+                orderBy: { createdAt: 'desc' },
+                include: {
+                    location: true,
+                    images: true,
+                    rooms: {
+                        include: {
+                            images: true,
+                            roomAmenities: { include: { amenity: true } },
+                        },
+                    },
+                },
+            }),
+            prisma.rental.count({ where: { owner_id: userId } }),
+        ]);
+
+        // 3. Fetch feedback/reviews targeting this landlord
+        const feedbacks = await prisma.feedback.findMany({
+            where: { target_type: 'LANDLORD', target_id: userId },
+            orderBy: { created_at: 'desc' },
+            include: {
+                users: {
+                    select: { id: true, fullName: true, avatarUrl: true },
+                },
+            },
+        });
+
+        // 4. Compute average rating
+        const ratings = feedbacks.filter((f) => f.rating != null).map((f) => f.rating);
+        const avgRating = ratings.length > 0
+            ? Math.round((ratings.reduce((a, b) => a + b, 0) / ratings.length) * 10) / 10
+            : 0;
+
+        const placeholderImage = 'https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?w=800';
+
+        // 5. Build separate rentals and rooms arrays
+        const rentalsData = [];
+        const roomsData = [];
+
+        for (const r of activeRentals) {
+            const rentalImgs = (r.images || []).map((img) => img.imageUrl);
+
+            // Rental (dự án)
+            rentalsData.push({
+                id: r.id,
+                title: r.title,
+                description: r.description,
+                status: r.status,
+                createdAt: r.createdAt,
+                location: r.location ? {
+                    address: r.location.address,
+                    district: r.location.district,
+                    city: r.location.city,
+                } : null,
+                images: rentalImgs.length > 0 ? rentalImgs : [placeholderImage],
+                roomCount: r.rooms ? r.rooms.length : 0,
+            });
+
+            // Rooms (phòng cho thuê) – flatten from all rentals
+            for (const room of (r.rooms || [])) {
+                const roomImgs = (room.images || []).map((img) => img.imageUrl);
+                const amenityNames = (room.roomAmenities || [])
+                    .map((ra) => ra.amenity?.name)
+                    .filter(Boolean);
+                roomsData.push({
+                    id: room.id,
+                    rentalId: r.id,
+                    rentalTitle: r.title,
+                    roomName: room.room_name,
+                    description: room.description,
+                    roomType: room.room_type,
+                    price: Number(room.price),
+                    sizeM2: room.size_m2 ? Number(room.size_m2) : null,
+                    maxPeople: room.max_people,
+                    status: room.status,
+                    createdAt: room.created_at,
+                    location: r.location ? {
+                        address: r.location.address,
+                        district: r.location.district,
+                        city: r.location.city,
+                    } : null,
+                    images: roomImgs.length > 0 ? roomImgs : rentalImgs.length > 0 ? rentalImgs : [placeholderImage],
+                    amenities: amenityNames,
+                });
+            }
+        }
+
+        // Total rooms across all active rentals
+        const totalRooms = roomsData.length;
+        const availableRooms = roomsData.filter((rm) => rm.status === 'AVAILABLE').length;
+
+        return res.json({
+            success: true,
+            data: {
+                user: {
+                    id: user.id,
+                    fullName: user.fullName,
+                    avatarUrl: user.avatarUrl,
+                    phone: user.phone,
+                    createdAt: user.createdAt,
+                },
+                stats: {
+                    totalRentals,
+                    activeRentals: activeRentals.length,
+                    totalRooms,
+                    availableRooms,
+                    totalReviews: feedbacks.length,
+                    avgRating,
+                },
+                rentals: rentalsData,
+                rooms: roomsData,
+                reviews: feedbacks.map((f) => ({
+                    id: f.id,
+                    rating: f.rating,
+                    comment: f.comment,
+                    createdAt: f.created_at,
+                    reviewer: f.users ? {
+                        id: f.users.id,
+                        fullName: f.users.fullName,
+                        avatarUrl: f.users.avatarUrl,
+                    } : null,
+                })),
+            },
+        });
+    } catch (err) {
+        console.error('Get landlord profile error:', err);
+        return res.status(500).json({
+            success: false,
+            message: 'Lỗi khi lấy hồ sơ chủ nhà',
+            error: err.message,
+        });
+    }
+}
+
 module.exports = {
     createRental,
     getRentals,
@@ -797,4 +962,5 @@ module.exports = {
     getPublicRentals,
     getPublicRentalById,
     getPublicRoomTypes,
+    getLandlordProfile,
 };
