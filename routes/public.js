@@ -1,6 +1,6 @@
 const express = require('express');
 const { optionalJWT } = require('../middleware/auth');
-const { getPublicRentals, getPublicRentalById, getPublicRoomTypes } = require('../controllers/rental.controller');
+const { getPublicRentals, getPublicRentalById, getPublicRoomTypes, getLandlordProfile } = require('../controllers/rental.controller');
 const { getPublicSearch } = require('../controllers/search.controller');
 
 const router = express.Router();
@@ -19,6 +19,12 @@ router.get('/room-types', getPublicRoomTypes);
 router.get('/search', optionalJWT, getPublicSearch);
 
 /**
+ * GET /public/landlord/:userId
+ * Public landlord profile page. No auth.
+ */
+router.get('/landlord/:userId', getLandlordProfile);
+
+/**
  * GET /public/rentals
  * List rentals for home/browse. No auth.
  * Query: ?page=1&limit=20&district=...&city=...&sort=createdAt_desc|createdAt_asc|title_asc|title_desc
@@ -32,3 +38,4 @@ router.get('/rentals', getPublicRentals);
 router.get('/rentals/:rentalId', getPublicRentalById);
 
 module.exports = router;
+
