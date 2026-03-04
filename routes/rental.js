@@ -7,14 +7,18 @@ const {
     getMyRentals,
     getRentalsForModeration,
     updateRentalStatus,
+    getRentalStats,
 } = require('../controllers/rental.controller');
-const { getRentalStats, deleteRental } = require('../controllers/rentals.controller');
+const { deleteRental } = require('../controllers/rentals.controller');
 
 const router = express.Router();
 
 /**
  * GET /rentals/stats
+
  * Thống kê bài đăng (Admin/Moderator)
+
+ * Admin/Moderator dashboard rental stats. Must be before /:rentalId
  */
 router.get('/stats', verifyJWT, requireRole('MODERATOR', 'ADMIN'), getRentalStats);
 
@@ -23,7 +27,7 @@ router.get('/stats', verifyJWT, requireRole('MODERATOR', 'ADMIN'), getRentalStat
  * Landlord xem danh sách rentals của mình
  * ⚠️ Route này phải đặt TRƯỚC /:rentalId để tránh conflict
  */
-router.get('/my-rentals', verifyJWT, getMyRentals);
+router.get('/my-rentals', verifyJWT, requireRole('LANDLORD'), getMyRentals);
 
 /**
  * GET /rentals

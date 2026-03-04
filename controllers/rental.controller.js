@@ -1,5 +1,8 @@
 const prisma = require('../config/prisma');
+const cache = require('../utils/simple-cache');
+const { getLabelForDb } = require('../utils/room-type-mapper');
 const { validateCreateRental, validateUpdateRentalStatus } = require('../validators/rental.validator');
+const { expandCity, expandDistrict, extractLocationTermsFromQuery } = require('../data/legacy-location-map');
 
 /**
  * POST /rentals
@@ -262,7 +265,17 @@ async function getMyRentals(req, res) {
                 skip,
                 take: limit,
                 orderBy: { createdAt: 'desc' },
-                include: { location: true, images: true },
+                include: {
+                    location: true,
+                    images: true,
+                    users: {
+                        select: {
+                            id: true,
+                            fullName: true,
+                            avatarUrl: true,
+                        },
+                    },
+                },
             }),
             prisma.rental.count({ where }),
         ]);
@@ -275,6 +288,11 @@ async function getMyRentals(req, res) {
                 description: r.description,
                 status: r.status,
                 createdAt: r.createdAt,
+                owner: r.users ? {
+                    id: r.users.id,
+                    fullName: r.users.fullName,
+                    avatarUrl: r.users.avatarUrl,
+                } : null,
                 location: r.location ? {
                     id: r.location.id,
                     address: r.location.address,
@@ -445,6 +463,494 @@ async function updateRentalStatus(req, res) {
     }
 }
 
+/**
+ * GET /rentals/stats
+ * Rental stats for admin dashboard. Requires MODERATOR or ADMIN.
+ * Returns: total, byStatus (available, rented, hidden, archived), thisMonth
+ */
+async function getRentalStats(req, res) {
+    try {
+        const now = new Date();
+        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+        const [
+            total,
+            available,
+            unavailable,
+            hidden,
+            suspendedOrViolate,
+            thisMonth,
+        ] = await Promise.all([
+            prisma.rental.count(),
+            prisma.rental.count({ where: { status: 'AVAILABLE' } }),
+            prisma.rental.count({ where: { status: 'UNAVAILABLE' } }),
+            prisma.rental.count({ where: { status: 'HIDDEN' } }),
+            prisma.rental.count({
+                where: {
+                    status: { in: ['SUSPEND', 'VIOLATE'] },
+                },
+            }),
+            prisma.rental.count({
+                where: { createdAt: { gte: startOfMonth } },
+            }),
+        ]);
+
+        return res.json({
+            success: true,
+            data: {
+                total,
+                byStatus: {
+                    available,
+                    rented: unavailable,
+                    hidden,
+                    archived: suspendedOrViolate,
+                },
+                thisMonth,
+            },
+        });
+    } catch (err) {
+        console.error('Get rental stats error:', err);
+        return res.status(500).json({
+            success: false,
+            message: 'Lỗi khi lấy thống kê bài đăng',
+            error: err.message,
+        });
+    }
+}
+
+/**
+ * GET (public) /public/rentals/:rentalId – Chi tiết một rental. No auth.
+ */
+async function getPublicRentalById(req, res) {
+    try {
+        let rentalId = req.params.rentalId ? String(req.params.rentalId).trim() : '';
+        if (!rentalId) {
+            return res.status(400).json({
+                success: false,
+                message: 'Thiếu ID nhà trọ',
+            });
+        }
+        // Normalize UUID to lowercase (PostgreSQL may return lowercase; comparison can be case-sensitive)
+        rentalId = rentalId.toLowerCase();
+
+        let rental = await prisma.rental.findUnique({
+            where: { id: rentalId },
+            include: {
+                location: true,
+                images: true,
+                users: {
+                    select: {
+                        id: true,
+                        fullName: true,
+                        avatarUrl: true,
+                        email: true,
+                        phone: true,
+                    },
+                },
+                rooms: {
+                    include: {
+                        images: true,
+                        roomAmenities: { include: { amenity: true } },
+                    },
+                },
+            },
+        });
+
+        // Fallback: raw query in case Prisma UUID handling differs (e.g. driver returns id in different format)
+        if (!rental) {
+            const rawRows = await prisma.$queryRawUnsafe(
+                'SELECT id FROM rentals WHERE id::text = $1 LIMIT 1',
+                rentalId
+            );
+            if (rawRows && rawRows.length > 0) {
+                const idFromDb = rawRows[0].id;
+                const idStr = typeof idFromDb === 'string' ? idFromDb : String(idFromDb);
+                rental = await prisma.rental.findUnique({
+                    where: { id: idStr },
+                    include: {
+                        location: true,
+                        images: true,
+                        users: {
+                            select: {
+                                id: true,
+                                fullName: true,
+                                avatarUrl: true,
+                                email: true,
+                                phone: true,
+                            },
+                        },
+                        rooms: {
+                            include: {
+                                images: true,
+                                roomAmenities: { include: { amenity: true } },
+                            },
+                        },
+                    },
+                });
+            }
+        }
+
+        if (!rental) {
+            console.warn('[getPublicRentalById] 404 – rentalId not found:', rentalId);
+            return res.status(404).json({
+                success: false,
+                message: 'Không tìm thấy nhà trọ',
+                rentalId,
+            });
+        }
+
+        const placeholderImage = 'https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?w=800';
+        const imgs = (rental.images || []).map((img) => img.imageUrl);
+
+        const roomsWithDetails = (rental.rooms || []).map((r) => {
+            const roomImgs = (r.images || []).map((img) => img.imageUrl);
+            const amenityNames = (r.roomAmenities || []).map((ra) => ra.amenity?.name).filter(Boolean);
+            return {
+                id: r.id,
+                rental_id: r.rental_id,
+                room_name: r.room_name,
+                room_type: r.room_type,
+                price: Number(r.price),
+                size_m2: r.size_m2 ? Number(r.size_m2) : null,
+                max_people: r.max_people,
+                images: roomImgs.length > 0 ? roomImgs : [placeholderImage],
+                amenities: amenityNames,
+            };
+        });
+
+        const allAmenityNames = [...new Set(roomsWithDetails.flatMap((r) => r.amenities || []))];
+
+        return res.json({
+            success: true,
+            data: {
+                id: rental.id,
+                title: rental.title || '',
+                description: rental.description ?? null,
+                status: rental.status != null ? String(rental.status) : 'PENDING',
+                createdAt: rental.createdAt,
+                owner: rental.users ? {
+                    id: rental.users.id,
+                    fullName: rental.users.fullName,
+                    avatarUrl: rental.users.avatarUrl,
+                    email: rental.users.email,
+                    phone: rental.users.phone,
+                } : null,
+                location: rental.location ? {
+                    id: rental.location.id,
+                    address: rental.location.address,
+                    district: rental.location.district,
+                    city: rental.location.city,
+                } : null,
+                rooms: roomsWithDetails,
+                amenities: allAmenityNames,
+                images: imgs.length > 0 ? imgs : [placeholderImage],
+            },
+        });
+    } catch (err) {
+        console.error('Get public rental by id error:', err);
+        return res.status(500).json({
+            success: false,
+            message: 'Lỗi khi lấy chi tiết',
+            error: err.message,
+        });
+    }
+}
+
+/**
+ * GET (public) – List rentals for home/browse. No auth.
+ * Query: ?page=1&limit=20&district=...&city=...&sort=createdAt_desc|createdAt_asc|title_asc|title_desc
+ */
+function getPublicRentalsOrderBy(sortParam) {
+    const map = {
+        createdAt_desc: { createdAt: 'desc' },
+        createdAt_asc: { createdAt: 'asc' },
+        title_asc: { title: 'asc' },
+        title_desc: { title: 'desc' },
+    };
+    return map[sortParam] || { createdAt: 'desc' };
+}
+
+async function getPublicRentals(req, res) {
+    try {
+        const page = Math.max(1, parseInt(req.query.page) || 1);
+        const limit = Math.min(Math.max(1, parseInt(req.query.limit) || 20), 1000);
+        const skip = (page - 1) * limit;
+        const sort = getPublicRentalsOrderBy(req.query.sort);
+
+        const where = {};
+        const districtParam = req.query.district && String(req.query.district).trim();
+        const cityParam = req.query.city && String(req.query.city).trim();
+        if (districtParam || cityParam) {
+            const locConditions = [];
+            if (districtParam) {
+                const districtTerms = expandDistrict(districtParam);
+                locConditions.push(
+                    districtTerms.length === 1
+                        ? { district: { equals: districtTerms[0], mode: 'insensitive' } }
+                        : { OR: districtTerms.map((t) => ({ district: { equals: t, mode: 'insensitive' } })) }
+                );
+            }
+            if (cityParam) {
+                const cityTerms = expandCity(cityParam);
+                locConditions.push(
+                    cityTerms.length === 1
+                        ? { city: { equals: cityTerms[0], mode: 'insensitive' } }
+                        : { OR: cityTerms.map((t) => ({ city: { equals: t, mode: 'insensitive' } })) }
+                );
+            }
+            where.location = { is: locConditions.length === 1 ? locConditions[0] : { AND: locConditions } };
+        }
+
+        // Parallel queries for lower latency (Prisma connection pool handles concurrency)
+        const [total, rentals] = await Promise.all([
+            prisma.rental.count({ where }),
+            prisma.rental.findMany({
+                where,
+                skip,
+                take: limit,
+                orderBy: sort,
+                include: {
+                    location: true,
+                    images: true,
+                },
+            }),
+        ]);
+
+        const placeholderImage = 'https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?w=800';
+
+        return res.json({
+            success: true,
+            data: rentals.map((r) => {
+                const imgs = (r.images || []).map((img) => img.imageUrl);
+                return {
+                    id: r.id,
+                    title: r.title,
+                    description: r.description,
+                    status: r.status,
+                    createdAt: r.createdAt,
+                    location: r.location ? {
+                        id: r.location.id,
+                        address: r.location.address,
+                        district: r.location.district,
+                        city: r.location.city,
+                    } : null,
+                    images: imgs.length > 0 ? imgs : [placeholderImage],
+                };
+            }),
+            pagination: {
+                page,
+                limit,
+                total,
+                totalPages: Math.ceil(total / limit),
+            },
+        });
+    } catch (err) {
+        console.error('Get public rentals error:', err);
+        return res.status(500).json({
+            success: false,
+            message: 'Lỗi khi lấy danh sách',
+            error: err.message,
+        });
+    }
+}
+
+const ROOM_TYPES_CACHE_KEY = 'public:room-types';
+
+/**
+ * GET /public/room-types – distinct room types from available rentals.
+ */
+async function getPublicRoomTypes(req, res) {
+    try {
+        const cached = cache.get(ROOM_TYPES_CACHE_KEY);
+        if (cached) {
+            return res.json({ success: true, data: cached });
+        }
+        const rows = await prisma.rooms.findMany({
+            where: { rentals: { status: 'AVAILABLE' } },
+            select: { room_type: true },
+            distinct: ['room_type'],
+            orderBy: { room_type: 'asc' },
+        });
+        const data = rows
+            .map((r) => getLabelForDb(r.room_type))
+            .filter(Boolean);
+        cache.set(ROOM_TYPES_CACHE_KEY, data);
+        return res.json({ success: true, data });
+    } catch (err) {
+        console.error('Get room types error:', err);
+        return res.status(500).json({
+            success: false,
+            message: 'Lỗi khi lấy loại phòng',
+            error: err.message,
+        });
+    }
+}
+
+/**
+ * GET /public/landlord/:userId – Public landlord profile page.
+ * Returns user info, rentals (dự án), rooms (phòng cho thuê), feedback/reviews, and stats.
+ */
+async function getLandlordProfile(req, res) {
+    try {
+        const userId = req.params.userId ? String(req.params.userId).trim().toLowerCase() : '';
+        if (!userId) {
+            return res.status(400).json({ success: false, message: 'Thiếu ID chủ nhà' });
+        }
+
+        // 1. Fetch landlord user
+        const user = await prisma.user.findUnique({
+            where: { id: userId },
+            select: {
+                id: true,
+                fullName: true,
+                avatarUrl: true,
+                phone: true,
+                createdAt: true,
+                role: true,
+            },
+        });
+
+        if (!user || user.role !== 'LANDLORD') {
+            return res.status(404).json({ success: false, message: 'Không tìm thấy chủ nhà' });
+        }
+
+        // 2. Fetch rentals (dự án nhà trọ) with their rooms
+        const [activeRentals, totalRentals] = await Promise.all([
+            prisma.rental.findMany({
+                where: { owner_id: userId, status: 'AVAILABLE' },
+                orderBy: { createdAt: 'desc' },
+                include: {
+                    location: true,
+                    images: true,
+                    rooms: {
+                        include: {
+                            images: true,
+                            roomAmenities: { include: { amenity: true } },
+                        },
+                    },
+                },
+            }),
+            prisma.rental.count({ where: { owner_id: userId } }),
+        ]);
+
+        // 3. Fetch feedback/reviews targeting this landlord
+        const feedbacks = await prisma.feedback.findMany({
+            where: { target_type: 'LANDLORD', target_id: userId },
+            orderBy: { created_at: 'desc' },
+            include: {
+                users: {
+                    select: { id: true, fullName: true, avatarUrl: true },
+                },
+            },
+        });
+
+        // 4. Compute average rating
+        const ratings = feedbacks.filter((f) => f.rating != null).map((f) => f.rating);
+        const avgRating = ratings.length > 0
+            ? Math.round((ratings.reduce((a, b) => a + b, 0) / ratings.length) * 10) / 10
+            : 0;
+
+        const placeholderImage = 'https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?w=800';
+
+        // 5. Build separate rentals and rooms arrays
+        const rentalsData = [];
+        const roomsData = [];
+
+        for (const r of activeRentals) {
+            const rentalImgs = (r.images || []).map((img) => img.imageUrl);
+
+            // Rental (dự án)
+            rentalsData.push({
+                id: r.id,
+                title: r.title,
+                description: r.description,
+                status: r.status,
+                createdAt: r.createdAt,
+                location: r.location ? {
+                    address: r.location.address,
+                    district: r.location.district,
+                    city: r.location.city,
+                } : null,
+                images: rentalImgs.length > 0 ? rentalImgs : [placeholderImage],
+                roomCount: r.rooms ? r.rooms.length : 0,
+            });
+
+            // Rooms (phòng cho thuê) – flatten from all rentals
+            for (const room of (r.rooms || [])) {
+                const roomImgs = (room.images || []).map((img) => img.imageUrl);
+                const amenityNames = (room.roomAmenities || [])
+                    .map((ra) => ra.amenity?.name)
+                    .filter(Boolean);
+                roomsData.push({
+                    id: room.id,
+                    rentalId: r.id,
+                    rentalTitle: r.title,
+                    roomName: room.room_name,
+                    description: room.description,
+                    roomType: room.room_type,
+                    price: Number(room.price),
+                    sizeM2: room.size_m2 ? Number(room.size_m2) : null,
+                    maxPeople: room.max_people,
+                    status: room.status,
+                    createdAt: room.created_at,
+                    location: r.location ? {
+                        address: r.location.address,
+                        district: r.location.district,
+                        city: r.location.city,
+                    } : null,
+                    images: roomImgs.length > 0 ? roomImgs : rentalImgs.length > 0 ? rentalImgs : [placeholderImage],
+                    amenities: amenityNames,
+                });
+            }
+        }
+
+        // Total rooms across all active rentals
+        const totalRooms = roomsData.length;
+        const availableRooms = roomsData.filter((rm) => rm.status === 'AVAILABLE').length;
+
+        return res.json({
+            success: true,
+            data: {
+                user: {
+                    id: user.id,
+                    fullName: user.fullName,
+                    avatarUrl: user.avatarUrl,
+                    phone: user.phone,
+                    createdAt: user.createdAt,
+                },
+                stats: {
+                    totalRentals,
+                    activeRentals: activeRentals.length,
+                    totalRooms,
+                    availableRooms,
+                    totalReviews: feedbacks.length,
+                    avgRating,
+                },
+                rentals: rentalsData,
+                rooms: roomsData,
+                reviews: feedbacks.map((f) => ({
+                    id: f.id,
+                    rating: f.rating,
+                    comment: f.comment,
+                    createdAt: f.created_at,
+                    reviewer: f.users ? {
+                        id: f.users.id,
+                        fullName: f.users.fullName,
+                        avatarUrl: f.users.avatarUrl,
+                    } : null,
+                })),
+            },
+        });
+    } catch (err) {
+        console.error('Get landlord profile error:', err);
+        return res.status(500).json({
+            success: false,
+            message: 'Lỗi khi lấy hồ sơ chủ nhà',
+            error: err.message,
+        });
+    }
+}
+
 module.exports = {
     createRental,
     getRentals,
@@ -452,4 +958,9 @@ module.exports = {
     getMyRentals,
     getRentalsForModeration,
     updateRentalStatus,
+    getRentalStats,
+    getPublicRentals,
+    getPublicRentalById,
+    getPublicRoomTypes,
+    getLandlordProfile,
 };
