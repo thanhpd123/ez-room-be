@@ -266,8 +266,34 @@ async function getPublicSearch(req, res) {
 }
 
 /**
+ * Compute bonus score for a room being "similar" to user's favourite rooms.
+ * @param {object} room - Room with rentals.location, room_type, price
+ * @param {array} favoriteRooms - List of favourited rooms with rental.location, room_type, price
+ */
+function computeSimilarToFavoritesBonus(room, favoriteRooms) {
+    if (!favoriteRooms || favoriteRooms.length === 0) return 0;
+    const roomPrice = Number(room.price) || 0;
+    const roomDistrict = (room.rentals?.location?.district || '').toLowerCase();
+    const roomCity = (room.rentals?.location?.city || '').toLowerCase();
+    const roomType = room.room_type;
+
+    let bonus = 0;
+    for (const fav of favoriteRooms) {
+        const favLoc = fav.rentals?.location;
+        const favDistrict = (favLoc?.district || '').toLowerCase();
+        const favCity = (favLoc?.city || '').toLowerCase();
+        const favPrice = Number(fav.price) || 0;
+        if (roomDistrict && favDistrict && roomDistrict === favDistrict) bonus += 15;
+        if (roomCity && favCity && roomCity === favCity) bonus += 8;
+        if (roomType && fav.room_type && roomType === fav.room_type) bonus += 12;
+        if (favPrice > 0 && roomPrice >= favPrice * 0.7 && roomPrice <= favPrice * 1.3) bonus += 10;
+    }
+    return Math.min(40, bonus); // cap bonus from favourites
+}
+
+/**
  * GET /search/recommend – Personalized room recommendations (auth required).
- * Returns top rooms sorted by user preference match score.
+ * Based on lifestyle/preferences and rooms similar to user's favourites.
  */
 async function getRecommend(req, res) {
     try {
@@ -276,12 +302,28 @@ async function getRecommend(req, res) {
             return res.status(401).json({ success: false, message: 'Cần đăng nhập để xem gợi ý' });
         }
 
-        const preference = await prisma.userPreference.findUnique({
-            where: { userId },
-        });
+        const [preference, favoriteRows] = await Promise.all([
+            prisma.userPreference.findUnique({ where: { userId } }),
+            prisma.favoriteRoom.findMany({
+                where: { userId },
+                include: {
+                    room: {
+                        include: {
+                            rentals: { include: { location: true } },
+                        },
+                    },
+                },
+            }),
+        ]);
+
+        const favoriteRooms = favoriteRows.map((f) => f.room).filter(Boolean);
+        const favoriteRoomIds = new Set(favoriteRooms.map((r) => r.id));
 
         const rooms = await prisma.rooms.findMany({
-            where: { rentals: { status: 'AVAILABLE' } },
+            where: {
+                status: 'AVAILABLE',
+                rentals: { status: 'AVAILABLE' },
+            },
             include: {
                 rentals: {
                     include: {
@@ -292,7 +334,7 @@ async function getRecommend(req, res) {
                 roomAmenities: { include: { amenity: true } },
                 images: true,
             },
-            take: 50,
+            take: 80,
         });
 
         const roomIds = rooms.map((r) => r.id);
@@ -312,33 +354,40 @@ async function getRecommend(req, res) {
         const placeholderImage = 'https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?w=800';
         const params = { q: '', district: '', city: '', address: '', minPrice: null, maxPrice: null, roomType: null, minArea: null, maxArea: null, amenityIds: [] };
 
-        const scored = rooms.map((room) => {
-            const avgRating = ratingByRoom[room.id] ?? null;
-            const score = computeMatchScore(room, params, preference, avgRating);
-            const rental = room.rentals;
-            const loc = rental?.location;
-            const roomImgs = (room.images || []).map((img) => img.imageUrl);
-            const rentalImgs = (rental?.images || []).map((img) => img.imageUrl);
-            const imgs = roomImgs.length > 0 ? roomImgs : rentalImgs;
-            const amenityNames = (room.roomAmenities || []).map((ra) => ra.amenity?.name).filter(Boolean);
+        const scored = rooms
+            .filter((room) => !favoriteRoomIds.has(room.id)) // exclude already favourited
+            .map((room) => {
+                const avgRating = ratingByRoom[room.id] ?? null;
+                let score = computeMatchScore(room, params, preference, avgRating);
+                score += computeSimilarToFavoritesBonus(room, favoriteRooms);
+                const rental = room.rentals;
+                const loc = rental?.location;
+                const roomImgs = (room.images || []).map((img) => img.imageUrl);
+                const rentalImgs = (rental?.images || []).map((img) => img.imageUrl);
+                const imgs = roomImgs.length > 0 ? roomImgs : rentalImgs;
+                const amenityNames = (room.roomAmenities || []).map((ra) => ra.amenity?.name).filter(Boolean);
 
-            return {
-                id: room.id,
-                rentalId: rental?.id || room.id,
-                title: rental?.title || room.room_name || 'Phòng trọ',
-                price: Number(room.price),
-                area: room.size_m2 != null ? Number(room.size_m2) : null,
-                amenities: amenityNames,
-                images: imgs.length > 0 ? imgs : [placeholderImage],
-                location: loc ? { district: loc.district, city: loc.city } : null,
-                matchScore: score,
-            };
-        });
+                return {
+                    id: room.id,
+                    rentalId: rental?.id || room.id,
+                    title: rental?.title || room.room_name || 'Phòng trọ',
+                    price: Number(room.price),
+                    area: room.size_m2 != null ? Number(room.size_m2) : null,
+                    roomType: room.room_type ? mapDbToFe(room.room_type, 'single') : null,
+                    amenities: amenityNames,
+                    images: imgs.length > 0 ? imgs : [placeholderImage],
+                    location: loc ? { district: loc.district, city: loc.city } : null,
+                    matchScore: score,
+                };
+            });
 
         scored.sort((a, b) => b.matchScore - a.matchScore);
-        const data = scored.slice(0, 10);
+        const data = scored.slice(0, 12);
 
-        const hint = preference ? 'Dựa trên sở thích của bạn' : 'Phòng phổ biến';
+        let hint = 'Phòng phổ biến';
+        if (favoriteRooms.length > 0 && preference) hint = 'Dựa trên sở thích và phòng bạn đã lưu';
+        else if (favoriteRooms.length > 0) hint = 'Gợi ý tương tự phòng bạn đã lưu';
+        else if (preference) hint = 'Dựa trên sở thích của bạn';
 
         return res.json({
             success: true,
