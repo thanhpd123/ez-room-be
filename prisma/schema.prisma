@@ -182,13 +182,21 @@ model RoomAmenity {
 }
 
 model RoomRentalPeriod {
-  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  roomId    String    @map("room_id") @db.Uuid
-  startDate DateTime  @map("start_date") @db.Date
-  endDate   DateTime  @map("end_date") @db.Date
-  createdAt DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
-  room      rooms     @relation(fields: [roomId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  id           String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  roomId       String                    @map("room_id") @db.Uuid
+  userId       String                    @map("user_id") @db.Uuid 
+  startDate    DateTime                  @map("start_date") @db.Date
+  endDate      DateTime?                 @map("end_date") @db.Date 
+  actualPrice  Decimal                   @map("actual_price") @db.Decimal(12, 2) 
+  deposit      Decimal?                  @default(0) @db.Decimal(12, 2) 
+  status       rental_period_status_enum @default(ACTIVE) 
+  createdAt    DateTime?                 @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt    DateTime?                 @updatedAt @map("updated_at") @db.Timestamp(6) 
+  room         Room                      @relation(fields: [roomId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenant       User                      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
+  @@index([userId])
+  @@index([status])
   @@map("room_rental_periods")
 }
 
@@ -456,4 +464,11 @@ enum user_status_enum {
   INACTIVE
   SUSPENDED
   BANNED
+}
+
+enum rental_period_status_enum {
+  ACTIVE      
+  COMPLETED   
+  CANCELLED  
+  OVERDUE     
 }
