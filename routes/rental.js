@@ -16,7 +16,7 @@ const router = express.Router();
  * GET /rentals/stats
  * Admin/Moderator dashboard rental stats. Must be before /:rentalId
  */
-router.get('/stats', requireRole('MODERATOR', 'ADMIN'), getRentalStats);
+router.get('/stats', verifyJWT, requireRole('MODERATOR', 'ADMIN'), getRentalStats);
 
 /**
  * GET /rentals/my-rentals
@@ -37,7 +37,7 @@ router.get('/', getRentals);
  * Moderator/Admin lấy danh sách rentals để duyệt
  * Query: ?status=PENDING&search=keyword&page=1&limit=50
  */
-router.get('/moderation', requireRole('MODERATOR', 'ADMIN'), getRentalsForModeration);
+router.get('/moderation', verifyJWT, requireRole('MODERATOR', 'ADMIN'), getRentalsForModeration);
 
 /**
  * GET /rentals/:rentalId
