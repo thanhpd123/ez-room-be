@@ -39,15 +39,32 @@ const DISTRICT_EQUIVALENCE_GROUPS = [
     ['Quận 12', 'Q.12', 'Q12'],
 ];
 
+function normalizeText(input) {
+    if (!input || typeof input !== 'string') return '';
+    return input
+        .trim()
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[.\-_/]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function normalizedKeys(input) {
+    const base = normalizeText(input);
+    if (!base) return [];
+    const compact = base.replace(/\s+/g, '');
+    return compact && compact !== base ? [base, compact] : [base];
+}
+
 function buildLookup(groups) {
     const toGroup = new Map();
     groups.forEach((group) => {
-        const normalizedGroup = group.map((s) => s.trim().toLowerCase());
         group.forEach((name) => {
-            const key = name.trim().toLowerCase();
-            if (!toGroup.has(key)) {
-                toGroup.set(key, group);
-            }
+            normalizedKeys(name).forEach((key) => {
+                if (!toGroup.has(key)) toGroup.set(key, group);
+            });
         });
     });
     return toGroup;
@@ -62,9 +79,9 @@ const districtLookup = buildLookup(DISTRICT_EQUIVALENCE_GROUPS);
  */
 function expandCity(input) {
     if (!input || typeof input !== 'string') return [];
-    const key = input.trim().toLowerCase();
-    if (!key) return [];
-    const group = cityLookup.get(key);
+    const keys = normalizedKeys(input);
+    if (keys.length === 0) return [];
+    const group = keys.map((k) => cityLookup.get(k)).find(Boolean);
     if (group) return [...new Set(group)];
     return [input.trim()];
 }
@@ -74,9 +91,9 @@ function expandCity(input) {
  */
 function expandDistrict(input) {
     if (!input || typeof input !== 'string') return [];
-    const key = input.trim().toLowerCase();
-    if (!key) return [];
-    const group = districtLookup.get(key);
+    const keys = normalizedKeys(input);
+    if (keys.length === 0) return [];
+    const group = keys.map((k) => districtLookup.get(k)).find(Boolean);
     if (group) return [...new Set(group)];
     return [input.trim()];
 }
@@ -87,17 +104,19 @@ function expandDistrict(input) {
  */
 function extractLocationTermsFromQuery(q) {
     if (!q || typeof q !== 'string' || q.length < 2) return { cities: [], districts: [] };
-    const normalized = q.trim().toLowerCase();
+    const normalized = normalizeText(q);
+    const compactNormalized = normalized.replace(/\s+/g, '');
+    const includesKey = (key) => normalized.includes(key) || compactNormalized.includes(key.replace(/\s+/g, ''));
     const cities = new Set();
     const districts = new Set();
 
     cityLookup.forEach((group, key) => {
-        if (normalized.includes(key) || group.some((g) => normalized.includes(g.trim().toLowerCase()))) {
+        if (includesKey(key) || group.some((g) => normalizedKeys(g).some((k) => includesKey(k)))) {
             group.forEach((c) => cities.add(c));
         }
     });
     districtLookup.forEach((group, key) => {
-        if (normalized.includes(key) || group.some((g) => normalized.includes(g.trim().toLowerCase()))) {
+        if (includesKey(key) || group.some((g) => normalizedKeys(g).some((k) => includesKey(k)))) {
             group.forEach((d) => districts.add(d));
         }
     });
