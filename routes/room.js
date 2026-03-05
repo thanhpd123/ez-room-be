@@ -7,6 +7,7 @@ const {
     updateRoom,
     deleteRoom,
     getAmenities,
+    moderateRoom,
 } = require('../controllers/room.controller');
 
 const router = express.Router();
@@ -41,6 +42,12 @@ router.get('/:roomId', getRoomById);
 router.post('/', verifyJWT, requireRole('LANDLORD'), createRoom);
 
 /**
+ * PUT /rooms/:roomId/moderate
+ * Moderator duyệt / từ chối room (MODERATOR, ADMIN)
+ */
+router.put('/:roomId/moderate', verifyJWT, requireRole('MODERATOR', 'ADMIN'), moderateRoom);
+
+/**
  * PUT /rooms/:roomId
  * Cập nhật room (LANDLORD - owner của rental)
  */
@@ -53,3 +60,4 @@ router.put('/:roomId', verifyJWT, requireRole('LANDLORD'), updateRoom);
 router.delete('/:roomId', verifyJWT, requireRole('LANDLORD'), deleteRoom);
 
 module.exports = router;
+
