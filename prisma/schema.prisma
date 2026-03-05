@@ -3,8 +3,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 model User {
@@ -14,6 +15,7 @@ model User {
   password_hash                                         String
   phone                                                 String?           @db.VarChar(20)
   avatarUrl                                             String?           @map("avatar_url")
+  gender                                                String?           @db.VarChar(20)
   role                                                  user_role_enum?   @default(TENANT)
   status                                                user_status_enum? @default(ACTIVE)
   isVip                                                 Boolean?          @default(false) @map("is_vip")
@@ -33,6 +35,9 @@ model User {
   searchPrompts                                         SearchPrompt[]
   preference                                            UserPreference?
   wallet                                                Wallet?
+  rentalPeriods                                         RoomRentalPeriod[]
+  reportsFiled                                          Report[]          @relation("ReportReporter")
+  reportsReviewed                                       Report[]          @relation("ReportReviewedBy")
 
   @@index([role], map: "idx_users_role")
   @@map("users")
@@ -117,6 +122,7 @@ model WalletTransaction {
   createdAt        DateTime?                @default(now()) @map("created_at") @db.Timestamp(6)
   wallet           Wallet                   @relation(fields: [walletId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
+
   @@index([walletId], map: "idx_wallet_tx_wallet")
   @@map("wallet_transactions")
 }
@@ -134,21 +140,35 @@ model Location {
 }
 
 model Rental {
-  id          String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  owner_id    String              @db.Uuid
-  locationId  String?             @map("location_id") @db.Uuid
-  title       String              @db.VarChar(200)
-  description String?
-  status      rental_status_enum? @default(PENDING)
-  createdAt   DateTime?           @default(now()) @map("created_at") @db.Timestamp(6)
-  location    Location?           @relation(fields: [locationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  users       User                @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  rooms       rooms[]
-  images      RentalImage[]
-  documents   RentalDocument[]    // Giấy tờ xác minh (CCCD, sổ đỏ, GPKD)
+  id               String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  owner_id         String            @db.Uuid
+  locationId       String?           @map("location_id") @db.Uuid
+  title            String            @db.VarChar(200)
+  description      String?
+  status           rental_status_enum? @default(PENDING)
+  createdAt        DateTime?         @default(now()) @map("created_at") @db.Timestamp(6)
+  location         Location?         @relation(fields: [locationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users            User              @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  rooms            rooms[]
+  images           RentalImage[]
+  rental_documents rental_documents[] // Giấy tờ xác minh (CCCD, sổ đỏ, GPKD)
 
   @@index([owner_id], map: "idx_rentals_owner")
   @@map("rentals")
+}
+
+model rental_documents {
+  id            String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  rental_id     String                @db.Uuid
+  document_type document_type_enum
+  image_url     String                @map("image_url")
+  status        document_status_enum  @default(PENDING)
+  note          String?
+  created_at    DateTime?             @default(now()) @map("created_at") @db.Timestamp(6)
+  updated_at    DateTime?             @db.Timestamp(6)
+  rentals       Rental                @relation(fields: [rental_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@map("rental_documents")
 }
 
 model RentalImage {
@@ -183,13 +203,21 @@ model RoomAmenity {
 }
 
 model RoomRentalPeriod {
-  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  roomId    String    @map("room_id") @db.Uuid
-  startDate DateTime  @map("start_date") @db.Date
-  endDate   DateTime  @map("end_date") @db.Date
-  createdAt DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+  id           String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  roomId       String                    @map("room_id") @db.Uuid
+  userId       String                    @map("user_id") @db.Uuid 
+  startDate    DateTime                  @map("start_date") @db.Date
+  endDate      DateTime?                 @map("end_date") @db.Date 
+  actualPrice  Decimal                   @map("actual_price") @db.Decimal(12, 2) 
+  deposit      Decimal?                  @default(0) @db.Decimal(12, 2) 
+  status       rental_period_status_enum @default(ACTIVE) 
+  createdAt    DateTime?                 @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt    DateTime?                 @updatedAt @map("updated_at") @db.Timestamp(6) 
   room      rooms     @relation(fields: [roomId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenant       User                      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
+  @@index([userId])
+  @@index([status])
   @@map("room_rental_periods")
 }
 
@@ -338,6 +366,32 @@ model rooms {
   @@index([rental_id], map: "idx_rooms_rental")
 }
 
+
+model Report {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  reporterId    String   @map("reporter_id") @db.Uuid
+  reporter      User     @relation("ReportReporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  targetType    report_target_type_enum @map("target_type")
+  targetId      String           @map("target_id") @db.Uuid
+  reason        String           @db.VarChar(100)
+  description   String?          @db.Text
+  status        report_status_enum     @default(PENDING)
+  reviewedBy    String?          @map("reviewed_by") @db.Uuid
+  moderator     User?            @relation("ReportReviewedBy", fields: [reviewedBy], references: [id], onDelete: SetNull)
+  moderatorNote String?          @map("moderator_note") @db.Text
+  reviewedAt    DateTime?        @map("reviewed_at")
+  createdAt     DateTime         @default(now()) @map("created_at")
+  updatedAt     DateTime         @updatedAt      @map("updated_at")
+
+  @@index([targetType, targetId])
+  @@index([status])
+  @@index([createdAt])
+
+  @@unique([reporterId, targetType, targetId])
+
+  @@map("reports")
+}
 enum embedding_model_enum {
   CLIP
   OPENAI
@@ -397,6 +451,20 @@ enum preorder_status_enum {
   CONFIRMED
   CANCELLED
   EXPIRED
+}
+
+enum document_status_enum {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum document_type_enum {
+  CCCD
+  SO_DO
+  GPKD
+  HOP_DONG
+  OTHER
 }
 
 enum rental_status_enum {
@@ -459,30 +527,24 @@ enum user_status_enum {
   BANNED
 }
 
-enum document_type_enum {
-  CCCD        // Căn cước công dân
-  SO_DO       // Sổ đỏ
-  GPKD        // Giấy phép kinh doanh
-  HOP_DONG    // Hợp đồng thuê/mượn
-  OTHER       // Khác
+enum rental_period_status_enum {
+  ACTIVE      
+  COMPLETED   
+  CANCELLED  
+  OVERDUE     
 }
 
-enum document_status_enum {
-  PENDING     // Chờ xác minh
-  VERIFIED    // Đã xác minh
-  REJECTED    // Bị từ chối
+enum report_status_enum {
+  PENDING
+  APPROVED
+  REJECTED
+  DISMISSED
 }
 
-model RentalDocument {
-  id            String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  rentalId      String               @map("rental_id") @db.Uuid
-  documentType  document_type_enum   @map("document_type")
-  imageUrl      String               @map("image_url")
-  status        document_status_enum @default(PENDING)
-  note          String?              // Ghi chú từ moderator
-  created_at    DateTime?            @default(now()) @db.Timestamp(6)
-  updated_at    DateTime?            @updatedAt @db.Timestamp(6)
-  rental        Rental               @relation(fields: [rentalId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-
-  @@map("rental_documents")
+enum report_target_type_enum {
+  USER
+  ROOM
+  BOOKING
+  REVIEW
 }
+

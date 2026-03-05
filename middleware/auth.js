@@ -5,7 +5,7 @@ const prisma = require('../config/prisma');
 const JWT_SECRET = process.env.JWT_SECRET || 'ez-room-default-secret';
 
 /**
- * Verify Supabase JWT (Google/Facebook OAuth) or Backend JWT (email/password)
+ * Verify Supabase JWT (Google OAuth) or Backend JWT (email/password)
  * Attaches user info to req.auth.user
  */
 async function verifyJWT(req, res, next) {
@@ -28,7 +28,7 @@ async function verifyJWT(req, res, next) {
     }
 
     try {
-        // 1) Try Supabase JWT (Google/Facebook OAuth) – require matching Prisma user
+        // 1) Try Supabase JWT (Google OAuth) – require matching Prisma user
         const { data: { user: supaUser }, error } = await supabase.auth.getUser(token);
         if (!error && supaUser) {
             const email = (supaUser.email || '').toLowerCase();
@@ -55,6 +55,7 @@ async function verifyJWT(req, res, next) {
                     role: dbUser.role,
                     phone: dbUser.phone ?? null,
                     isVip: dbUser.isVip === true,
+                    gender: dbUser.gender ?? null,
                 },
             };
             return next();
@@ -88,6 +89,7 @@ async function verifyJWT(req, res, next) {
                 role: dbUser.role,
                 phone: dbUser.phone ?? null,
                 isVip: dbUser.isVip === true,
+                gender: dbUser.gender ?? null,
             },
         };
         next();
@@ -104,10 +106,15 @@ async function verifyJWT(req, res, next) {
                 message: 'Token đã hết hạn',
             });
         }
+        const isPrismaSchemaError = err.code && String(err.code).startsWith('P') ||
+            (err.message && (err.message.includes('Unknown argument') || err.message.includes('does not exist') || err.message.includes('column')));
         res.status(500).json({
             success: false,
-            message: 'Xác thực token thất bại',
+            message: isPrismaSchemaError
+                ? 'Schema hoặc DB chưa đồng bộ. Dừng server, chạy: npx prisma generate && npx prisma db push'
+                : 'Xác thực token thất bại',
             error: err.message,
+            code: err.code || undefined,
         });
     }
 }
