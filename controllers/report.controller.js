@@ -106,6 +106,7 @@ async function getReports(req, res) {
                             id: true,
                             fullName: true,
                             email: true,
+                            phone: true,
                             avatarUrl: true,
                         },
                     },
@@ -120,9 +121,25 @@ async function getReports(req, res) {
             prisma.report.count({ where }),
         ]);
 
+        // Resolve target user info for each report
+        const targetUserIds = [...new Set(reports.filter(r => r.targetType === 'USER').map(r => r.targetId))];
+        const targetUsers = targetUserIds.length > 0
+            ? await prisma.user.findMany({
+                where: { id: { in: targetUserIds } },
+                select: { id: true, fullName: true, email: true, phone: true, avatarUrl: true },
+            })
+            : [];
+        const targetUserMap = Object.fromEntries(targetUsers.map(u => [u.id, u]));
+
+        // Attach targetUser to each report
+        const reportsWithTarget = reports.map(r => ({
+            ...r,
+            targetUser: r.targetType === 'USER' ? (targetUserMap[r.targetId] || null) : null,
+        }));
+
         return res.json({
             success: true,
-            data: reports,
+            data: reportsWithTarget,
             pagination: {
                 page: pageNum,
                 limit: limitNum,
