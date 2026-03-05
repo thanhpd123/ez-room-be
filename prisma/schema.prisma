@@ -140,18 +140,18 @@ model Location {
 }
 
 model Rental {
-  id          String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  owner_id    String              @db.Uuid
-  locationId  String?             @map("location_id") @db.Uuid
-  title       String              @db.VarChar(200)
-  description String?
-  status      rental_status_enum? @default(PENDING)
-  createdAt   DateTime?           @default(now()) @map("created_at") @db.Timestamp(6)
-  location         Location?           @relation(fields: [locationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  users            User                @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  id               String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  owner_id         String            @db.Uuid
+  locationId       String?           @map("location_id") @db.Uuid
+  title            String            @db.VarChar(200)
+  description      String?
+  status           rental_status_enum? @default(PENDING)
+  createdAt        DateTime?         @default(now()) @map("created_at") @db.Timestamp(6)
+  location         Location?         @relation(fields: [locationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users            User              @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   rooms            rooms[]
   images           RentalImage[]
-  rental_documents rental_documents[]
+  rental_documents rental_documents[] // Giấy tờ xác minh (CCCD, sổ đỏ, GPKD)
 
   @@index([owner_id], map: "idx_rentals_owner")
   @@map("rentals")
@@ -547,3 +547,4 @@ enum report_target_type_enum {
   BOOKING
   REVIEW
 }
+
