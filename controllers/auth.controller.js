@@ -235,6 +235,7 @@ async function login(req, res) {
                 avatarUrl: user.avatarUrl,
                 createdAt: user.createdAt,
                 isVip: user.isVip === true,
+                gender: user.gender ?? null,
             },
         });
     } catch (err) {
@@ -379,7 +380,7 @@ async function resetPassword(req, res) {
 /**
  * POST /auth/register-oauth
  * Body: { email, fullName, phone?, role: 'TENANT' | 'LANDLORD' }
- * Complete registration after Google/Facebook (no account in our DB yet).
+ * Complete registration after Google OAuth (no account in our DB yet).
  */
 async function registerOAuth(req, res) {
     try {
@@ -438,16 +439,17 @@ async function registerOAuth(req, res) {
 
 /**
  * PATCH /auth/profile – update current user profile (requireAuth)
- * Body: { fullName?, phone?, avatarUrl? }
+ * Body: { fullName?, phone?, avatarUrl?, gender? }
  */
 async function updateProfile(req, res) {
     try {
         const userId = req.auth.user.id;
-        const { fullName, phone, avatarUrl } = req.body;
+        const { fullName, phone, avatarUrl, gender } = req.body;
         const updates = {};
         if (fullName !== undefined) updates.fullName = String(fullName).trim().slice(0, 100);
         if (phone !== undefined) updates.phone = phone === null || phone === '' ? null : String(phone).trim();
         if (avatarUrl !== undefined) updates.avatarUrl = avatarUrl === null || avatarUrl === '' ? null : String(avatarUrl).trim();
+        if (gender !== undefined) updates.gender = gender === null || gender === '' ? null : String(gender).trim().slice(0, 20);
         if (Object.keys(updates).length === 0) {
             const user = await prisma.user.findUnique({ where: { id: userId } });
             return res.json({
@@ -458,6 +460,7 @@ async function updateProfile(req, res) {
                     email: user.email,
                     phone: user.phone,
                     avatarUrl: user.avatarUrl,
+                    gender: user.gender,
                     role: user.role,
                     createdAt: user.createdAt,
                 },
@@ -475,6 +478,7 @@ async function updateProfile(req, res) {
                 email: user.email,
                 phone: user.phone,
                 avatarUrl: user.avatarUrl,
+                gender: user.gender,
                 role: user.role,
                 createdAt: user.createdAt,
             },
@@ -530,7 +534,6 @@ function toPreferenceResponse(prefs) {
         budget_max: prefs.budget_max != null ? Number(prefs.budget_max) : null,
         preferredLocation: prefs.preferredLocation ?? null,
         preferred_districts: Array.isArray(prefs.preferred_districts) ? prefs.preferred_districts : [],
-        preferred_gender: prefs.preferred_gender ?? null,
         room_type: prefs.room_type ?? null,
         preferred_amenities: Array.isArray(prefs.preferred_amenities) ? prefs.preferred_amenities : [],
         must_have_amenities: Array.isArray(prefs.must_have_amenities) ? prefs.must_have_amenities : [],
@@ -656,7 +659,7 @@ async function getPreference(req, res) {
 
 /**
  * PUT /auth/preference – create or update user preference
- * Body: budget_min?, budget_max?, preferredLocation?, preferred_districts[]?, preferred_gender?,
+ * Body: budget_min?, budget_max?, preferredLocation?, preferred_districts[]?,
  * room_type?, preferred_amenities[]?, must_have_amenities[]?, preferred_lease_months?,
  * move_in_date_min?, move_in_date_max?, max_distance_km?, transport_nearby?, pet_friendly?,
  * preferred_roommate_age_min?, preferred_roommate_age_max?, lifestyle_match_weight?, safety_priority?
@@ -675,7 +678,6 @@ async function upsertPreference(req, res) {
             budget_max: toNumber(body.budget_max),
             preferredLocation: str(body.preferredLocation, 255),
             preferred_districts: arr(body.preferred_districts),
-            preferred_gender: str(body.preferred_gender, 20),
             room_type: str(body.room_type, 30),
             preferred_amenities: arr(body.preferred_amenities),
             must_have_amenities: arr(body.must_have_amenities),

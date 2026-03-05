@@ -81,7 +81,7 @@ function validateRegister(body) {
 }
 
 /**
- * Validate register-oauth (complete signup after Google/Facebook)
+ * Validate register-oauth (complete signup after Google OAuth)
  * Fields: email, fullName, role (TENANT | LANDLORD), phone (optional)
  */
 function validateRegisterOAuth(body) {

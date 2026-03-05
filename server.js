@@ -13,6 +13,10 @@ const rentalRoutes = require('./routes/rental');
 const roomRoutes = require('./routes/room');
 const publicRoutes = require('./routes/public');
 const searchRoutes = require('./routes/search');
+const favoriteRoutes = require('./routes/favorite');
+const roommateRoutes = require('./routes/roommate');
+const messageRoutes = require('./routes/message');
+const walletRoutes = require('./routes/wallet');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -46,6 +50,10 @@ app.use('/rentals', rentalRoutes);
 app.use('/rooms', roomRoutes);
 app.use('/public', publicRoutes);
 app.use('/search', searchRoutes);
+app.use('/favorites', favoriteRoutes);
+app.use('/roommate', roommateRoutes);
+app.use('/messages', messageRoutes);
+app.use('/wallet', walletRoutes);
 
 // Test route
 app.get('/', (req, res) => {

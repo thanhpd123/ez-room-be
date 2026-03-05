@@ -56,20 +56,32 @@ router.put('/preference', verifyJWT, upsertPreference);
  * Requires: Authorization: Bearer <token>
  */
 router.get('/me', verifyJWT, (req, res) => {
-    const { user } = req.auth;
-    res.json({
-        success: true,
-        user: {
-            id: user.id,
-            email: user.email,
-            full_name: user.full_name,
-            avatar_url: user.avatar_url,
-            created_at: user.created_at,
-            role: user.role,
-            phone: user.phone ?? null,
-            isVip: user.isVip === true,
-        },
-    });
+    try {
+        const { user } = req.auth || {};
+        if (!user) {
+            return res.status(401).json({ success: false, message: 'Chưa xác thực' });
+        }
+        res.json({
+            success: true,
+            user: {
+                id: user.id,
+                email: user.email,
+                full_name: user.full_name,
+                avatar_url: user.avatar_url ?? null,
+                created_at: user.created_at,
+                role: user.role,
+                phone: user.phone ?? null,
+                isVip: user.isVip === true,
+                gender: user.gender ?? null,
+            },
+        });
+    } catch (err) {
+        console.error('GET /auth/me error:', err);
+        res.status(500).json({
+            success: false,
+            message: err.message || 'Lỗi máy chủ',
+        });
+    }
 });
 
 

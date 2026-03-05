@@ -1,6 +1,9 @@
 const prisma = require('../config/prisma');
 const cache = require('../utils/simple-cache');
 const { mapFeToDb, mapDbToFe } = require('../utils/room-type-mapper');
+const { sendEmail } = require('../utils/email');
+
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5174';
 
 /**
  * Format room response - trả về cả 2 format (standard + FE room-post)
@@ -247,6 +250,42 @@ async function getRoomById(req, res) {
 }
 
 /**
+ * When a room status changes from RENTED to AVAILABLE, email and notify users who favourited it.
+ */
+async function notifyFavoritersRoomAvailable(room) {
+    const favoriters = await prisma.favoriteRoom.findMany({
+        where: { roomId: room.id },
+        include: { user: { select: { id: true, email: true, fullName: true } } },
+    });
+    if (favoriters.length === 0) return;
+
+    const rental = room.rentals;
+    const loc = rental?.location;
+    const roomTitle = room.room_name || rental?.title || 'Phòng trọ';
+    const address = loc ? [loc.address, loc.district, loc.city].filter(Boolean).join(', ') : '';
+    const roomUrl = `${FRONTEND_URL.replace(/\/$/, '')}/room/${room.id}`;
+    const subject = `EzRoom – Phòng bạn quan tâm đã có sẵn: ${roomTitle}`;
+    const text = `Chào bạn,\n\nPhòng "${roomTitle}" (${address}) mà bạn đã lưu vào danh sách yêu thích hiện đã có sẵn để cho thuê.\n\nXem chi tiết: ${roomUrl}\n\n— EzRoom`;
+    const html = `<p>Chào bạn,</p><p>Phòng <strong>${roomTitle}</strong> (${address}) mà bạn đã lưu vào danh sách yêu thích hiện đã có sẵn để cho thuê.</p><p><a href="${roomUrl}">Xem chi tiết</a></p><p>— EzRoom</p>`;
+
+    for (const fav of favoriters) {
+        const user = fav.user;
+        if (user && user.email) {
+            await sendEmail(user.email, subject, text, html);
+            await prisma.notification.create({
+                data: {
+                    userId: user.id,
+                    type: 'FAVORITE',
+                    title: `Phòng "${roomTitle}" đã có sẵn`,
+                    body: `Phòng bạn đã lưu tại ${address} hiện đã có sẵn.`,
+                    status: 'UNREAD',
+                },
+            });
+        }
+    }
+}
+
+/**
  * PUT /rooms/:roomId
  * Cập nhật room (LANDLORD - chỉ owner của rental)
  */
@@ -277,12 +316,23 @@ async function updateRoom(req, res) {
         if (sizeM2 !== undefined) updateData.size_m2 = parseFloat(sizeM2);
         const maxPeople = req.body.maxPeople || req.body.max_occupants;
         if (maxPeople !== undefined) updateData.max_people = parseInt(maxPeople);
+        const newStatus = req.body.status;
+        const statusUpper = typeof newStatus === 'string' ? newStatus.toUpperCase() : null;
+        if (statusUpper && ['PENDING', 'AVAILABLE', 'RENTED', 'MAINTENANCE'].includes(statusUpper)) {
+            updateData.status = statusUpper;
+        }
 
+        const previousStatus = existingRoom.status;
         const room = await prisma.rooms.update({
             where: { id: roomId },
             data: updateData,
-            include: { images: true, roomAmenities: { include: { amenity: true } } },
+            include: { images: true, roomAmenities: { include: { amenity: true } }, rentals: { include: { location: true } } },
         });
+
+        // When room becomes AVAILABLE from RENTED, notify users who favourited this room
+        if (previousStatus === 'RENTED' && room.status === 'AVAILABLE') {
+            notifyFavoritersRoomAvailable(room).catch((err) => console.error('Notify favoriters error:', err));
+        }
 
         return res.json({
             success: true,
