@@ -7,6 +7,8 @@ const {
     getMyRentals,
     getRentalsForModeration,
     updateRentalStatus,
+    updateRental,
+    deleteRental,
     getRentalStats,
 } = require('../controllers/rental.controller');
 
@@ -57,5 +59,18 @@ router.post('/', verifyJWT, requireRole('LANDLORD'), createRental);
  * Body: { status: 'AVAILABLE' }
  */
 router.patch('/:rentalId/status', verifyJWT, requireRole('MODERATOR', 'ADMIN'), updateRentalStatus);
+
+/**
+ * PUT /rentals/:rentalId
+ * Landlord cập nhật rental của mình
+ * Body: { title?, description?, address?, district?, city?, images? }
+ */
+router.put('/:rentalId', verifyJWT, requireRole('LANDLORD'), updateRental);
+
+/**
+ * DELETE /rentals/:rentalId
+ * Landlord xóa rental của mình (không thể xóa nếu có đơn cọc đang hoạt động)
+ */
+router.delete('/:rentalId', verifyJWT, requireRole('LANDLORD'), deleteRental);
 
 module.exports = router;

@@ -17,7 +17,7 @@ async function createRental(req, res) {
         }
 
         const ownerId = req.auth.user.id;
-        const { title, description, city, district, address, images } = req.body;
+        const { title, description, city, district, address, images, documents } = req.body;
 
         // 1. Tạo hoặc tìm Location
         let location = await prisma.location.findFirst({
@@ -52,10 +52,21 @@ async function createRental(req, res) {
                         create: images.map((url) => ({ imageUrl: url })),
                     },
                 } : {}),
+                // Tạo documents xác minh nếu có
+                ...(documents && documents.length > 0 ? {
+                    documents: {
+                        create: documents.map((doc) => ({
+                            documentType: doc.documentType,
+                            imageUrl: doc.imageUrl,
+                            status: 'PENDING',
+                        })),
+                    },
+                } : {}),
             },
             include: {
                 location: true,
                 images: true,
+                documents: true,
             },
         });
 
@@ -951,6 +962,189 @@ async function getLandlordProfile(req, res) {
     }
 }
 
+/**
+ * PUT /rentals/:rentalId
+ * Cập nhật rental (LANDLORD - owner only)
+ * Body: { title?, description?, address?, district?, city?, images? }
+ */
+async function updateRental(req, res) {
+    try {
+        const userId = req.auth.user.id;
+        const { rentalId } = req.params;
+        const { title, description, address, district, city, images, status } = req.body;
+
+        // Chỉ cho phép landlord đặt một số status nhất định
+        const allowedStatuses = ['AVAILABLE', 'UNAVAILABLE', 'HIDDEN'];
+        if (status && !allowedStatuses.includes(status)) {
+            return res.status(400).json({ success: false, message: 'Trạng thái không hợp lệ' });
+        }
+
+        // Kiểm tra rental tồn tại và thuộc về user này
+        const rental = await prisma.rental.findUnique({
+            where: { id: rentalId },
+            select: { id: true, owner_id: true, locationId: true, status: true },
+        });
+
+        if (!rental) {
+            return res.status(404).json({ success: false, message: 'Không tìm thấy bài đăng' });
+        }
+
+        if (rental.owner_id !== userId) {
+            return res.status(403).json({ success: false, message: 'Bạn không có quyền chỉnh sửa bài đăng này' });
+        }
+
+        // Không cho phép landlord thay đổi status nếu bài đăng chưa được moderator duyệt
+        // Chỉ cho phép thay đổi status khi đã được duyệt (AVAILABLE, UNAVAILABLE, HIDDEN)
+        const moderatorOnlyStatuses = ['PENDING', 'SUSPEND', 'VIOLATE'];
+        if (status && moderatorOnlyStatuses.includes(rental.status)) {
+            return res.status(403).json({ 
+                success: false, 
+                message: 'Bài đăng đang chờ duyệt hoặc bị tạm ngưng, bạn không thể thay đổi trạng thái' 
+            });
+        }
+
+        // Cập nhật location nếu có thay đổi
+        let locationId = rental.locationId;
+        if (address || district || city) {
+            const locationData = {};
+            if (address) locationData.address = address.trim();
+            if (district) locationData.district = district.trim();
+            if (city) locationData.city = city.trim();
+
+            if (locationId) {
+                await prisma.location.update({
+                    where: { id: locationId },
+                    data: locationData,
+                });
+            } else {
+                const newLocation = await prisma.location.create({
+                    data: {
+                        address: address?.trim() || '',
+                        district: district?.trim() || null,
+                        city: city?.trim() || null,
+                    },
+                });
+                locationId = newLocation.id;
+            }
+        }
+
+        // Cập nhật rental
+        const updatedRental = await prisma.rental.update({
+            where: { id: rentalId },
+            data: {
+                ...(title ? { title: title.trim() } : {}),
+                ...(description !== undefined ? { description: description?.trim() || null } : {}),
+                ...(locationId !== rental.locationId ? { locationId } : {}),
+                ...(status ? { status } : {}),
+            },
+            include: {
+                location: true,
+                images: true,
+            },
+        });
+
+        // Cập nhật images nếu có
+        if (images && Array.isArray(images)) {
+            // Xóa images cũ
+            await prisma.rentalImage.deleteMany({ where: { rentalId } });
+            // Tạo images mới
+            if (images.length > 0) {
+                await prisma.rentalImage.createMany({
+                    data: images.map((url) => ({ rentalId, imageUrl: url })),
+                });
+            }
+        }
+
+        // Lấy rental với images mới
+        const result = await prisma.rental.findUnique({
+            where: { id: rentalId },
+            include: { location: true, images: true },
+        });
+
+        return res.json({
+            success: true,
+            message: 'Cập nhật bài đăng thành công',
+            data: {
+                id: result.id,
+                title: result.title,
+                description: result.description,
+                status: result.status,
+                createdAt: result.createdAt,
+                location: result.location ? {
+                    id: result.location.id,
+                    address: result.location.address,
+                    district: result.location.district,
+                    city: result.location.city,
+                } : null,
+                images: (result.images || []).map((img) => img.imageUrl),
+            },
+        });
+    } catch (err) {
+        console.error('Update rental error:', err);
+        return res.status(500).json({
+            success: false,
+            message: 'Lỗi khi cập nhật bài đăng',
+            error: err.message,
+        });
+    }
+}
+
+/**
+ * DELETE /rentals/:rentalId
+ * Xóa rental (LANDLORD - owner only)
+ */
+async function deleteRental(req, res) {
+    try {
+        const userId = req.auth.user.id;
+        const { rentalId } = req.params;
+
+        // Kiểm tra rental tồn tại và thuộc về user này
+        const rental = await prisma.rental.findUnique({
+            where: { id: rentalId },
+            select: { id: true, owner_id: true, title: true },
+        });
+
+        if (!rental) {
+            return res.status(404).json({ success: false, message: 'Không tìm thấy bài đăng' });
+        }
+
+        if (rental.owner_id !== userId) {
+            return res.status(403).json({ success: false, message: 'Bạn không có quyền xóa bài đăng này' });
+        }
+
+        // Kiểm tra có preorder đang hoạt động không
+        const activePreorders = await prisma.preorder.count({
+            where: {
+                room: { rental_id: rentalId },
+                status: { in: ['PENDING', 'CONFIRMED'] },
+            },
+        });
+
+        if (activePreorders > 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Không thể xóa bài đăng vì có đơn đặt cọc đang hoạt động',
+            });
+        }
+
+        // Xóa rental (cascade sẽ xóa rooms, images, documents)
+        await prisma.rental.delete({ where: { id: rentalId } });
+
+        return res.json({
+            success: true,
+            message: 'Xóa bài đăng thành công',
+            data: { id: rentalId, title: rental.title },
+        });
+    } catch (err) {
+        console.error('Delete rental error:', err);
+        return res.status(500).json({
+            success: false,
+            message: 'Lỗi khi xóa bài đăng',
+            error: err.message,
+        });
+    }
+}
+
 module.exports = {
     createRental,
     getRentals,
@@ -958,6 +1152,8 @@ module.exports = {
     getMyRentals,
     getRentalsForModeration,
     updateRentalStatus,
+    updateRental,
+    deleteRental,
     getRentalStats,
     getPublicRentals,
     getPublicRentalById,
