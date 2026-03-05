@@ -372,11 +372,11 @@ model Report {
 
   reporterId    String   @map("reporter_id") @db.Uuid
   reporter      User     @relation("ReportReporter", fields: [reporterId], references: [id], onDelete: Cascade)
-  targetType    ReportTargetType @map("target_type")
+  targetType    report_target_type_enum @map("target_type")
   targetId      String           @map("target_id") @db.Uuid
   reason        String           @db.VarChar(100)
   description   String?          @db.Text
-  status        ReportStatus     @default(PENDING)
+  status        report_status_enum     @default(PENDING)
   reviewedBy    String?          @map("reviewed_by") @db.Uuid
   moderator     User?            @relation("ReportReviewedBy", fields: [reviewedBy], references: [id], onDelete: SetNull)
   moderatorNote String?          @map("moderator_note") @db.Text
@@ -534,14 +534,14 @@ enum rental_period_status_enum {
   OVERDUE     
 }
 
-enum ReportStatus {
+enum report_status_enum {
   PENDING
   APPROVED
   REJECTED
   DISMISSED
 }
 
-enum ReportTargetType {
+enum report_target_type_enum {
   USER
   ROOM
   BOOKING
