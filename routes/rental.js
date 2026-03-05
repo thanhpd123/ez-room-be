@@ -9,11 +9,15 @@ const {
     updateRentalStatus,
     getRentalStats,
 } = require('../controllers/rental.controller');
+const { deleteRental } = require('../controllers/rentals.controller');
 
 const router = express.Router();
 
 /**
  * GET /rentals/stats
+
+ * Thống kê bài đăng (Admin/Moderator)
+
  * Admin/Moderator dashboard rental stats. Must be before /:rentalId
  */
 router.get('/stats', verifyJWT, requireRole('MODERATOR', 'ADMIN'), getRentalStats);
@@ -57,5 +61,14 @@ router.post('/', verifyJWT, requireRole('LANDLORD'), createRental);
  * Body: { status: 'AVAILABLE' }
  */
 router.patch('/:rentalId/status', verifyJWT, requireRole('MODERATOR', 'ADMIN'), updateRentalStatus);
+
+/**
+ * DELETE /rentals/:rentalId
+ * Xóa vĩnh viễn bài đăng (chỉ Admin)
+ */
+router.delete('/:rentalId', verifyJWT, requireRole('ADMIN'), (req, res, next) => {
+    req.params.id = req.params.rentalId;
+    deleteRental(req, res, next);
+});
 
 module.exports = router;
