@@ -38,9 +38,31 @@ model User {
   rentalPeriods                                         RoomRentalPeriod[]
   reportsFiled                                          Report[]          @relation("ReportReporter")
   reportsReviewed                                       Report[]          @relation("ReportReviewedBy")
+  citizenCardVerification                               CitizenCardVerification? @relation("CitizenCardOwner")
+  citizenCardReviews                                    CitizenCardVerification[] @relation("CitizenCardReviewer")
 
   @@index([role], map: "idx_users_role")
   @@map("users")
+}
+
+model CitizenCardVerification {
+  id                String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId             String                  @unique @map("user_id") @db.Uuid
+  citizenCardNumber  String                  @map("citizen_card_number") @db.VarChar(20)
+  frontImageUrl      String                  @map("front_image_url")
+  backImageUrl       String                  @map("back_image_url")
+  status             citizen_card_status_enum @default(PENDING)
+  reviewNote         String?                 @map("review_note")
+  reviewedBy         String?                 @map("reviewed_by") @db.Uuid
+  submittedAt        DateTime?               @default(now()) @map("submitted_at") @db.Timestamp(6)
+  reviewedAt         DateTime?               @map("reviewed_at") @db.Timestamp(6)
+  updatedAt          DateTime?               @updatedAt @map("updated_at") @db.Timestamp(6)
+  user               User                    @relation("CitizenCardOwner", fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  reviewer           User?                   @relation("CitizenCardReviewer", fields: [reviewedBy], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@index([status], map: "idx_citizen_cards_status")
+  @@index([reviewedBy], map: "idx_citizen_cards_reviewer")
+  @@map("citizen_card_verifications")
 }
 
 model LifestyleProfile {
@@ -525,6 +547,12 @@ enum user_status_enum {
   INACTIVE
   SUSPENDED
   BANNED
+}
+
+enum citizen_card_status_enum {
+  PENDING
+  VERIFIED
+  REJECTED
 }
 
 enum rental_period_status_enum {

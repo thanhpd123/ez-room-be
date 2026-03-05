@@ -1,5 +1,3 @@
-const ALLOWED_ROLES = ['TENANT', 'LANDLORD'];
-
 /**
  * Validate password strength: 8+ chars, at least 1 uppercase, 1 number, 1 special char.
  * Returns array of error messages (empty if valid).
@@ -27,11 +25,11 @@ function validatePasswordStrength(password) {
 
 /**
  * Validate register input
- * Fields: fullName, email, phone (optional), password, confirmPassword, role (optional: TENANT | LANDLORD)
+ * Fields: fullName, email, phone (optional), password, confirmPassword
  */
 function validateRegister(body) {
     const errors = [];
-    const { fullName, email, phone, password, confirmPassword, role } = body || {};
+    const { fullName, email, phone, password, confirmPassword } = body || {};
 
     // fullName: required, 2–100 chars
     if (!fullName || typeof fullName !== 'string' || fullName.trim().length < 2) {
@@ -70,23 +68,16 @@ function validateRegister(body) {
         errors.push('Xác nhận mật khẩu không khớp');
     }
 
-    // role: optional, must be TENANT or LANDLORD
-    if (role !== undefined && role !== null && role !== '') {
-        if (!ALLOWED_ROLES.includes(String(role).toUpperCase())) {
-            errors.push('Vai trò phải là Người thuê (TENANT) hoặc Chủ nhà (LANDLORD)');
-        }
-    }
-
     return { valid: errors.length === 0, errors };
 }
 
 /**
  * Validate register-oauth (complete signup after Google OAuth)
- * Fields: email, fullName, role (TENANT | LANDLORD), phone (optional)
+ * Fields: email, fullName, phone (optional)
  */
 function validateRegisterOAuth(body) {
     const errors = [];
-    const { email, fullName, role, phone } = body || {};
+    const { email, fullName, phone } = body || {};
     if (!email || typeof email !== 'string' || !email.trim()) {
         errors.push('Email là bắt buộc');
     } else {
@@ -97,9 +88,6 @@ function validateRegisterOAuth(body) {
         errors.push('Họ và tên phải có ít nhất 2 ký tự');
     } else if (fullName.trim().length > 100) {
         errors.push('Họ và tên không được quá 100 ký tự');
-    }
-    if (!role || !ALLOWED_ROLES.includes(String(role).toUpperCase())) {
-        errors.push('Vai trò phải là Người thuê (TENANT) hoặc Chủ nhà (LANDLORD)');
     }
     if (phone !== undefined && phone !== null && phone !== '') {
         const phoneRegex = /^[0-9]{10,20}$/;

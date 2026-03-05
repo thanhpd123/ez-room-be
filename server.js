@@ -17,6 +17,7 @@ const favoriteRoutes = require('./routes/favorite');
 const roommateRoutes = require('./routes/roommate');
 const messageRoutes = require('./routes/message');
 const walletRoutes = require('./routes/wallet');
+const verificationRoutes = require('./routes/verification');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -54,6 +55,7 @@ app.use('/favorites', favoriteRoutes);
 app.use('/roommate', roommateRoutes);
 app.use('/messages', messageRoutes);
 app.use('/wallet', walletRoutes);
+app.use('/verifications', verificationRoutes);
 
 // Test route
 app.get('/', (req, res) => {

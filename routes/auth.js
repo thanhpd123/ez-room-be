@@ -1,6 +1,6 @@
 const express = require('express');
 const { verifyJWT } = require('../middleware/auth');
-const { register, registerOAuth, login, forgotPassword, resetPassword, updateProfile, getLifestyle, upsertLifestyle, getPreference, upsertPreference, suggestPassword } = require('../controllers/auth.controller');
+const { register, registerOAuth, getCitizenCard, upsertCitizenCard, registerLandlord, login, forgotPassword, resetPassword, updateProfile, getLifestyle, upsertLifestyle, getPreference, upsertPreference, suggestPassword } = require('../controllers/auth.controller');
 
 const router = express.Router();
 
@@ -36,9 +36,26 @@ router.post('/reset-password', resetPassword);
 
 /**
  * POST /auth/register-oauth
- * Body: { email, fullName, phone?, role: 'TENANT'|'LANDLORD' }
+ * Body: { email, fullName, phone? }
  */
 router.post('/register-oauth', registerOAuth);
+
+/**
+ * GET /auth/citizen-card
+ */
+router.get('/citizen-card', verifyJWT, getCitizenCard);
+
+/**
+ * PUT /auth/citizen-card
+ * Body: { citizenCardNumber, citizenCardFrontImageUrl, citizenCardBackImageUrl }
+ */
+router.put('/citizen-card', verifyJWT, upsertCitizenCard);
+
+/**
+ * POST /auth/register-landlord
+ * Requires CCCD verification status = VERIFIED
+ */
+router.post('/register-landlord', verifyJWT, registerLandlord);
 
 /**
  * PATCH /auth/profile – Body: { fullName?, phone?, avatarUrl? }
