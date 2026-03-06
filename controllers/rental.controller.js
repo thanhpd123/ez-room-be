@@ -362,6 +362,7 @@ async function getRentalsForModeration(req, res) {
                     location: true,
                     images: true,
                     rooms: true,
+                    rental_documents: true,
                     users: {
                         select: {
                             id: true,
@@ -398,6 +399,13 @@ async function getRentalsForModeration(req, res) {
                     city: r.location.city,
                 } : null,
                 images: (r.images || []).map((img) => img.imageUrl),
+                documents: (r.rental_documents || []).map((doc) => ({
+                    id: doc.id,
+                    documentType: doc.document_type,
+                    imageUrl: doc.image_url,
+                    status: doc.status,
+                    note: doc.note,
+                })),
                 roomsCount: r.rooms ? r.rooms.length : 0,
             })),
             pagination: {
