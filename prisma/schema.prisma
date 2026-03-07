@@ -9,66 +9,71 @@ datasource db {
 }
 
 model User {
-  id                                                    String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  fullName                                              String            @map("full_name") @db.VarChar(100)
-  email                                                 String            @unique @db.Citext
-  password_hash                                         String
-  phone                                                 String?           @db.VarChar(20)
-  avatarUrl                                             String?           @map("avatar_url")
-  gender                                                String?           @db.VarChar(20)
-  role                                                  user_role_enum?   @default(TENANT)
-  status                                                user_status_enum? @default(ACTIVE)
-  isVip                                                 Boolean?          @default(false) @map("is_vip")
-  createdAt                                             DateTime?         @default(now()) @map("created_at") @db.Timestamp(6)
-  updated_at                                            DateTime?         @default(now()) @db.Timestamp(6)
-  favoriteRooms                                         FavoriteRoom[]
-  feedback                                              feedback[]
-  lifestyleProfile                                      LifestyleProfile?
-  receivedMessages                                      Message[]         @relation("MessageReceiver")
-  sentMessages                                          Message[]         @relation("MessageSender")
-  notifications                                         Notification[]
-  preorders                                             Preorder[]
-  rentals                                               Rental[]
-  room_compare                                          room_compare[]
-  roommate_matches_roommate_matches_requester_idTousers RoommateMatch[]   @relation("roommate_matches_requester_idTousers")
-  roommate_matches_roommate_matches_target_idTousers    RoommateMatch[]   @relation("roommate_matches_target_idTousers")
-  searchPrompts                                         SearchPrompt[]
-  preference                                            UserPreference?
-  wallet                                                Wallet?
-  rentalPeriods                                         RoomRentalPeriod[]
-  reportsFiled                                          Report[]          @relation("ReportReporter")
-  reportsReviewed                                       Report[]          @relation("ReportReviewedBy")
+  id                                                       String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  fullName                                                 String               @map("full_name") @db.VarChar(100)
+  email                                                    String               @unique @db.Citext
+  password_hash                                            String
+  phone                                                    String?              @db.VarChar(20)
+  avatarUrl                                                String?              @map("avatar_url")
+  role                                                     user_role_enum?      @default(TENANT)
+  status                                                   user_status_enum?    @default(ACTIVE)
+  createdAt                                                DateTime?            @default(now()) @map("created_at") @db.Timestamp(6)
+  updated_at                                               DateTime?            @default(now()) @db.Timestamp(6)
+  isVip                                                    Boolean?             @default(false) @map("is_vip")
+  gender                                                   String?              @db.VarChar(20)
+  vip_role                                                 user_role_enum?
+  vip_expires_at                                           DateTime?            @db.Timestamp(6)
+  favoriteRooms                                            FavoriteRoom[]
+  feedback                                                 feedback[]
+  lifestyleProfile                                         LifestyleProfile?
+  receivedMessages                                         Message[]            @relation("MessageReceiver")
+  sentMessages                                             Message[]            @relation("MessageSender")
+  notifications                                            Notification[]
+  payment_orders_payment_orders_refund_requested_byTousers payment_orders[]     @relation("payment_orders_refund_requested_byTousers")
+  payment_orders_payment_orders_user_idTousers             payment_orders[]     @relation("payment_orders_user_idTousers")
+  preorders                                                Preorder[]
+  rentals                                                  Rental[]
+  reportsFiled                                             Report[]             @relation("ReportReporter")
+  reportsReviewed                                          Report[]             @relation("ReportReviewedBy")
+  room_compare                                             room_compare[]
+  rentalPeriods                                            RoomRentalPeriod[]
+  roommate_matches_roommate_matches_requester_idTousers    RoommateMatch[]      @relation("roommate_matches_requester_idTousers")
+  roommate_matches_roommate_matches_target_idTousers       RoommateMatch[]      @relation("roommate_matches_target_idTousers")
+  searchPrompts                                            SearchPrompt[]
+  preference                                               UserPreference?
+  user_vip_purchases                                       user_vip_purchases[]
+  wallet                                                   Wallet?
 
   @@index([role], map: "idx_users_role")
   @@map("users")
 }
 
 model LifestyleProfile {
-  id                    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId                String    @unique @map("user_id") @db.Uuid
-  smoking               Boolean?  @default(false)
-  drinking              Boolean?  @default(false)
-  pets_allowed          Boolean?  @default(false)
-  sleep_schedule        String?   @map("sleep_schedule") @db.VarChar(50)
-  personalityType       String?   @map("personality_type") @db.VarChar(50)
-  cleanliness           String?   @db.VarChar(50)
-  noise_tolerance       String?   @map("noise_tolerance") @db.VarChar(50)
-  guest_frequency       String?   @map("guest_frequency") @db.VarChar(50)
-  cooking_frequency     String?   @map("cooking_frequency") @db.VarChar(50)
-  work_from_home        Boolean?  @default(false) @map("work_from_home")
-  wake_time             String?   @map("wake_time") @db.VarChar(50)
-  bedtime               String?   @db.VarChar(50)
-  social_level          String?   @map("social_level") @db.VarChar(50)
-  occupation_type      String?   @map("occupation_type") @db.VarChar(50)
-  interests            String[]  @default([]) @db.VarChar(100)
-  languages             String[]  @default([]) @db.VarChar(20)
-  preferred_lease_months Int?     @map("preferred_lease_months")
-  move_in_date          DateTime? @map("move_in_date") @db.Date
-  temperature_preference String? @map("temperature_preference") @db.VarChar(20)
-  quiet_hours_preference  String? @map("quiet_hours_preference") @db.VarChar(30)
-  created_at            DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
-  updated_at            DateTime? @updatedAt @map("updated_at") @db.Timestamp(6)
-  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  id                     String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId                 String    @unique @map("user_id") @db.Uuid
+  smoking                Boolean?  @default(false)
+  drinking               Boolean?  @default(false)
+  pets_allowed           Boolean?  @default(false)
+  sleep_schedule         String?   @map("sleep_schedule") @db.VarChar(50)
+  personalityType        String?   @map("personality_type") @db.VarChar(50)
+  created_at             DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+  bedtime                String?   @db.VarChar(50)
+  cleanliness            String?   @db.VarChar(50)
+  cooking_frequency      String?   @map("cooking_frequency") @db.VarChar(50)
+  guest_frequency        String?   @map("guest_frequency") @db.VarChar(50)
+  interests              String[]  @default([]) @db.VarChar(100)
+  languages              String[]  @default([]) @db.VarChar(20)
+  move_in_date           DateTime? @map("move_in_date") @db.Date
+  noise_tolerance        String?   @map("noise_tolerance") @db.VarChar(50)
+  occupation_type        String?   @map("occupation_type") @db.VarChar(50)
+  preferred_lease_months Int?      @map("preferred_lease_months")
+  quiet_hours_preference String?   @map("quiet_hours_preference") @db.VarChar(30)
+  social_level           String?   @map("social_level") @db.VarChar(50)
+  temperature_preference String?   @map("temperature_preference") @db.VarChar(20)
+  updated_at             DateTime? @updatedAt @map("updated_at") @db.Timestamp(6)
+  wake_time              String?   @map("wake_time") @db.VarChar(50)
+  work_from_home         Boolean?  @default(false) @map("work_from_home")
+  user                   User      @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@map("lifestyle_profiles")
 }
@@ -79,22 +84,22 @@ model UserPreference {
   budget_min                 Decimal?  @db.Decimal(12, 2)
   budget_max                 Decimal?  @db.Decimal(12, 2)
   preferredLocation          String?   @map("preferred_location")
-  preferred_districts        String[]  @default([]) @map("preferred_districts")
   preferred_gender           String?   @db.VarChar(20)
-  room_type                  String?   @map("room_type") @db.VarChar(30)
-  preferred_amenities        String[]  @default([]) @map("preferred_amenities")
-  must_have_amenities        String[]  @default([]) @map("must_have_amenities")
-  preferred_lease_months     Int?      @map("preferred_lease_months")
-  move_in_date_min           DateTime? @map("move_in_date_min") @db.Date
-  move_in_date_max           DateTime? @map("move_in_date_max") @db.Date
-  max_distance_km            Decimal?  @map("max_distance_km") @db.Decimal(6, 2)
-  transport_nearby            Boolean?  @map("transport_nearby")
-  pet_friendly               Boolean?  @map("pet_friendly")
-  preferred_roommate_age_min Int?      @map("preferred_roommate_age_min")
-  preferred_roommate_age_max Int?      @map("preferred_roommate_age_max")
-  lifestyle_match_weight     Decimal?  @map("lifestyle_match_weight") @db.Decimal(3, 2)
-  safety_priority            Int?      @map("safety_priority")
   created_at                 DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+  lifestyle_match_weight     Decimal?  @map("lifestyle_match_weight") @db.Decimal(3, 2)
+  max_distance_km            Decimal?  @map("max_distance_km") @db.Decimal(6, 2)
+  move_in_date_max           DateTime? @map("move_in_date_max") @db.Date
+  move_in_date_min           DateTime? @map("move_in_date_min") @db.Date
+  must_have_amenities        String[]  @default([]) @map("must_have_amenities")
+  pet_friendly               Boolean?  @map("pet_friendly")
+  preferred_amenities        String[]  @default([]) @map("preferred_amenities")
+  preferred_districts        String[]  @default([]) @map("preferred_districts")
+  preferred_lease_months     Int?      @map("preferred_lease_months")
+  preferred_roommate_age_max Int?      @map("preferred_roommate_age_max")
+  preferred_roommate_age_min Int?      @map("preferred_roommate_age_min")
+  room_type                  String?   @map("room_type") @db.VarChar(30)
+  safety_priority            Int?      @map("safety_priority")
+  transport_nearby           Boolean?  @map("transport_nearby")
   updated_at                 DateTime? @updatedAt @map("updated_at") @db.Timestamp(6)
   user                       User      @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
@@ -113,17 +118,22 @@ model Wallet {
 }
 
 model WalletTransaction {
-  id               String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  walletId         String                   @map("wallet_id") @db.Uuid
-  transaction_type transaction_type_enum
-  status           transaction_status_enum? @default(PENDING)
-  amount           Decimal                  @db.Decimal(14, 2)
-  description      String?
-  createdAt        DateTime?                @default(now()) @map("created_at") @db.Timestamp(6)
-  wallet           Wallet                   @relation(fields: [walletId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-
+  id                        String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  walletId                  String                   @map("wallet_id") @db.Uuid
+  transaction_type          transaction_type_enum
+  status                    transaction_status_enum? @default(PENDING)
+  amount                    Decimal                  @db.Decimal(14, 2)
+  description               String?
+  createdAt                 DateTime?                @default(now()) @map("created_at") @db.Timestamp(6)
+  refund_for_txn_id         String?                  @db.Uuid
+  ref_type                  String?                  @db.VarChar(50)
+  ref_id                    String?                  @db.Uuid
+  wallet_transactions       WalletTransaction?       @relation("wallet_transactionsTowallet_transactions", fields: [refund_for_txn_id], references: [id], onUpdate: NoAction)
+  other_wallet_transactions WalletTransaction[]      @relation("wallet_transactionsTowallet_transactions")
+  wallet                    Wallet                   @relation(fields: [walletId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([walletId], map: "idx_wallet_tx_wallet")
+  @@index([refund_for_txn_id], map: "idx_wallet_tx_refund")
   @@map("wallet_transactions")
 }
 
@@ -140,33 +150,33 @@ model Location {
 }
 
 model Rental {
-  id               String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  owner_id         String            @db.Uuid
-  locationId       String?           @map("location_id") @db.Uuid
-  title            String            @db.VarChar(200)
+  id               String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  owner_id         String              @db.Uuid
+  locationId       String?             @map("location_id") @db.Uuid
+  title            String              @db.VarChar(200)
   description      String?
   status           rental_status_enum? @default(PENDING)
-  createdAt        DateTime?         @default(now()) @map("created_at") @db.Timestamp(6)
-  location         Location?         @relation(fields: [locationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  users            User              @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  rooms            rooms[]
+  createdAt        DateTime?           @default(now()) @map("created_at") @db.Timestamp(6)
+  rental_documents rental_documents[]
   images           RentalImage[]
-  rental_documents rental_documents[] // Giấy tờ xác minh (CCCD, sổ đỏ, GPKD)
+  location         Location?           @relation(fields: [locationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users            User                @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  rooms            rooms[]
 
   @@index([owner_id], map: "idx_rentals_owner")
   @@map("rentals")
 }
 
 model rental_documents {
-  id            String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  rental_id     String                @db.Uuid
+  id            String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  rental_id     String               @db.Uuid
   document_type document_type_enum
-  image_url     String                @map("image_url")
-  status        document_status_enum  @default(PENDING)
+  image_url     String               @map("image_url")
+  status        document_status_enum @default(PENDING)
   note          String?
-  created_at    DateTime?             @default(now()) @map("created_at") @db.Timestamp(6)
-  updated_at    DateTime?             @db.Timestamp(6)
-  rentals       Rental                @relation(fields: [rental_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  created_at    DateTime?            @default(now()) @map("created_at") @db.Timestamp(6)
+  updated_at    DateTime?            @db.Timestamp(6)
+  rentals       Rental               @relation(fields: [rental_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@map("rental_documents")
 }
@@ -203,21 +213,21 @@ model RoomAmenity {
 }
 
 model RoomRentalPeriod {
-  id           String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  roomId       String                    @map("room_id") @db.Uuid
-  userId       String                    @map("user_id") @db.Uuid 
-  startDate    DateTime                  @map("start_date") @db.Date
-  endDate      DateTime?                 @map("end_date") @db.Date 
-  actualPrice  Decimal                   @map("actual_price") @db.Decimal(12, 2) 
-  deposit      Decimal?                  @default(0) @db.Decimal(12, 2) 
-  status       rental_period_status_enum @default(ACTIVE) 
-  createdAt    DateTime?                 @default(now()) @map("created_at") @db.Timestamp(6)
-  updatedAt    DateTime?                 @updatedAt @map("updated_at") @db.Timestamp(6) 
-  room      rooms     @relation(fields: [roomId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  tenant       User                      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  id          String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  roomId      String                    @map("room_id") @db.Uuid
+  startDate   DateTime                  @map("start_date") @db.Date
+  endDate     DateTime?                 @map("end_date") @db.Date
+  createdAt   DateTime?                 @default(now()) @map("created_at") @db.Timestamp(6)
+  userId      String                    @map("user_id") @db.Uuid
+  actualPrice Decimal                   @map("actual_price") @db.Decimal(12, 2)
+  deposit     Decimal?                  @default(0) @db.Decimal(12, 2)
+  status      rental_period_status_enum @default(ACTIVE)
+  updatedAt   DateTime?                 @updatedAt @map("updated_at") @db.Timestamp(6)
+  room        rooms                     @relation(fields: [roomId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenant      User                      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
-  @@index([userId])
-  @@index([status])
+  @@index([status], map: "idx_room_rental_periods_status")
+  @@index([userId], map: "idx_room_rental_periods_user_id")
   @@map("room_rental_periods")
 }
 
@@ -240,6 +250,10 @@ model Preorder {
   payment_status preorder_payment_enum? @default(UNPAID)
   deposit_amount Decimal?               @db.Decimal(12, 2)
   createdAt      DateTime?              @default(now()) @map("created_at") @db.Timestamp(6)
+  refund_status  preorder_refund_enum?  @default(NOT_APPLICABLE)
+  refund_amount  Decimal?               @db.Decimal(12, 2)
+  refunded_at    DateTime?              @db.Timestamp(6)
+  cancel_reason  String?                @db.VarChar(200)
   room           rooms                  @relation(fields: [roomId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   user           User                   @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
@@ -307,7 +321,6 @@ model ClipVector {
   createdAt     DateTime?             @default(now()) @map("created_at") @db.Timestamp(6)
   room_images   RoomImage             @relation(fields: [room_image_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
-  // Index on embedding (vector) exists in DB; Prisma can't index Unsupported() so we don't declare it here
   @@map("clip_vectors")
 }
 
@@ -347,13 +360,13 @@ model rooms {
   id            String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   rental_id     String             @db.Uuid
   room_name     String?            @db.VarChar(100)
-  description   String?            @db.Text
   room_type     room_type_enum?    @default(PRIVATE)
   price         Decimal            @db.Decimal(12, 2)
   size_m2       Decimal?           @db.Decimal(8, 2)
   max_people    Int?               @default(1)
-  status        room_status_enum?  @default(PENDING)
   created_at    DateTime?          @default(now()) @db.Timestamp(6)
+  description   String?
+  status        room_status_enum?  @default(PENDING)
   updated_at    DateTime?          @updatedAt @db.Timestamp(6)
   favorites     FavoriteRoom[]
   preorders     Preorder[]
@@ -366,32 +379,90 @@ model rooms {
   @@index([rental_id], map: "idx_rooms_rental")
 }
 
-
 model Report {
-  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-
-  reporterId    String   @map("reporter_id") @db.Uuid
-  reporter      User     @relation("ReportReporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  id            String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  reporterId    String                  @map("reporter_id") @db.Uuid
+  targetId      String                  @map("target_id") @db.Uuid
+  reason        String                  @db.VarChar(100)
+  description   String?
+  reviewedBy    String?                 @map("reviewed_by") @db.Uuid
+  moderatorNote String?                 @map("moderator_note")
+  reviewedAt    DateTime?               @map("reviewed_at")
+  createdAt     DateTime                @default(now()) @map("created_at")
+  updatedAt     DateTime                @updatedAt @map("updated_at")
   targetType    report_target_type_enum @map("target_type")
-  targetId      String           @map("target_id") @db.Uuid
-  reason        String           @db.VarChar(100)
-  description   String?          @db.Text
-  status        report_status_enum     @default(PENDING)
-  reviewedBy    String?          @map("reviewed_by") @db.Uuid
-  moderator     User?            @relation("ReportReviewedBy", fields: [reviewedBy], references: [id], onDelete: SetNull)
-  moderatorNote String?          @map("moderator_note") @db.Text
-  reviewedAt    DateTime?        @map("reviewed_at")
-  createdAt     DateTime         @default(now()) @map("created_at")
-  updatedAt     DateTime         @updatedAt      @map("updated_at")
+  status        report_status_enum      @default(PENDING)
+  reporter      User                    @relation("ReportReporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  moderator     User?                   @relation("ReportReviewedBy", fields: [reviewedBy], references: [id])
 
+  @@unique([reporterId, targetType, targetId])
   @@index([targetType, targetId])
   @@index([status])
   @@index([createdAt])
-
-  @@unique([reporterId, targetType, targetId])
-
   @@map("reports")
 }
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model payment_orders {
+  id                                              String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id                                         String                     @db.Uuid
+  vnp_txn_ref                                     String                     @unique @db.VarChar(50)
+  vnp_transaction_no                              String?                    @db.VarChar(50)
+  vnp_bank_code                                   String?                    @db.VarChar(20)
+  vnp_pay_date                                    String?                    @db.VarChar(20)
+  vnp_response_code                               String?                    @db.VarChar(10)
+  raw_ipn_payload                                 Json?
+  amount                                          Decimal                    @db.Decimal(14, 2)
+  purpose                                         payment_purpose_enum
+  status                                          payment_order_status_enum? @default(PENDING)
+  ref_type                                        String?                    @db.VarChar(50)
+  ref_id                                          String?                    @db.Uuid
+  vnp_refund_status                               refund_status_enum?
+  vnp_refund_txn_ref                              String?                    @db.VarChar(50)
+  vnp_refund_trans_no                             String?                    @db.VarChar(50)
+  refund_amount                                   Decimal?                   @db.Decimal(14, 2)
+  refund_reason                                   String?                    @db.VarChar(200)
+  refund_requested_at                             DateTime?                  @db.Timestamp(6)
+  refund_completed_at                             DateTime?                  @db.Timestamp(6)
+  refund_requested_by                             String?                    @db.Uuid
+  created_at                                      DateTime?                  @default(now()) @db.Timestamp(6)
+  updated_at                                      DateTime?                  @default(now()) @db.Timestamp(6)
+  users_payment_orders_refund_requested_byTousers User?                      @relation("payment_orders_refund_requested_byTousers", fields: [refund_requested_by], references: [id], onUpdate: NoAction)
+  users_payment_orders_user_idTousers             User                       @relation("payment_orders_user_idTousers", fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([vnp_txn_ref], map: "idx_payment_orders_txn_ref")
+  @@index([user_id, status], map: "idx_payment_orders_user_status")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model user_vip_purchases {
+  id           String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id      String       @db.Uuid
+  package_id   String       @db.Uuid
+  start_date   DateTime     @db.Timestamp(6)
+  end_date     DateTime     @db.Timestamp(6)
+  price_paid   Decimal      @db.Decimal(12, 2)
+  created_at   DateTime?    @default(now()) @db.Timestamp(6)
+  vip_packages vip_packages @relation(fields: [package_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users        User         @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([end_date], map: "idx_vip_purchases_end")
+  @@index([user_id], map: "idx_vip_purchases_user")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model vip_packages {
+  id                 String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name               String               @db.VarChar(100)
+  duration_days      Int
+  price              Decimal              @db.Decimal(12, 2)
+  description        String?
+  target_role        user_role_enum
+  is_active          Boolean?             @default(true)
+  created_at         DateTime?            @default(now()) @db.Timestamp(6)
+  user_vip_purchases user_vip_purchases[]
+}
+
 enum embedding_model_enum {
   CLIP
   OPENAI
@@ -528,10 +599,10 @@ enum user_status_enum {
 }
 
 enum rental_period_status_enum {
-  ACTIVE      
-  COMPLETED   
-  CANCELLED  
-  OVERDUE     
+  ACTIVE
+  COMPLETED
+  CANCELLED
+  OVERDUE
 }
 
 enum report_status_enum {
@@ -548,3 +619,32 @@ enum report_target_type_enum {
   REVIEW
 }
 
+enum payment_order_status_enum {
+  PENDING
+  SUCCESS
+  FAILED
+  EXPIRED
+  CANCELLED
+}
+
+enum payment_purpose_enum {
+  WALLET_TOPUP
+  PREORDER_DEPOSIT
+  VIP_PURCHASE
+}
+
+enum preorder_refund_enum {
+  NOT_APPLICABLE
+  ELIGIBLE
+  REFUNDED
+  NOT_REFUNDABLE
+}
+
+enum refund_status_enum {
+  NOT_REQUESTED
+  REQUESTED
+  PROCESSING
+  SUCCESS
+  FAILED
+  CANCELLED
+}
