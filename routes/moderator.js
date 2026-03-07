@@ -1,6 +1,19 @@
 const express = require('express');
 const { verifyJWT, requireRole } = require('../middleware/auth');
-const { getAllUsers, getUserById, updateUserStatus } = require('../controllers/admin.controller');
+const {
+    getAllUsers,
+    getUserById,
+    updateUserStatus,
+    getRentalsForModeration,
+    updateRentalStatus,
+    getRentalStats,
+    getRooms,
+    moderateRoom,
+    getReports,
+    handleReport,
+    getReviewsForModeration,
+    deleteReview,
+} = require('../controllers/moderator.controller');
 
 const router = express.Router();
 
@@ -8,9 +21,11 @@ const router = express.Router();
 router.use(verifyJWT);
 router.use(requireRole('MODERATOR', 'ADMIN'));
 
+// ═══════════════════ Quản lý Users ═══════════════════
+
 /**
  * GET /moderator/users
- * Lấy danh sách users (phân trang, filter)
+ * Lấy danh sách users (phân trang, filter) - chỉ LANDLORD và TENANT
  * Query: ?page=1&limit=10&role=TENANT&status=ACTIVE&search=keyword
  */
 router.get('/users', getAllUsers);
@@ -27,5 +42,74 @@ router.get('/users/:userId', getUserById);
  * Body: { status: 'BANNED' }
  */
 router.patch('/users/:userId/status', updateUserStatus);
+
+// ═══════════════════ Duyệt Rental (Bài đăng) ═══════════════════
+
+/**
+ * GET /moderator/rentals/stats
+ * Thống kê bài đăng cho dashboard
+ */
+router.get('/rentals/stats', getRentalStats);
+
+/**
+ * GET /moderator/rentals/moderation
+ * Lấy danh sách bài đăng cần duyệt
+ * Query: ?status=PENDING&search=keyword&page=1&limit=50
+ */
+router.get('/rentals/moderation', getRentalsForModeration);
+
+/**
+ * PATCH /moderator/rentals/:rentalId/status
+ * Duyệt / từ chối bài đăng (đổi status)
+ * Body: { status: 'AVAILABLE' | 'HIDDEN' }
+ */
+router.patch('/rentals/:rentalId/status', updateRentalStatus);
+
+// ═══════════════════ Duyệt Room Post (Phòng) ═══════════════════
+
+/**
+ * GET /moderator/rooms
+ * Lấy danh sách phòng (để moderator kiểm duyệt)
+ * Query: ?rentalId=xxx&page=1&limit=20
+ */
+router.get('/rooms', getRooms);
+
+/**
+ * PUT /moderator/rooms/:roomId/moderate
+ * Duyệt / từ chối phòng
+ * Body: { decision: 'approved' | 'rejected', note?: string }
+ */
+router.put('/rooms/:roomId/moderate', moderateRoom);
+
+// ═══════════════════ Xử lý Báo cáo (Reports) ═══════════════════
+
+/**
+ * GET /moderator/reports
+ * Lấy danh sách báo cáo vi phạm
+ * Query: ?status=PENDING&page=1&limit=20
+ */
+router.get('/reports', getReports);
+
+/**
+ * PATCH /moderator/reports/:id
+ * Xử lý báo cáo (duyệt / từ chối / bỏ qua)
+ * Body: { status: 'APPROVED' | 'REJECTED' | 'DISMISSED', moderatorNote?: string }
+ */
+router.patch('/reports/:id', handleReport);
+
+// ═══════════════════ Kiểm duyệt Reviews ═══════════════════
+
+/**
+ * GET /moderator/reviews
+ * Lấy danh sách reviews (feedback) để kiểm duyệt
+ * Query: ?page=1&limit=20&target_type=ROOM
+ */
+router.get('/reviews', getReviewsForModeration);
+
+/**
+ * DELETE /moderator/reviews/:reviewId
+ * Xóa review vi phạm
+ */
+router.delete('/reviews/:reviewId', deleteReview);
 
 module.exports = router;
