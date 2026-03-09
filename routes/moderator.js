@@ -12,6 +12,8 @@ const {
     getReports,
     handleReport,
     getReviewsForModeration,
+    getReviewDetail,
+    updateReviewStatus,
     deleteReview,
 } = require('../controllers/moderator.controller');
 
@@ -102,9 +104,22 @@ router.patch('/reports/:id', handleReport);
 /**
  * GET /moderator/reviews
  * Lấy danh sách reviews (feedback) để kiểm duyệt
- * Query: ?page=1&limit=20&target_type=ROOM
+ * Query: ?page=1&limit=20&status=PENDING|APPROVED|REJECTED|HIDDEN&roomId=&tenantId=&dateFrom=&dateTo=
  */
 router.get('/reviews', getReviewsForModeration);
+
+/**
+ * GET /moderator/reviews/:reviewId
+ * Chi tiết feedback đầy đủ
+ */
+router.get('/reviews/:reviewId', getReviewDetail);
+
+/**
+ * PATCH /moderator/reviews/:reviewId
+ * Duyệt / từ chối review
+ * Body: { status: 'APPROVED' | 'REJECTED', moderatorNote?: string }
+ */
+router.patch('/reviews/:reviewId', updateReviewStatus);
 
 /**
  * DELETE /moderator/reviews/:reviewId
