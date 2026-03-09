@@ -443,6 +443,98 @@ async function moderateRoom(req, res) {
     }
 }
 
+/**
+ * GET /rooms/:roomId/tenants
+ * Lấy danh sách người thuê phòng (LANDLORD)
+ */
+async function getRoomTenants(req, res) {
+    try {
+        const { roomId } = req.params;
+
+        // Lấy thông tin phòng và check quyền
+        const room = await prisma.rooms.findUnique({
+            where: { id: roomId },
+            select: { rental_id: true, rentals: { select: { owner_id: true } } },
+        });
+
+        if (!room) {
+            return res.status(404).json({ success: false, message: 'Phòng không tồn tại' });
+        }
+
+        // Kiểm tra quyền (chỉ owner rental mới xem được)
+        if (room.rentals.owner_id !== req.auth.user.id) {
+            return res.status(403).json({ success: false, message: 'Không có quyền xem thông tin này' });
+        }
+
+        // Lấy danh sách người đang/đã thuê + preorder
+        const [rentalPeriods, preorders] = await Promise.all([
+            // Hợp đồng thuê chính thức
+            prisma.roomRentalPeriod.findMany({
+                where: { roomId },
+                include: {
+                    tenant: {
+                        select: {
+                            id: true,
+                            fullName: true,
+                            email: true,
+                            phone: true,
+                            avatarUrl: true,
+                        },
+                    },
+                },
+                orderBy: { startDate: 'desc' },
+            }),
+            // Đặt cọc
+            prisma.preorder.findMany({
+                where: { roomId },
+                include: {
+                    user: {
+                        select: {
+                            id: true,
+                            fullName: true,
+                            email: true,
+                            phone: true,
+                            avatarUrl: true,
+                        },
+                    },
+                },
+                orderBy: { createdAt: 'desc' },
+            }),
+        ]);
+
+        return res.json({
+            success: true,
+            data: {
+                rentals: rentalPeriods.map((rp) => ({
+                    id: rp.id,
+                    tenantId: rp.userId,
+                    tenant: rp.tenant,
+                    startDate: rp.startDate,
+                    endDate: rp.endDate,
+                    actualPrice: Number(rp.actualPrice),
+                    deposit: rp.deposit ? Number(rp.deposit) : 0,
+                    status: rp.status, // ACTIVE | COMPLETED | CANCELLED | OVERDUE
+                    type: 'rental', // để phân biệt
+                })),
+                preorders: preorders.map((po) => ({
+                    id: po.id,
+                    userId: po.userId,
+                    user: po.user,
+                    depositAmount: po.deposit_amount ? Number(po.deposit_amount) : 0,
+                    paymentStatus: po.payment_status, // UNPAID | PAID | REFUNDED
+                    status: po.status, // PENDING | CONFIRMED | CANCELLED | EXPIRED
+                    refundStatus: po.refund_status,
+                    createdAt: po.createdAt,
+                    type: 'preorder', // để phân biệt
+                })),
+            },
+        });
+    } catch (err) {
+        console.error('Get room tenants error:', err);
+        return res.status(500).json({ success: false, message: 'Lỗi khi lấy thông tin người thuê', error: err.message });
+    }
+}
+
 module.exports = {
     createRoom,
     getRooms,
@@ -451,4 +543,5 @@ module.exports = {
     deleteRoom,
     getAmenities,
     moderateRoom,
+    getRoomTenants,
 };
