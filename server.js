@@ -20,6 +20,7 @@ const walletRoutes = require('./routes/wallet');
 const moderatorRoutes = require('./routes/moderator');
 const reportRoutes = require('./routes/report');
 const preorderRoutes = require('./routes/preorder');
+const feedbackRoutes = require('./routes/feedback');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -60,6 +61,7 @@ app.use('/wallet', walletRoutes);
 app.use('/moderator', moderatorRoutes);
 app.use('/reports', reportRoutes);
 app.use('/preorders', preorderRoutes);
+app.use('/feedback', feedbackRoutes);
 
 // Test route
 app.get('/', (req, res) => {

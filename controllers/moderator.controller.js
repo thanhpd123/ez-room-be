@@ -746,7 +746,8 @@ async function handleReport(req, res) {
 /**
  * GET /moderator/reviews
  * Lấy danh sách reviews (feedback) để moderator kiểm duyệt
- * Query: ?page=1&limit=20&target_type=ROOM
+ * Query: ?page=1&limit=20&status=PENDING|APPROVED|REJECTED|HIDDEN&roomId=&tenantId=&dateFrom=&dateTo=
+ * Mặc định tab Chờ duyệt (PENDING), sắp xếp FIFO (cũ → mới)
  */
 async function getReviewsForModeration(req, res) {
     try {
@@ -755,16 +756,23 @@ async function getReviewsForModeration(req, res) {
         const skip = (page - 1) * limit;
 
         const where = {};
-        if (req.query.target_type) {
-            where.target_type = req.query.target_type;
+        if (req.query.target_type) where.target_type = req.query.target_type;
+        if (req.query.status) where.status = req.query.status;
+        if (req.query.roomId) where.target_id = req.query.roomId;
+        if (req.query.tenantId) where.user_id = req.query.tenantId;
+        if (req.query.dateFrom || req.query.dateTo) {
+            where.created_at = {};
+            if (req.query.dateFrom) where.created_at.gte = new Date(req.query.dateFrom);
+            if (req.query.dateTo) where.created_at.lte = new Date(req.query.dateTo + 'T23:59:59.999Z');
         }
 
+        const orderDir = req.query.status === 'PENDING' ? 'asc' : 'desc';
         const [reviews, total] = await Promise.all([
             prisma.feedback.findMany({
                 where,
                 skip,
                 take: limit,
-                orderBy: { created_at: 'desc' },
+                orderBy: { created_at: orderDir },
                 include: {
                     users: {
                         select: {
@@ -779,32 +787,52 @@ async function getReviewsForModeration(req, res) {
             prisma.feedback.count({ where }),
         ]);
 
-        const targetIds = [...new Set(reviews.map((r) => r.target_id))];
-        const rentalMap = new Map();
-        if (targetIds.length > 0) {
-            const rentals = await prisma.rental.findMany({
-                where: { id: { in: targetIds } },
-                select: { id: true, title: true },
+        const roomIds = [...new Set(reviews.filter((r) => r.target_type === 'ROOM').map((r) => r.target_id))];
+        const roomRentalMap = new Map();
+        if (roomIds.length > 0) {
+            const rooms = await prisma.rooms.findMany({
+                where: { id: { in: roomIds } },
+                include: {
+                    rentals: { include: { location: true } },
+                    images: { take: 1, select: { imageUrl: true } },
+                },
             });
-            for (const r of rentals) rentalMap.set(r.id, r.title);
+            for (const room of rooms) {
+                const loc = room.rentals?.location;
+                const address = loc ? [loc.address, loc.district, loc.city].filter(Boolean).join(', ') : '';
+                roomRentalMap.set(room.id, {
+                    roomName: room.room_name || room.rentals?.title || 'Phòng',
+                    address,
+                    imageUrl: room.images?.[0]?.imageUrl || null,
+                });
+            }
         }
 
         return res.json({
             success: true,
-            data: reviews.map((r) => ({
-                id: r.id,
-                review_id: r.id,
-                reviewer_id: r.user_id,
-                reviewer_name: r.users?.fullName || null,
-                reviewer_email: r.users?.email || null,
-                reviewer_avatar: r.users?.avatarUrl || null,
-                target_type: r.target_type,
-                target_id: r.target_id,
-                rental_title: rentalMap.get(r.target_id) || r.target_id,
-                rating: r.rating,
-                content: r.comment,
-                created_at: r.created_at,
-            })),
+            data: reviews.map((r) => {
+                const roomInfo = r.target_type === 'ROOM' ? roomRentalMap.get(r.target_id) : null;
+                return {
+                    id: r.id,
+                    review_id: r.id,
+                    reviewer_id: r.user_id,
+                    reviewer_name: r.users?.fullName || null,
+                    reviewer_email: r.users?.email || null,
+                    reviewer_avatar: r.users?.avatarUrl || null,
+                    target_type: r.target_type,
+                    target_id: r.target_id,
+                    room_name: roomInfo?.roomName || null,
+                    room_address: roomInfo?.address || null,
+                    room_image_url: roomInfo?.imageUrl || null,
+                    rating: r.rating,
+                    content: r.comment,
+                    status: r.status,
+                    reviewed_by: r.reviewed_by,
+                    reviewed_at: r.reviewed_at,
+                    moderator_note: r.moderator_note,
+                    created_at: r.created_at,
+                };
+            }),
             pagination: {
                 page,
                 limit,
@@ -817,6 +845,264 @@ async function getReviewsForModeration(req, res) {
         return res.status(500).json({
             success: false,
             message: 'Lỗi khi lấy danh sách reviews',
+            error: err.message,
+        });
+    }
+}
+
+/**
+ * GET /moderator/reviews/:reviewId
+ * Chi tiết feedback đầy đủ (tenant, phòng, hợp đồng, nội dung đánh giá)
+ */
+async function getReviewDetail(req, res) {
+    try {
+        const { reviewId } = req.params;
+
+        const feedback = await prisma.feedback.findUnique({
+            where: { id: reviewId },
+            include: {
+                users: {
+                    select: {
+                        id: true,
+                        fullName: true,
+                        email: true,
+                        avatarUrl: true,
+                    },
+                },
+                users_feedback_reviewed_byTousers: {
+                    select: { id: true, fullName: true },
+                },
+                room_rental_periods: {
+                    include: {
+                        room: {
+                            include: {
+                                rentals: { include: { location: true } },
+                                images: { select: { imageUrl: true } },
+                            },
+                        },
+                    },
+                },
+            },
+        });
+
+        if (!feedback) {
+            return res.status(404).json({ success: false, message: 'Không tìm thấy feedback' });
+        }
+
+        const period = feedback.room_rental_periods;
+        const room = period?.room;
+        const rental = room?.rentals;
+        const loc = rental?.location;
+        const address = loc ? [loc.address, loc.district, loc.city].filter(Boolean).join(', ') : '';
+        const startDate = period?.startDate;
+        const endDate = period?.endDate;
+        const daysRented = startDate && endDate
+            ? Math.ceil((new Date(endDate) - new Date(startDate)) / (24 * 60 * 60 * 1000))
+            : null;
+
+        return res.json({
+            success: true,
+            data: {
+                id: feedback.id,
+                status: feedback.status,
+                rating: feedback.rating,
+                comment: feedback.comment,
+                cleanlinessRating: feedback.cleanliness_rating,
+                locationRating: feedback.location_rating,
+                valueRating: feedback.value_rating,
+                landlordRating: feedback.landlord_rating,
+                created_at: feedback.created_at,
+                reviewed_by: feedback.reviewed_by,
+                reviewed_at: feedback.reviewed_at,
+                moderator_note: feedback.moderator_note,
+                moderator_name: feedback.users_feedback_reviewed_byTousers?.fullName || null,
+                tenant: feedback.users
+                    ? {
+                        id: feedback.users.id,
+                        fullName: feedback.users.fullName,
+                        email: feedback.users.email,
+                        avatarUrl: feedback.users.avatarUrl,
+                    }
+                    : null,
+                room: room
+                    ? {
+                        id: room.id,
+                        roomName: room.room_name || rental?.title || 'Phòng',
+                        address,
+                        images: (room.images || []).map((i) => i.imageUrl),
+                    }
+                    : null,
+                contract: period
+                    ? {
+                        startDate,
+                        endDate,
+                        actualPrice: period.actualPrice ? Number(period.actualPrice) : null,
+                        daysRented,
+                    }
+                    : null,
+            },
+        });
+    } catch (err) {
+        console.error('Moderator - Get review detail error:', err);
+        return res.status(500).json({
+            success: false,
+            message: 'Lỗi khi lấy chi tiết feedback',
+            error: err.message,
+        });
+    }
+}
+
+/**
+ * PATCH /moderator/reviews/:reviewId
+ * Duyệt / từ chối / ẩn review
+ * Body: { status: 'APPROVED' | 'REJECTED' | 'HIDDEN', moderatorNote?: string }
+ */
+async function updateReviewStatus(req, res) {
+    try {
+        const { reviewId } = req.params;
+        const { status, moderatorNote } = req.body;
+        const moderatorId = req.auth.user.id;
+
+        const validStatuses = ['APPROVED', 'REJECTED', 'HIDDEN'];
+        if (!status || !validStatuses.includes(status)) {
+            return res.status(400).json({
+                success: false,
+                message: 'status phải là APPROVED, REJECTED hoặc HIDDEN',
+            });
+        }
+
+        const existing = await prisma.feedback.findUnique({
+            where: { id: reviewId },
+            include: {
+                users: { select: { id: true } },
+                room_rental_periods: {
+                    include: {
+                        room: {
+                            include: {
+                                rentals: { select: { owner_id: true, title: true } },
+                            },
+                        },
+                    },
+                },
+                users_feedback_reviewed_byTousers: { select: { fullName: true } },
+            },
+        });
+
+        if (!existing) {
+            return res.status(404).json({ success: false, message: 'Không tìm thấy review' });
+        }
+
+        if (status === 'HIDDEN') {
+            if (existing.status !== 'APPROVED') {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Chỉ có thể ẩn đánh giá đã được duyệt',
+                });
+            }
+            const note = moderatorNote ? String(moderatorNote).trim() : '';
+            if (note.length < 10) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Vui lòng nhập lý do ẩn (tối thiểu 10 ký tự)',
+                });
+            }
+        } else if (status === 'REJECTED') {
+            const note = moderatorNote ? String(moderatorNote).trim() : '';
+            if (note.length < 10) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Vui lòng nhập lý do từ chối (tối thiểu 10 ký tự)',
+                });
+            }
+        }
+
+        if (existing.status !== 'PENDING' && status !== 'HIDDEN') {
+            const moderatorName = existing.users_feedback_reviewed_byTousers?.fullName || 'moderator';
+            return res.status(400).json({
+                success: false,
+                message: `Đánh giá này đã được xử lý bởi ${moderatorName}`,
+            });
+        }
+
+        const noteValue = moderatorNote ? String(moderatorNote).trim() : null;
+
+        const updated = await prisma.feedback.update({
+            where: { id: reviewId },
+            data: {
+                status,
+                reviewed_by: moderatorId,
+                reviewed_at: new Date(),
+                moderator_note: noteValue,
+                updated_at: new Date(),
+            },
+        });
+
+        const tenantId = existing.user_id;
+        const landlordId = existing.room_rental_periods?.room?.rentals?.owner_id;
+        const roomTitle = existing.room_rental_periods?.room?.rentals?.title || 'Phòng';
+
+        try {
+            if (status === 'APPROVED') {
+                await prisma.notification.create({
+                    data: {
+                        userId: tenantId,
+                        type: 'ADMIN_ALERT',
+                        title: 'Đánh giá được duyệt',
+                        body: 'Đánh giá của bạn đã được duyệt và công khai.',
+                        status: 'UNREAD',
+                    },
+                });
+                if (landlordId) {
+                    await prisma.notification.create({
+                        data: {
+                            userId: landlordId,
+                            type: 'ADMIN_ALERT',
+                            title: 'Đánh giá mới',
+                            body: `Phòng ${roomTitle} có đánh giá mới.`,
+                            status: 'UNREAD',
+                        },
+                    });
+                }
+            } else if (status === 'REJECTED') {
+                await prisma.notification.create({
+                    data: {
+                        userId: tenantId,
+                        type: 'ADMIN_ALERT',
+                        title: 'Đánh giá bị từ chối',
+                        body: `Đánh giá của bạn bị từ chối. Lý do: ${noteValue || ''}`,
+                        status: 'UNREAD',
+                    },
+                });
+            } else if (status === 'HIDDEN') {
+                await prisma.notification.create({
+                    data: {
+                        userId: tenantId,
+                        type: 'ADMIN_ALERT',
+                        title: 'Đánh giá đã bị ẩn',
+                        body: `Đánh giá của bạn đã bị ẩn. Lý do: ${noteValue || ''}`,
+                        status: 'UNREAD',
+                    },
+                });
+            }
+        } catch (notifErr) {
+            console.warn('Could not create notifications:', notifErr.message);
+        }
+
+        return res.json({
+            success: true,
+            message:
+                status === 'APPROVED'
+                    ? 'Đã duyệt đánh giá'
+                    : status === 'REJECTED'
+                        ? 'Đã từ chối đánh giá'
+                        : 'Đã ẩn đánh giá',
+            data: { id: updated.id, status: updated.status },
+        });
+    } catch (err) {
+        console.error('Moderator - Update review status error:', err);
+        return res.status(500).json({
+            success: false,
+            message: 'Lỗi khi cập nhật review',
             error: err.message,
         });
     }
@@ -864,5 +1150,7 @@ module.exports = {
     getReports,
     handleReport,
     getReviewsForModeration,
+    getReviewDetail,
+    updateReviewStatus,
     deleteReview,
 };

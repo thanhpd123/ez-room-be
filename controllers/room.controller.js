@@ -1,5 +1,6 @@
 const prisma = require('../config/prisma');
 const cache = require('../utils/simple-cache');
+const feedbackConfig = require('../config/feedback.config');
 const { mapFeToDb, mapDbToFe } = require('../utils/room-type-mapper');
 const { sendEmail } = require('../utils/email');
 
@@ -535,6 +536,339 @@ async function getRoomTenants(req, res) {
     }
 }
 
+/**
+ * GET /rooms/search-tenants
+ * Landlord tìm kiếm tenant theo email hoặc số điện thoại
+ * Query: ?q=email_or_phone
+ * Returns: { id, fullName, email, phone, avatarUrl, gender }
+ */
+async function searchTenants(req, res) {
+    try {
+        const q = (req.query.q || '').trim();
+        if (!q || q.length < 2) {
+            return res.status(400).json({
+                success: false,
+                message: 'Nhập ít nhất 2 ký tự để tìm kiếm (email hoặc số điện thoại)',
+            });
+        }
+
+        const qNorm = q.replace(/\s/g, '');
+        const users = await prisma.user.findMany({
+            where: {
+                role: 'TENANT',
+                status: 'ACTIVE',
+                OR: [
+                    { email: { contains: q, mode: 'insensitive' } },
+                    ...(qNorm ? [{ phone: { contains: qNorm } }] : []),
+                ],
+            },
+            select: {
+                id: true,
+                fullName: true,
+                email: true,
+                phone: true,
+                avatarUrl: true,
+                gender: true,
+            },
+            take: 10,
+        });
+
+        const data = users.map((u) => ({
+            id: u.id,
+            fullName: u.fullName,
+            email: u.email,
+            phone: u.phone || null,
+            avatarUrl: u.avatarUrl || null,
+            gender: u.gender || null,
+        }));
+
+        return res.json({ success: true, data });
+    } catch (err) {
+        console.error('Search tenants error:', err);
+        return res.status(500).json({
+            success: false,
+            message: 'Lỗi khi tìm kiếm người thuê',
+            error: err.message,
+        });
+    }
+}
+
+/**
+ * POST /rooms/:roomId/contracts
+ * Landlord tạo hợp đồng thuê phòng
+ * Body: { tenantId, startDate, endDate, actualPrice, deposit? }
+ * - Tạo RoomRentalPeriod status=ACTIVE
+ * - Cập nhật rooms.status = RENTED
+ * - Gửi notification cho tenant
+ */
+async function createRentalContract(req, res) {
+    try {
+        const userId = req.auth.user.id;
+        const { roomId } = req.params;
+        const { tenantId, startDate, endDate, actualPrice, deposit } = req.body;
+
+        if (!tenantId || !startDate || actualPrice == null) {
+            return res.status(400).json({
+                success: false,
+                message: 'Thiếu thông tin: tenantId, startDate, actualPrice',
+            });
+        }
+
+        const actualPriceNum = parseFloat(actualPrice);
+        const depositNum = deposit != null ? parseFloat(deposit) : 0;
+        if (isNaN(actualPriceNum) || actualPriceNum <= 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Giá thuê không hợp lệ',
+            });
+        }
+
+        const start = new Date(startDate);
+        if (isNaN(start.getTime())) {
+            return res.status(400).json({
+                success: false,
+                message: 'Ngày bắt đầu không hợp lệ',
+            });
+        }
+
+        let end = null;
+        if (endDate) {
+            end = new Date(endDate);
+            if (isNaN(end.getTime())) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Ngày kết thúc không hợp lệ',
+                });
+            }
+        }
+
+        const room = await prisma.rooms.findUnique({
+            where: { id: roomId },
+            include: {
+                rentals: { select: { owner_id: true, title: true } },
+            },
+        });
+
+        if (!room) {
+            return res.status(404).json({ success: false, message: 'Không tìm thấy phòng' });
+        }
+
+        if (room.rentals.owner_id !== userId) {
+            return res.status(403).json({ success: false, message: 'Bạn không có quyền tạo hợp đồng cho phòng này' });
+        }
+
+        if (room.status === 'RENTED') {
+            return res.status(400).json({
+                success: false,
+                message: 'Phòng đã được thuê',
+            });
+        }
+
+        const tenant = await prisma.user.findUnique({
+            where: { id: tenantId },
+            select: { id: true, status: true, fullName: true },
+        });
+
+        if (!tenant) {
+            return res.status(404).json({ success: false, message: 'Người dùng không tồn tại' });
+        }
+
+        if (tenant.status === 'SUSPENDED' || tenant.status === 'BANNED') {
+            return res.status(400).json({
+                success: false,
+                message: 'Người dùng không hợp lệ',
+            });
+        }
+
+        const existingActive = await prisma.roomRentalPeriod.findFirst({
+            where: {
+                roomId,
+                userId: tenantId,
+                status: 'ACTIVE',
+            },
+        });
+
+        if (existingActive) {
+            return res.status(400).json({
+                success: false,
+                message: 'Người này đang thuê phòng này rồi',
+            });
+        }
+
+        const result = await prisma.$transaction(async (tx) => {
+            const period = await tx.roomRentalPeriod.create({
+                data: {
+                    roomId,
+                    userId: tenantId,
+                    startDate: start,
+                    endDate: end,
+                    actualPrice: actualPriceNum,
+                    deposit: depositNum,
+                    status: 'ACTIVE',
+                },
+                include: {
+                    tenant: {
+                        select: { id: true, fullName: true, email: true, phone: true, avatarUrl: true },
+                    },
+                },
+            });
+
+            await tx.rooms.update({
+                where: { id: roomId },
+                data: { status: 'RENTED' },
+            });
+
+            const roomTitle = room.room_name || room.rentals?.title || 'Phòng trọ';
+            await tx.notification.create({
+                data: {
+                    userId: tenantId,
+                    type: 'ROOM_MATCH',
+                    title: 'Bạn đã được gán vào phòng',
+                    body: `Chủ trọ đã tạo hợp đồng thuê phòng "${roomTitle}" cho bạn. Vào Lịch sử thuê phòng để xem chi tiết.`,
+                    status: 'UNREAD',
+                },
+            });
+
+            return period;
+        });
+
+        return res.status(201).json({
+            success: true,
+            message: 'Tạo hợp đồng thuê thành công',
+            data: {
+                id: result.id,
+                roomId: result.roomId,
+                tenant: result.tenant,
+                startDate: result.startDate,
+                endDate: result.endDate,
+                actualPrice: Number(result.actualPrice),
+                deposit: result.deposit ? Number(result.deposit) : 0,
+                status: result.status,
+            },
+        });
+    } catch (err) {
+        console.error('Create rental contract error:', err);
+        return res.status(500).json({ success: false, message: err.message });
+    }
+}
+
+/**
+ * GET /rooms/my-bookings
+ * Tenant lấy danh sách phòng đã/đang thuê (RoomRentalPeriod)
+ * Trả về: id, room, rental, address, startDate, endDate, status, feedback, canReview, canReviewDisabled
+ */
+async function getMyBookings(req, res) {
+    try {
+        const userId = req.auth.user.id;
+
+        const periods = await prisma.roomRentalPeriod.findMany({
+            where: { userId },
+            include: {
+                room: {
+                    include: {
+                        images: { take: 1 },
+                        rentals: {
+                            include: {
+                                location: true,
+                                images: { take: 1 },
+                            },
+                        },
+                    },
+                },
+                feedback: true,
+            },
+            orderBy: { startDate: 'desc' },
+        });
+
+        const now = Date.now();
+        const MIN_MS = feedbackConfig.MIN_RENTAL_DURATION_MS;
+
+        const bookings = periods.map((p) => {
+            const startMs = new Date(p.startDate).getTime();
+            const diffMs = now - startMs;
+            const eligibleToReview = diffMs >= MIN_MS;
+            const hasFeedback = p.feedback && p.feedback.length > 0;
+            const latestFeedback = hasFeedback ? p.feedback[0] : null; // có thể có nhiều nếu sửa lại? No - unique user_id, rental_period_id
+            const feedbackStatus = latestFeedback ? latestFeedback.status : null;
+
+            // Chỉ ACTIVE mới cho đánh giá (theo spec: tenant đang thuê)
+            const canReview =
+                p.status === 'ACTIVE' &&
+                (!hasFeedback || feedbackStatus === 'REJECTED') &&
+                eligibleToReview;
+            const canReviewDisabled =
+                p.status === 'ACTIVE' &&
+                (!hasFeedback || feedbackStatus === 'REJECTED') &&
+                !eligibleToReview;
+
+            const room = p.room;
+            const rental = room?.rentals;
+            const address = rental?.location
+                ? [rental.location.address, rental.location.district, rental.location.city].filter(Boolean).join(', ')
+                : '';
+
+            return {
+                id: p.id,
+                rentalPeriodId: p.id,
+                roomId: room?.id,
+                roomName: room?.room_name || 'Phòng',
+                propertyName: rental?.title || 'Bất động sản',
+                propertyImage: room?.images?.[0]?.imageUrl || rental?.images?.[0]?.imageUrl || '',
+                address,
+                landlordName: null, // TODO: join owner
+                startDate: p.startDate,
+                endDate: p.endDate,
+                status: mapRentalPeriodStatus(p.status),
+                hasReview: hasFeedback,
+                userRating: latestFeedback?.rating ?? undefined,
+                feedbackId: latestFeedback?.id,
+                feedbackStatus: feedbackStatus,
+                moderatorNote: latestFeedback?.moderator_note ?? undefined,
+                canReview,
+                canReviewDisabled,
+            };
+        });
+
+        // Lấy landlord name cho từng booking
+        const rentalIds = [...new Set(periods.map((p) => p.room?.rentals?.id).filter(Boolean))];
+        if (rentalIds.length > 0) {
+            const rentals = await prisma.rental.findMany({
+                where: { id: { in: rentalIds } },
+                include: { users: { select: { fullName: true } } },
+            });
+            const landlordMap = new Map(rentals.map((r) => [r.id, r.users?.fullName || 'Chủ nhà']));
+            bookings.forEach((b) => {
+                const r = periods.find((p) => p.room?.rentals?.id);
+                if (r?.room?.rentals?.id) {
+                    b.landlordName = landlordMap.get(r.room.rentals.id) || 'Chủ nhà';
+                }
+            });
+            // Fix: map each booking to its rental's landlord
+            periods.forEach((p, i) => {
+                const rid = p.room?.rentals?.id;
+                if (rid) bookings[i].landlordName = landlordMap.get(rid) || 'Chủ nhà';
+            });
+        }
+
+        return res.json({
+            success: true,
+            data: bookings,
+        });
+    } catch (err) {
+        console.error('Get my bookings error:', err);
+        return res.status(500).json({
+            success: false,
+            message: 'Lỗi khi lấy lịch sử thuê phòng',
+            error: err.message,
+        });
+    }
+}
+
+function mapRentalPeriodStatus(s) {
+    const m = { ACTIVE: 'active', COMPLETED: 'completed', CANCELLED: 'cancelled', OVERDUE: 'active' };
+    return m[s] || 'active';
+}
+
 module.exports = {
     createRoom,
     getRooms,
@@ -544,4 +878,7 @@ module.exports = {
     getAmenities,
     moderateRoom,
     getRoomTenants,
+    searchTenants,
+    createRentalContract,
+    getMyBookings,
 };
