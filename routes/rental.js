@@ -7,13 +7,19 @@ const {
     getMyRentals,
     getRentalsForModeration,
     updateRentalStatus,
+    updateRental,
+    deleteRental,
     getRentalStats,
 } = require('../controllers/rental.controller');
+const { deleteRental: deleteRentalAdmin } = require('../controllers/rentals.controller');
 
 const router = express.Router();
 
 /**
  * GET /rentals/stats
+
+ * Thống kê bài đăng (Admin/Moderator)
+
  * Admin/Moderator dashboard rental stats. Must be before /:rentalId
  */
 router.get('/stats', verifyJWT, requireRole('MODERATOR', 'ADMIN'), getRentalStats);
@@ -57,5 +63,30 @@ router.post('/', verifyJWT, requireRole('LANDLORD'), createRental);
  * Body: { status: 'AVAILABLE' }
  */
 router.patch('/:rentalId/status', verifyJWT, requireRole('MODERATOR', 'ADMIN'), updateRentalStatus);
+
+/**
+ * PUT /rentals/:rentalId
+ * Landlord cập nhật rental của mình
+ * Body: { title?, description?, address?, district?, city?, images? }
+ */
+router.put('/:rentalId', verifyJWT, requireRole('LANDLORD'), updateRental);
+
+/**
+ * DELETE /rentals/:rentalId
+ * Landlord xóa rental của mình (không thể xóa nếu có đơn cọc đang hoạt động)
+ * Admin xóa vĩnh viễn bài đăng
+ */
+router.delete('/:rentalId', verifyJWT, requireRole('LANDLORD', 'ADMIN'), (req, res, next) => {
+    const userRole = req.auth.user.role;
+    
+    // Admin: xóa vĩnh viễn (dùng rentals.controller)
+    if (userRole === 'ADMIN') {
+        req.params.id = req.params.rentalId;
+        return deleteRentalAdmin(req, res, next);
+    }
+    
+    // Landlord: xóa của chính mình (dùng rental.controller)
+    return deleteRental(req, res, next);
+});
 
 module.exports = router;

@@ -6,6 +6,9 @@ const {
     updateUserRole,
     updateUserStatus,
     getDashboardStats,
+    getAllWallets,
+    getWalletTransactions,
+    getWalletStats,
 } = require('../controllers/admin.controller');
 
 const router = express.Router();
@@ -29,7 +32,7 @@ router.get('/users', getAllUsers);
 
 /**
  * GET /admin/users/:userId
- * Lấy thông tin chi tiết một user
+ * Lấy thông tin chi tiết một user (bao gồm rentals, wallet, preferences)
  */
 router.get('/users/:userId', getUserById);
 
@@ -46,5 +49,27 @@ router.patch('/users/:userId/role', updateUserRole);
  * Body: { status: 'BANNED' }
  */
 router.patch('/users/:userId/status', updateUserStatus);
+
+// ==================== WALLETS (READ-ONLY) ====================
+
+/**
+ * GET /admin/wallets/stats
+ * Thống kê tổng quan ví
+ */
+router.get('/wallets/stats', getWalletStats);
+
+/**
+ * GET /admin/wallets
+ * Lấy danh sách ví (phân trang, filter)
+ * Query: ?page=1&limit=10&search=keyword&minBalance=0&maxBalance=999999
+ */
+router.get('/wallets', getAllWallets);
+
+/**
+ * GET /admin/wallets/:walletId/transactions
+ * Lấy lịch sử giao dịch của ví (READ-ONLY)
+ * Query: ?page=1&limit=20&type=DEPOSIT&status=SUCCESS
+ */
+router.get('/wallets/:walletId/transactions', getWalletTransactions);
 
 module.exports = router;

@@ -52,7 +52,7 @@ function formatRoomResponse(room) {
 async function createRoom(req, res) {
     try {
         const userId = req.auth.user.id;
-        
+
         // Support cả 2 format
         const rentalId = req.body.rentalId || req.body.rental_id;
         const roomName = req.body.roomName || req.body.title;
@@ -401,6 +401,48 @@ async function getAmenities(req, res) {
     }
 }
 
+/**
+ * PUT /rooms/:roomId/moderate
+ * Moderator duyệt / từ chối room post
+ * Body: { decision: 'approved' | 'rejected', note?: string }
+ */
+async function moderateRoom(req, res) {
+    try {
+        const { roomId } = req.params;
+        const { decision, note } = req.body;
+
+        if (!decision || !['approved', 'rejected'].includes(decision)) {
+            return res.status(400).json({ success: false, message: 'decision phải là approved hoặc rejected' });
+        }
+
+        const room = await prisma.rooms.findUnique({ where: { id: roomId } });
+        if (!room) {
+            return res.status(404).json({ success: false, message: 'Không tìm thấy phòng' });
+        }
+
+        const newStatus = decision === 'approved' ? 'AVAILABLE' : 'MAINTENANCE';
+
+        const updated = await prisma.rooms.update({
+            where: { id: roomId },
+            data: { status: newStatus },
+            include: {
+                images: true,
+                roomAmenities: { include: { amenity: true } },
+                rentals: { include: { location: true } },
+            },
+        });
+
+        return res.json({
+            success: true,
+            message: decision === 'approved' ? 'Đã duyệt phòng' : 'Đã từ chối phòng',
+            data: formatRoomResponse(updated),
+        });
+    } catch (err) {
+        console.error('Moderate room error:', err);
+        return res.status(500).json({ success: false, message: 'Lỗi khi duyệt phòng', error: err.message });
+    }
+}
+
 module.exports = {
     createRoom,
     getRooms,
@@ -408,4 +450,5 @@ module.exports = {
     updateRoom,
     deleteRoom,
     getAmenities,
+    moderateRoom,
 };

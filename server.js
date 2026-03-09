@@ -18,6 +18,8 @@ const roommateRoutes = require('./routes/roommate');
 const messageRoutes = require('./routes/message');
 const walletRoutes = require('./routes/wallet');
 const verificationRoutes = require('./routes/verification');
+const moderatorRoutes = require('./routes/moderator');
+const reportRoutes = require('./routes/report');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -56,6 +58,8 @@ app.use('/roommate', roommateRoutes);
 app.use('/messages', messageRoutes);
 app.use('/wallet', walletRoutes);
 app.use('/verifications', verificationRoutes);
+app.use('/moderator', moderatorRoutes);
+app.use('/reports', reportRoutes);
 
 // Test route
 app.get('/', (req, res) => {
