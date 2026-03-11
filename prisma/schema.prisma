@@ -780,6 +780,8 @@ enum mod_action_enum {
   APPROVE
   REJECT
   HIDE
+  CLAIM
+  RELEASE
   UNHIDE
   SUSPEND
   UNSUSPEND
@@ -814,6 +816,7 @@ enum mod_target_enum {
   RENTAL
   ROOM
   USER
+  QUEUE
   FEEDBACK
   REPORT
   DOCUMENT

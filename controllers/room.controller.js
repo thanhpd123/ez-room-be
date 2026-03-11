@@ -88,33 +88,44 @@ async function createRoom(req, res) {
             return res.status(403).json({ success: false, message: 'Bạn không có quyền thêm phòng cho bất động sản này' });
         }
 
-        // Tạo room
-        // Bỏ qua status từ frontend - sử dụng default PENDING từ database
-        const room = await prisma.rooms.create({
-            data: {
-                rental_id: rentalId,
-                room_name: roomName ? roomName.trim() : null,
-                description: description ? description.trim() : null,
-                room_type: mapFeToDb(roomType),
-                price: parseFloat(price),
-                size_m2: sizeM2 ? parseFloat(sizeM2) : null,
-                max_people: maxPeople ? parseInt(maxPeople) : 1,
-                // status: sử dụng default từ schema (PENDING)
-                ...(images && images.length > 0 ? {
-                    images: {
-                        create: images.map((url) => ({ imageUrl: url })),
-                    },
-                } : {}),
-                ...(amenityIds && amenityIds.length > 0 ? {
-                    roomAmenities: {
-                        create: amenityIds.map((amenityId) => ({ amenityId })),
-                    },
-                } : {}),
-            },
-            include: {
-                images: true,
-                roomAmenities: { include: { amenity: true } },
-            },
+        // Tạo room + ModerationQueue (transaction)
+        const room = await prisma.$transaction(async (tx) => {
+            const created = await tx.rooms.create({
+                data: {
+                    rental_id: rentalId,
+                    room_name: roomName ? roomName.trim() : null,
+                    description: description ? description.trim() : null,
+                    room_type: mapFeToDb(roomType),
+                    price: parseFloat(price),
+                    size_m2: sizeM2 ? parseFloat(sizeM2) : null,
+                    max_people: maxPeople ? parseInt(maxPeople) : 1,
+                    // status: sử dụng default từ schema (PENDING)
+                    ...(images && images.length > 0 ? {
+                        images: {
+                            create: images.map((url) => ({ imageUrl: url })),
+                        },
+                    } : {}),
+                    ...(amenityIds && amenityIds.length > 0 ? {
+                        roomAmenities: {
+                            create: amenityIds.map((amenityId) => ({ amenityId })),
+                        },
+                    } : {}),
+                },
+                include: {
+                    images: true,
+                    roomAmenities: { include: { amenity: true } },
+                },
+            });
+            await tx.moderation_queue.create({
+                data: {
+                    target_type: 'ROOM',
+                    target_id: created.id,
+                    priority: 'NORMAL',
+                    category: 'NEW_LISTING',
+                    source: 'SYSTEM',
+                },
+            });
+            return created;
         });
 
         return res.status(201).json({

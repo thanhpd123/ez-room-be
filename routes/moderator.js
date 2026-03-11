@@ -9,6 +9,11 @@ const {
     getRentalStats,
     getRooms,
     moderateRoom,
+    getModeratorLogs,
+    getModerationQueue,
+    getQueueActivity,
+    assignQueueItem,
+    releaseQueueItem,
     getReports,
     handleReport,
     getReviewsForModeration,
@@ -22,6 +27,14 @@ const router = express.Router();
 // Tất cả routes yêu cầu: đăng nhập + role MODERATOR hoặc ADMIN
 router.use(verifyJWT);
 router.use(requireRole('MODERATOR', 'ADMIN'));
+
+// ═══════════════════ Logs & Queue (đặt trước routes có param động) ═══════════════
+
+router.get('/logs', getModeratorLogs);
+router.get('/queue', getModerationQueue);
+router.get('/queue/activity', getQueueActivity);
+router.patch('/queue/:id/assign', assignQueueItem);
+router.patch('/queue/:id/release', releaseQueueItem);
 
 // ═══════════════════ Quản lý Users ═══════════════════
 
