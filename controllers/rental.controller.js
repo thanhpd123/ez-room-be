@@ -38,36 +38,48 @@ async function createRental(req, res) {
             });
         }
 
-        // 2. Tạo Rental với status = pending
-        const rental = await prisma.rental.create({
-            data: {
-                owner_id: ownerId,
-                locationId: location.id,
-                title: title.trim(),
-                description: description ? description.trim() : null,
-                status: 'PENDING',
-                // Tạo images nếu có
-                ...(images && images.length > 0 ? {
-                    images: {
-                        create: images.map((url) => ({ imageUrl: url })),
-                    },
-                } : {}),
-                // Tạo documents xác minh nếu có
-                ...(documents && documents.length > 0 ? {
-                    documents: {
-                        create: documents.map((doc) => ({
-                            documentType: doc.documentType,
-                            imageUrl: doc.imageUrl,
-                            status: 'PENDING',
-                        })),
-                    },
-                } : {}),
-            },
-            include: {
-                location: true,
-                images: true,
-                documents: true,
-            },
+        // 2. Tạo Rental + ModerationQueue (transaction)
+        const rental = await prisma.$transaction(async (tx) => {
+            const created = await tx.rental.create({
+                data: {
+                    owner_id: ownerId,
+                    locationId: location.id,
+                    title: title.trim(),
+                    description: description ? description.trim() : null,
+                    status: 'PENDING',
+                    // Tạo images nếu có
+                    ...(images && images.length > 0 ? {
+                        images: {
+                            create: images.map((url) => ({ imageUrl: url })),
+                        },
+                    } : {}),
+                    // Tạo documents xác minh nếu có
+                    ...(documents && documents.length > 0 ? {
+                        rental_documents: {
+                            create: documents.map((doc) => ({
+                                document_type: doc.documentType,
+                                image_url: doc.imageUrl,
+                                status: 'PENDING',
+                            })),
+                        },
+                    } : {}),
+                },
+                include: {
+                    location: true,
+                    images: true,
+                    rental_documents: true,
+                },
+            });
+            await tx.moderation_queue.create({
+                data: {
+                    target_type: 'RENTAL',
+                    target_id: created.id,
+                    priority: 'NORMAL',
+                    category: 'NEW_LISTING',
+                    source: 'SYSTEM',
+                },
+            });
+            return created;
         });
 
         return res.status(201).json({

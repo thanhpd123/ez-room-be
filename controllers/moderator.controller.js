@@ -243,7 +243,7 @@ async function updateUserStatus(req, res) {
 
         const existingUser = await prisma.user.findUnique({
             where: { id: userId },
-            select: { id: true, fullName: true, role: true },
+            select: { id: true, fullName: true, role: true, status: true },
         });
 
         if (!existingUser) {
@@ -254,16 +254,32 @@ async function updateUserStatus(req, res) {
             return res.status(403).json({ success: false, message: 'Không có quyền thay đổi status của người dùng này' });
         }
 
-        const updatedUser = await prisma.user.update({
-            where: { id: userId },
-            data: { status: newStatus, updated_at: new Date() },
-            select: {
-                id: true,
-                fullName: true,
-                email: true,
-                role: true,
-                status: true,
-            },
+        const action = newStatus === 'BANNED' ? 'BAN' : newStatus === 'SUSPENDED' ? 'SUSPEND' : 'UNSUSPEND';
+
+        const updatedUser = await prisma.$transaction(async (tx) => {
+            const user = await tx.user.update({
+                where: { id: userId },
+                data: { status: newStatus, updated_at: new Date() },
+                select: {
+                    id: true,
+                    fullName: true,
+                    email: true,
+                    role: true,
+                    status: true,
+                },
+            });
+            await tx.moderator_logs.create({
+                data: {
+                    moderator_id: moderatorId,
+                    target_type: 'USER',
+                    target_id: userId,
+                    action,
+                    previous_status: existingUser.status,
+                    new_status: newStatus,
+                    note: req.body.note || null,
+                },
+            });
+            return user;
         });
 
         return res.json({
@@ -403,10 +419,32 @@ async function updateRentalStatus(req, res) {
             });
         }
 
-        const updatedRental = await prisma.rental.update({
-            where: { id: rentalId },
-            data: { status },
-            include: { location: true },
+        const updatedRental = await prisma.$transaction(async (tx) => {
+            const rental = await tx.rental.update({
+                where: { id: rentalId },
+                data: { status },
+                include: { location: true },
+            });
+            await tx.moderation_queue.updateMany({
+                where: {
+                    target_type: 'RENTAL',
+                    target_id: rentalId,
+                    status: 'OPEN',
+                },
+                data: { status: 'RESOLVED', resolved_at: new Date() },
+            });
+            await tx.moderator_logs.create({
+                data: {
+                    moderator_id: req.auth.user.id,
+                    target_type: 'RENTAL',
+                    target_id: rentalId,
+                    action: status === 'AVAILABLE' ? 'APPROVE' : 'REJECT',
+                    previous_status: existingRental.status,
+                    new_status: status,
+                    note: req.body.note || null,
+                },
+            });
+            return rental;
         });
 
         return res.json({
@@ -572,14 +610,36 @@ async function moderateRoom(req, res) {
 
         const newStatus = decision === 'approved' ? 'AVAILABLE' : 'MAINTENANCE';
 
-        const updated = await prisma.rooms.update({
-            where: { id: roomId },
-            data: { status: newStatus },
-            include: {
-                images: true,
-                roomAmenities: { include: { amenity: true } },
-                rentals: { include: { location: true } },
-            },
+        const updated = await prisma.$transaction(async (tx) => {
+            const updatedRoom = await tx.rooms.update({
+                where: { id: roomId },
+                data: { status: newStatus },
+                include: {
+                    images: true,
+                    roomAmenities: { include: { amenity: true } },
+                    rentals: { include: { location: true } },
+                },
+            });
+            await tx.moderation_queue.updateMany({
+                where: {
+                    target_type: 'ROOM',
+                    target_id: roomId,
+                    status: 'OPEN',
+                },
+                data: { status: 'RESOLVED', resolved_at: new Date() },
+            });
+            await tx.moderator_logs.create({
+                data: {
+                    moderator_id: req.auth.user.id,
+                    target_type: 'ROOM',
+                    target_id: roomId,
+                    action: decision === 'approved' ? 'APPROVE' : 'REJECT',
+                    previous_status: room.status,
+                    new_status: newStatus,
+                    note: note || null,
+                },
+            });
+            return updatedRoom;
         });
 
         return res.json({
@@ -590,6 +650,335 @@ async function moderateRoom(req, res) {
     } catch (err) {
         console.error('Moderator - Moderate room error:', err);
         return res.status(500).json({ success: false, message: 'Lỗi khi duyệt phòng', error: err.message });
+    }
+}
+
+// ═══════════════════ Moderator Logs ═══════════════════
+
+const VALID_TARGET_TYPES = ['RENTAL', 'ROOM', 'REPORT', 'FEEDBACK', 'USER', 'QUEUE'];
+const VALID_LOG_ACTIONS = ['APPROVE', 'REJECT', 'HIDE', 'DISMISS', 'BAN', 'SUSPEND', 'UNSUSPEND', 'CLAIM', 'RELEASE'];
+
+/**
+ * GET /moderator/logs
+ * Lấy lịch sử moderation (chỉ MODERATOR/ADMIN)
+ * Query: ?page=1&limit=20&targetType=RENTAL|ROOM|REPORT|FEEDBACK|USER&action=...&moderatorId=...
+ */
+async function getModeratorLogs(req, res) {
+    try {
+        const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+        const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+        const skip = (page - 1) * limit;
+
+        const where = {};
+        if (req.query.targetType && VALID_TARGET_TYPES.includes(req.query.targetType.toUpperCase())) {
+            where.target_type = req.query.targetType.toUpperCase();
+        }
+        if (req.query.action && VALID_LOG_ACTIONS.includes(req.query.action.toUpperCase())) {
+            where.action = req.query.action.toUpperCase();
+        }
+        if (req.query.moderatorId) {
+            where.moderator_id = req.query.moderatorId;
+        }
+
+        const [items, total] = await Promise.all([
+            prisma.moderator_logs.findMany({
+                where,
+                orderBy: { created_at: 'desc' },
+                skip,
+                take: limit,
+                include: {
+                    users: {
+                        select: { id: true, fullName: true },
+                    },
+                },
+            }),
+            prisma.moderator_logs.count({ where }),
+        ]);
+
+        return res.json({
+            success: true,
+            data: items,
+            pagination: {
+                page,
+                limit,
+                total,
+                totalPages: Math.ceil(total / limit),
+            },
+        });
+    } catch (err) {
+        console.error('Moderator - Get logs error:', err);
+        return res.status(500).json({
+            success: false,
+            message: 'Lỗi khi lấy lịch sử moderation',
+            error: err.message,
+        });
+    }
+}
+
+/**
+ * GET /moderator/queue/activity
+ * Lịch sử thao tác claim/release queue (ai nhận task, ai trả task).
+ * Query: ?page=1&limit=20&action=CLAIM|RELEASE|all&moderatorId=...
+ */
+async function getQueueActivity(req, res) {
+    try {
+        const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+        const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 20));
+        const skip = (page - 1) * limit;
+
+        const where = { target_type: 'QUEUE', action: { in: ['CLAIM', 'RELEASE'] } };
+        if (req.query.action && ['CLAIM', 'RELEASE'].includes(req.query.action.toUpperCase())) {
+            where.action = req.query.action.toUpperCase();
+        }
+        if (req.query.moderatorId) {
+            where.moderator_id = req.query.moderatorId;
+        }
+
+        const [items, total] = await Promise.all([
+            prisma.moderator_logs.findMany({
+                where,
+                orderBy: { created_at: 'desc' },
+                skip,
+                take: limit,
+                include: {
+                    users: { select: { id: true, fullName: true, email: true } },
+                },
+            }),
+            prisma.moderator_logs.count({ where }),
+        ]);
+
+        return res.json({
+            success: true,
+            data: items,
+            pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+        });
+    } catch (err) {
+        console.error('Moderator - Get queue activity error:', err);
+        return res.status(500).json({
+            success: false,
+            message: 'Lỗi khi lấy lịch sử thao tác queue',
+            error: err.message,
+        });
+    }
+}
+
+// ═══════════════════ Moderation Queue ═══════════════════
+
+const VALID_QUEUE_STATUSES = ['OPEN', 'IN_PROGRESS', 'RESOLVED', 'ESCALATED', 'EXPIRED'];
+const VALID_QUEUE_PRIORITIES = ['LOW', 'NORMAL', 'HIGH', 'URGENT'];
+const VALID_QUEUE_CATEGORIES = [
+    'NEW_LISTING',
+    'DOCUMENT_REVIEW',
+    'REPORTED_CONTENT',
+    'FEEDBACK_REVIEW',
+    'USER_COMPLAINT',
+    'FRAUD_SUSPICION',
+    'POLICY_VIOLATION',
+];
+
+/**
+ * GET /moderator/queue
+ * Lấy danh sách moderation queue theo status, priority, category
+ * Query: ?status=OPEN&priority=HIGH&category=...&assignedTo=userId&page=1&limit=20
+ */
+async function getModerationQueue(req, res) {
+    try {
+        const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+        const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+        const skip = (page - 1) * limit;
+
+        const where = {};
+        if (req.query.status && VALID_QUEUE_STATUSES.includes(req.query.status.toUpperCase())) {
+            where.status = req.query.status.toUpperCase();
+        }
+        if (req.query.priority && VALID_QUEUE_PRIORITIES.includes(req.query.priority.toUpperCase())) {
+            where.priority = req.query.priority.toUpperCase();
+        }
+        if (req.query.category && VALID_QUEUE_CATEGORIES.includes(req.query.category)) {
+            where.category = req.query.category;
+        }
+        if (req.query.assignedTo) {
+            where.assigned_to = req.query.assignedTo;
+        }
+
+        const [items, total] = await Promise.all([
+            prisma.moderation_queue.findMany({
+                where,
+                orderBy: [
+                    { status: 'asc' },
+                    { priority: 'desc' },
+                    { created_at: 'asc' },
+                ],
+                skip,
+                take: limit,
+                include: {
+                    users: {
+                        select: { id: true, fullName: true },
+                    },
+                },
+            }),
+            prisma.moderation_queue.count({ where }),
+        ]);
+
+        return res.json({
+            success: true,
+            data: items,
+            pagination: {
+                page,
+                limit,
+                total,
+                totalPages: Math.ceil(total / limit),
+            },
+        });
+    } catch (err) {
+        console.error('Moderator - Get queue error:', err);
+        return res.status(500).json({
+            success: false,
+            message: 'Lỗi khi lấy moderation queue',
+            error: err.message,
+        });
+    }
+}
+
+/**
+ * PATCH /moderator/queue/:id/assign
+ * Claim task (assign to self) hoặc assign cho moderator khác (admin).
+ * Body: { assignTo?: userId } — nếu rỗng thì assign to self.
+ */
+async function assignQueueItem(req, res) {
+    try {
+        const { id } = req.params;
+        const assignTo = req.body?.assignTo || req.auth?.user?.id;
+        if (!assignTo) {
+            return res.status(401).json({ success: false, message: 'Chưa đăng nhập' });
+        }
+
+        const existing = await prisma.moderation_queue.findUnique({ where: { id } });
+        if (!existing) {
+            return res.status(404).json({ success: false, message: 'Không tìm thấy mục queue' });
+        }
+        if (existing.status !== 'OPEN') {
+            return res.status(400).json({
+                success: false,
+                message: `Mục này đã được giao (status: ${existing.status}), không thể claim`,
+            });
+        }
+
+        const updated = await prisma.$transaction(async (tx) => {
+            const u = await tx.moderation_queue.update({
+                where: { id },
+                data: {
+                    assigned_to: assignTo,
+                    assigned_at: new Date(),
+                    status: 'IN_PROGRESS',
+                    version: { increment: 1 },
+                },
+                include: {
+                    users: { select: { id: true, fullName: true } },
+                },
+            });
+            await tx.moderator_logs.create({
+                data: {
+                    moderator_id: assignTo,
+                    target_type: 'QUEUE',
+                    target_id: id,
+                    action: 'CLAIM',
+                    previous_status: 'OPEN',
+                    new_status: 'IN_PROGRESS',
+                    metadata: {
+                        queue_target_type: existing.target_type,
+                        queue_target_id: existing.target_id,
+                        queue_category: existing.category,
+                    },
+                },
+            });
+            return u;
+        });
+
+        return res.json({
+            success: true,
+            message: 'Đã nhận task thành công',
+            data: updated,
+        });
+    } catch (err) {
+        console.error('Moderator - Assign queue error:', err);
+        return res.status(500).json({
+            success: false,
+            message: 'Lỗi khi gán task',
+            error: err.message,
+        });
+    }
+}
+
+/**
+ * PATCH /moderator/queue/:id/release
+ * Trả task về queue (chỉ moderator đang xử lý mới release được).
+ */
+async function releaseQueueItem(req, res) {
+    try {
+        const { id } = req.params;
+        const moderatorId = req.auth?.user?.id;
+        if (!moderatorId) {
+            return res.status(401).json({ success: false, message: 'Chưa đăng nhập' });
+        }
+
+        const existing = await prisma.moderation_queue.findUnique({ where: { id } });
+        if (!existing) {
+            return res.status(404).json({ success: false, message: 'Không tìm thấy mục queue' });
+        }
+        if (existing.status !== 'IN_PROGRESS') {
+            return res.status(400).json({
+                success: false,
+                message: 'Chỉ có thể release task đang ở trạng thái IN_PROGRESS',
+            });
+        }
+        if (existing.assigned_to !== moderatorId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Bạn không phải người đang xử lý task này',
+            });
+        }
+
+        const updated = await prisma.$transaction(async (tx) => {
+            const u = await tx.moderation_queue.update({
+                where: { id },
+                data: {
+                    assigned_to: null,
+                    assigned_at: null,
+                    status: 'OPEN',
+                    version: { increment: 1 },
+                },
+            });
+            await tx.moderator_logs.create({
+                data: {
+                    moderator_id: moderatorId,
+                    target_type: 'QUEUE',
+                    target_id: id,
+                    action: 'RELEASE',
+                    previous_status: 'IN_PROGRESS',
+                    new_status: 'OPEN',
+                    metadata: {
+                        queue_target_type: existing.target_type,
+                        queue_target_id: existing.target_id,
+                        queue_category: existing.category,
+                    },
+                },
+            });
+            return u;
+        });
+
+        return res.json({
+            success: true,
+            message: 'Đã trả task về queue',
+            data: updated,
+        });
+    } catch (err) {
+        console.error('Moderator - Release queue error:', err);
+        return res.status(500).json({
+            success: false,
+            message: 'Lỗi khi release task',
+            error: err.message,
+        });
     }
 }
 
@@ -708,22 +1097,46 @@ async function handleReport(req, res) {
             });
         }
 
-        const updated = await prisma.report.update({
-            where: { id },
-            data: {
-                status,
-                reviewedBy: moderatorId,
-                moderatorNote: moderatorNote || null,
-                reviewedAt: new Date(),
-            },
-            include: {
-                reporter: {
-                    select: { id: true, fullName: true },
+        const action = status === 'APPROVED' ? 'APPROVE' : status === 'REJECTED' ? 'REJECT' : 'DISMISS';
+
+        const updated = await prisma.$transaction(async (tx) => {
+            const reportUpdated = await tx.report.update({
+                where: { id },
+                data: {
+                    status,
+                    reviewedBy: moderatorId,
+                    moderatorNote: moderatorNote || null,
+                    reviewedAt: new Date(),
                 },
-                moderator: {
-                    select: { id: true, fullName: true },
+                include: {
+                    reporter: {
+                        select: { id: true, fullName: true },
+                    },
+                    moderator: {
+                        select: { id: true, fullName: true },
+                    },
                 },
-            },
+            });
+            await tx.moderation_queue.updateMany({
+                where: {
+                    target_type: 'REPORT',
+                    target_id: id,
+                    status: 'OPEN',
+                },
+                data: { status: 'RESOLVED', resolved_at: new Date() },
+            });
+            await tx.moderator_logs.create({
+                data: {
+                    moderator_id: moderatorId,
+                    target_type: 'REPORT',
+                    target_id: id,
+                    action,
+                    previous_status: 'PENDING',
+                    new_status: status,
+                    note: moderatorNote || null,
+                },
+            });
+            return reportUpdated;
         });
 
         return res.json({
@@ -1025,16 +1438,39 @@ async function updateReviewStatus(req, res) {
         }
 
         const noteValue = moderatorNote ? String(moderatorNote).trim() : null;
+        const action = status === 'APPROVED' ? 'APPROVE' : status === 'REJECTED' ? 'REJECT' : 'HIDE';
 
-        const updated = await prisma.feedback.update({
-            where: { id: reviewId },
-            data: {
-                status,
-                reviewed_by: moderatorId,
-                reviewed_at: new Date(),
-                moderator_note: noteValue,
-                updated_at: new Date(),
-            },
+        const updated = await prisma.$transaction(async (tx) => {
+            const feedbackUpdated = await tx.feedback.update({
+                where: { id: reviewId },
+                data: {
+                    status,
+                    reviewed_by: moderatorId,
+                    reviewed_at: new Date(),
+                    moderator_note: noteValue,
+                    updated_at: new Date(),
+                },
+            });
+            await tx.moderation_queue.updateMany({
+                where: {
+                    target_type: 'FEEDBACK',
+                    target_id: reviewId,
+                    status: 'OPEN',
+                },
+                data: { status: 'RESOLVED', resolved_at: new Date() },
+            });
+            await tx.moderator_logs.create({
+                data: {
+                    moderator_id: moderatorId,
+                    target_type: 'FEEDBACK',
+                    target_id: reviewId,
+                    action,
+                    previous_status: existing.status,
+                    new_status: status,
+                    note: noteValue || null,
+                },
+            });
+            return feedbackUpdated;
         });
 
         const tenantId = existing.user_id;
@@ -1147,6 +1583,11 @@ module.exports = {
     getRentalStats,
     getRooms,
     moderateRoom,
+    getModeratorLogs,
+    getModerationQueue,
+    getQueueActivity,
+    assignQueueItem,
+    releaseQueueItem,
     getReports,
     handleReport,
     getReviewsForModeration,

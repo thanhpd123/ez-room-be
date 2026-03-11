@@ -104,38 +104,62 @@ async function createFeedback(req, res) {
 
         let feedback;
         if (existingFeedback && existingFeedback.status === 'REJECTED') {
-            // Cập nhật feedback bị từ chối, reset status về PENDING
-            feedback = await prisma.feedback.update({
-                where: { id: existingFeedback.id },
-                data: {
-                    rating: ratingNum,
-                    comment: commentStr,
-                    cleanliness_rating: cleanlinessRating != null ? parseInt(cleanlinessRating, 10) : null,
-                    location_rating: locationRating != null ? parseInt(locationRating, 10) : null,
-                    value_rating: valueRating != null ? parseInt(valueRating, 10) : null,
-                    landlord_rating: landlordRating != null ? parseInt(landlordRating, 10) : null,
-                    status: 'PENDING',
-                    reviewed_by: null,
-                    reviewed_at: null,
-                    moderator_note: null,
-                    updated_at: new Date(),
-                },
+            // Cập nhật feedback bị từ chối, reset status về PENDING + thêm vào ModerationQueue
+            feedback = await prisma.$transaction(async (tx) => {
+                const updated = await tx.feedback.update({
+                    where: { id: existingFeedback.id },
+                    data: {
+                        rating: ratingNum,
+                        comment: commentStr,
+                        cleanliness_rating: cleanlinessRating != null ? parseInt(cleanlinessRating, 10) : null,
+                        location_rating: locationRating != null ? parseInt(locationRating, 10) : null,
+                        value_rating: valueRating != null ? parseInt(valueRating, 10) : null,
+                        landlord_rating: landlordRating != null ? parseInt(landlordRating, 10) : null,
+                        status: 'PENDING',
+                        reviewed_by: null,
+                        reviewed_at: null,
+                        moderator_note: null,
+                        updated_at: new Date(),
+                    },
+                });
+                await tx.moderation_queue.create({
+                    data: {
+                        target_type: 'FEEDBACK',
+                        target_id: updated.id,
+                        priority: 'NORMAL',
+                        category: 'FEEDBACK_REVIEW',
+                        source: 'SYSTEM',
+                    },
+                });
+                return updated;
             });
         } else {
-            feedback = await prisma.feedback.create({
-                data: {
-                    user_id: userId,
-                    target_type: 'ROOM',
-                    target_id: roomId,
-                    rental_period_id: rentalPeriodId,
-                    rating: ratingNum,
-                    comment: commentStr,
-                    cleanliness_rating: cleanlinessRating != null ? parseInt(cleanlinessRating, 10) : null,
-                    location_rating: locationRating != null ? parseInt(locationRating, 10) : null,
-                    value_rating: valueRating != null ? parseInt(valueRating, 10) : null,
-                    landlord_rating: landlordRating != null ? parseInt(landlordRating, 10) : null,
-                    status: 'PENDING',
-                },
+            feedback = await prisma.$transaction(async (tx) => {
+                const created = await tx.feedback.create({
+                    data: {
+                        user_id: userId,
+                        target_type: 'ROOM',
+                        target_id: roomId,
+                        rental_period_id: rentalPeriodId,
+                        rating: ratingNum,
+                        comment: commentStr,
+                        cleanliness_rating: cleanlinessRating != null ? parseInt(cleanlinessRating, 10) : null,
+                        location_rating: locationRating != null ? parseInt(locationRating, 10) : null,
+                        value_rating: valueRating != null ? parseInt(valueRating, 10) : null,
+                        landlord_rating: landlordRating != null ? parseInt(landlordRating, 10) : null,
+                        status: 'PENDING',
+                    },
+                });
+                await tx.moderation_queue.create({
+                    data: {
+                        target_type: 'FEEDBACK',
+                        target_id: created.id,
+                        priority: 'NORMAL',
+                        category: 'FEEDBACK_REVIEW',
+                        source: 'SYSTEM',
+                    },
+                });
+                return created;
             });
         }
 

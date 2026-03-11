@@ -41,15 +41,27 @@ async function createReport(req, res) {
             });
         }
 
-        // Create report (unique constraint will catch duplicates)
-        const report = await prisma.report.create({
-            data: {
-                reporterId,
-                targetType,
-                targetId,
-                reason,
-                description: description || null,
-            },
+        // Create report + ModerationQueue (transaction)
+        const report = await prisma.$transaction(async (tx) => {
+            const created = await tx.report.create({
+                data: {
+                    reporterId,
+                    targetType,
+                    targetId,
+                    reason,
+                    description: description || null,
+                },
+            });
+            await tx.moderation_queue.create({
+                data: {
+                    target_type: 'REPORT',
+                    target_id: created.id,
+                    priority: 'NORMAL',
+                    category: 'REPORTED_CONTENT',
+                    source: 'USER_REPORT',
+                },
+            });
+            return created;
         });
 
         return res.status(201).json({
