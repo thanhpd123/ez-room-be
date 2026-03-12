@@ -28,116 +28,405 @@ const router = express.Router();
 router.use(verifyJWT);
 router.use(requireRole('MODERATOR', 'ADMIN'));
 
-// ═══════════════════ Logs & Queue (đặt trước routes có param động) ═══════════════
-
+/**
+ * @openapi
+ * /moderator/logs:
+ *   get:
+ *     tags: [Moderator]
+ *     summary: Log kiểm duyệt
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200:
+ *         description: Danh sách logs
+ */
 router.get('/logs', getModeratorLogs);
+
+/**
+ * @openapi
+ * /moderator/queue:
+ *   get:
+ *     tags: [Moderator]
+ *     summary: Hàng đợi kiểm duyệt
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200:
+ *         description: Danh sách queue
+ */
 router.get('/queue', getModerationQueue);
+
+/**
+ * @openapi
+ * /moderator/queue/activity:
+ *   get:
+ *     tags: [Moderator]
+ *     summary: Hoạt động queue
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200:
+ *         description: Activity data
+ */
 router.get('/queue/activity', getQueueActivity);
+
+/**
+ * @openapi
+ * /moderator/queue/{id}/assign:
+ *   patch:
+ *     tags: [Moderator]
+ *     summary: Gán item cho moderator
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Gán thành công
+ */
 router.patch('/queue/:id/assign', assignQueueItem);
+
+/**
+ * @openapi
+ * /moderator/queue/{id}/release:
+ *   patch:
+ *     tags: [Moderator]
+ *     summary: Trả item về queue
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Trả thành công
+ */
 router.patch('/queue/:id/release', releaseQueueItem);
 
 // ═══════════════════ Quản lý Users ═══════════════════
 
 /**
- * GET /moderator/users
- * Lấy danh sách users (phân trang, filter) - chỉ LANDLORD và TENANT
- * Query: ?page=1&limit=10&role=TENANT&status=ACTIVE&search=keyword
+ * @openapi
+ * /moderator/users:
+ *   get:
+ *     tags: [Moderator]
+ *     summary: Danh sách users (LANDLORD, TENANT)
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer }
+ *       - in: query
+ *         name: role
+ *         schema: { type: string }
+ *       - in: query
+ *         name: status
+ *         schema: { type: string }
+ *       - in: query
+ *         name: search
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Danh sách users
  */
 router.get('/users', getAllUsers);
 
 /**
- * GET /moderator/users/:userId
- * Lấy thông tin chi tiết một user
+ * @openapi
+ * /moderator/users/{userId}:
+ *   get:
+ *     tags: [Moderator]
+ *     summary: Chi tiết user
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Chi tiết user
+ *   patch:
+ *     tags: [Moderator]
+ *     summary: Thay đổi status user
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               status: { type: string, enum: [ACTIVE, BANNED, SUSPENDED] }
+ *     responses:
+ *       200:
+ *         description: Cập nhật thành công
  */
 router.get('/users/:userId', getUserById);
-
-/**
- * PATCH /moderator/users/:userId/status
- * Thay đổi status của một user (ACTIVE, BANNED, SUSPENDED)
- * Body: { status: 'BANNED' }
- */
 router.patch('/users/:userId/status', updateUserStatus);
 
 // ═══════════════════ Duyệt Rental (Bài đăng) ═══════════════════
 
 /**
- * GET /moderator/rentals/stats
- * Thống kê bài đăng cho dashboard
+ * @openapi
+ * /moderator/rentals/stats:
+ *   get:
+ *     tags: [Moderator]
+ *     summary: Thống kê bài đăng
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200:
+ *         description: Rental stats
  */
 router.get('/rentals/stats', getRentalStats);
 
 /**
- * GET /moderator/rentals/moderation
- * Lấy danh sách bài đăng cần duyệt
- * Query: ?status=PENDING&search=keyword&page=1&limit=50
+ * @openapi
+ * /moderator/rentals/moderation:
+ *   get:
+ *     tags: [Moderator]
+ *     summary: Danh sách rentals cần duyệt
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: query
+ *         name: status
+ *         schema: { type: string }
+ *       - in: query
+ *         name: search
+ *         schema: { type: string }
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer }
+ *     responses:
+ *       200:
+ *         description: Danh sách rentals
  */
 router.get('/rentals/moderation', getRentalsForModeration);
 
 /**
- * PATCH /moderator/rentals/:rentalId/status
- * Duyệt / từ chối bài đăng (đổi status)
- * Body: { status: 'AVAILABLE' | 'HIDDEN' }
+ * @openapi
+ * /moderator/rentals/{rentalId}/status:
+ *   patch:
+ *     tags: [Moderator]
+ *     summary: Duyệt/từ chối rental
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: rentalId
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               status: { type: string, enum: [AVAILABLE, HIDDEN] }
+ *     responses:
+ *       200:
+ *         description: Cập nhật thành công
  */
 router.patch('/rentals/:rentalId/status', updateRentalStatus);
 
 // ═══════════════════ Duyệt Room Post (Phòng) ═══════════════════
 
 /**
- * GET /moderator/rooms
- * Lấy danh sách phòng (để moderator kiểm duyệt)
- * Query: ?rentalId=xxx&page=1&limit=20
+ * @openapi
+ * /moderator/rooms:
+ *   get:
+ *     tags: [Moderator]
+ *     summary: Danh sách phòng cần duyệt
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: query
+ *         name: rentalId
+ *         schema: { type: string }
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer }
+ *     responses:
+ *       200:
+ *         description: Danh sách rooms
  */
 router.get('/rooms', getRooms);
 
 /**
- * PUT /moderator/rooms/:roomId/moderate
- * Duyệt / từ chối phòng
- * Body: { decision: 'approved' | 'rejected', note?: string }
+ * @openapi
+ * /moderator/rooms/{roomId}/moderate:
+ *   put:
+ *     tags: [Moderator]
+ *     summary: Duyệt/từ chối phòng
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: roomId
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               decision: { type: string, enum: [approved, rejected] }
+ *               note: { type: string }
+ *     responses:
+ *       200:
+ *         description: Duyệt thành công
  */
 router.put('/rooms/:roomId/moderate', moderateRoom);
 
 // ═══════════════════ Xử lý Báo cáo (Reports) ═══════════════════
 
 /**
- * GET /moderator/reports
- * Lấy danh sách báo cáo vi phạm
- * Query: ?status=PENDING&page=1&limit=20
+ * @openapi
+ * /moderator/reports:
+ *   get:
+ *     tags: [Moderator]
+ *     summary: Danh sách báo cáo vi phạm
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: query
+ *         name: status
+ *         schema: { type: string }
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer }
+ *     responses:
+ *       200:
+ *         description: Danh sách reports
  */
 router.get('/reports', getReports);
 
 /**
- * PATCH /moderator/reports/:id
- * Xử lý báo cáo (duyệt / từ chối / bỏ qua)
- * Body: { status: 'APPROVED' | 'REJECTED' | 'DISMISSED', moderatorNote?: string }
+ * @openapi
+ * /moderator/reports/{id}:
+ *   patch:
+ *     tags: [Moderator]
+ *     summary: Xử lý báo cáo
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               status: { type: string, enum: [APPROVED, REJECTED, DISMISSED] }
+ *               moderatorNote: { type: string }
+ *     responses:
+ *       200:
+ *         description: Xử lý thành công
  */
 router.patch('/reports/:id', handleReport);
 
 // ═══════════════════ Kiểm duyệt Reviews ═══════════════════
 
 /**
- * GET /moderator/reviews
- * Lấy danh sách reviews (feedback) để kiểm duyệt
- * Query: ?page=1&limit=20&status=PENDING|APPROVED|REJECTED|HIDDEN&roomId=&tenantId=&dateFrom=&dateTo=
+ * @openapi
+ * /moderator/reviews:
+ *   get:
+ *     tags: [Moderator]
+ *     summary: Danh sách reviews cần duyệt
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer }
+ *       - in: query
+ *         name: status
+ *         schema: { type: string }
+ *       - in: query
+ *         name: roomId
+ *         schema: { type: string }
+ *       - in: query
+ *         name: tenantId
+ *         schema: { type: string }
+ *       - in: query
+ *         name: dateFrom
+ *         schema: { type: string }
+ *       - in: query
+ *         name: dateTo
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Danh sách reviews
  */
 router.get('/reviews', getReviewsForModeration);
 
 /**
- * GET /moderator/reviews/:reviewId
- * Chi tiết feedback đầy đủ
+ * @openapi
+ * /moderator/reviews/{reviewId}:
+ *   get:
+ *     tags: [Moderator]
+ *     summary: Chi tiết review
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: reviewId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Chi tiết review
+ *   patch:
+ *     tags: [Moderator]
+ *     summary: Duyệt/từ chối review
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: reviewId
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               status: { type: string, enum: [APPROVED, REJECTED] }
+ *               moderatorNote: { type: string }
+ *     responses:
+ *       200:
+ *         description: Cập nhật thành công
+ *   delete:
+ *     tags: [Moderator]
+ *     summary: Xóa review vi phạm
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: reviewId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Xóa thành công
  */
 router.get('/reviews/:reviewId', getReviewDetail);
-
-/**
- * PATCH /moderator/reviews/:reviewId
- * Duyệt / từ chối review
- * Body: { status: 'APPROVED' | 'REJECTED', moderatorNote?: string }
- */
 router.patch('/reviews/:reviewId', updateReviewStatus);
-
-/**
- * DELETE /moderator/reviews/:reviewId
- * Xóa review vi phạm
- */
 router.delete('/reviews/:reviewId', deleteReview);
 
 module.exports = router;

@@ -12,56 +12,128 @@ const {
 
 const router = express.Router();
 
-// ============ PUBLIC ROUTES ============
-// Ai cũng xem được
-
 /**
- * GET /locations
- * Lấy danh sách địa điểm
- * Query: ?city=Hanoi&district=Cau Giay&search=keyword
+ * @openapi
+ * /locations:
+ *   get:
+ *     tags: [Locations]
+ *     summary: Lấy danh sách địa điểm
+ *     parameters:
+ *       - in: query
+ *         name: city
+ *         schema: { type: string }
+ *       - in: query
+ *         name: district
+ *         schema: { type: string }
+ *       - in: query
+ *         name: search
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Danh sách địa điểm
+ *   post:
+ *     tags: [Locations]
+ *     summary: Tạo địa điểm mới (ADMIN)
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [address]
+ *             properties:
+ *               address: { type: string }
+ *               district: { type: string }
+ *               city: { type: string }
+ *               latitude: { type: number }
+ *               longitude: { type: number }
+ *     responses:
+ *       201:
+ *         description: Tạo thành công
  */
 router.get('/', getAllLocations);
+router.post('/', verifyJWT, requireRole('ADMIN'), createLocation);
 
 /**
- * GET /locations/cities
- * Lấy danh sách các thành phố (distinct)
+ * @openapi
+ * /locations/cities:
+ *   get:
+ *     tags: [Locations]
+ *     summary: Lấy danh sách thành phố (distinct)
+ *     responses:
+ *       200:
+ *         description: Danh sách cities
  */
 router.get('/cities', getCities);
 
 /**
- * GET /locations/districts
- * Lấy danh sách quận/huyện
- * Query: ?city=Hanoi
+ * @openapi
+ * /locations/districts:
+ *   get:
+ *     tags: [Locations]
+ *     summary: Lấy danh sách quận/huyện
+ *     parameters:
+ *       - in: query
+ *         name: city
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Danh sách districts
  */
 router.get('/districts', getDistricts);
 
 /**
- * GET /locations/:id
- * Lấy chi tiết một địa điểm
+ * @openapi
+ * /locations/{id}:
+ *   get:
+ *     tags: [Locations]
+ *     summary: Lấy chi tiết địa điểm
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Chi tiết location
+ *   patch:
+ *     tags: [Locations]
+ *     summary: Cập nhật địa điểm (ADMIN)
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               address: { type: string }
+ *               district: { type: string }
+ *               city: { type: string }
+ *               latitude: { type: number }
+ *               longitude: { type: number }
+ *     responses:
+ *       200:
+ *         description: Cập nhật thành công
+ *   delete:
+ *     tags: [Locations]
+ *     summary: Xóa địa điểm (ADMIN) - không xóa được nếu có rentals
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Xóa thành công
  */
 router.get('/:id', getLocationById);
-
-// ============ ADMIN ONLY ROUTES ============
-// Chỉ Admin được thêm/sửa/xóa
-
-/**
- * POST /locations
- * Tạo địa điểm mới
- * Body: { address, district?, city?, latitude?, longitude? }
- */
-router.post('/', verifyJWT, requireRole('ADMIN'), createLocation);
-
-/**
- * PATCH /locations/:id
- * Cập nhật địa điểm
- * Body: { address?, district?, city?, latitude?, longitude? }
- */
 router.patch('/:id', verifyJWT, requireRole('ADMIN'), updateLocation);
-
-/**
- * DELETE /locations/:id
- * Xóa địa điểm (không thể xóa nếu có rentals liên kết)
- */
 router.delete('/:id', verifyJWT, requireRole('ADMIN'), deleteLocation);
 
 module.exports = router;

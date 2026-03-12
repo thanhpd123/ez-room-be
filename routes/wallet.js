@@ -12,26 +12,68 @@ const router = express.Router();
 router.use(verifyJWT);
 
 /**
- * GET /wallet
- * Get current user's wallet balance.
+ * @openapi
+ * /wallet:
+ *   get:
+ *     tags: [Wallet]
+ *     summary: Số dư ví của user
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200:
+ *         description: Thông tin ví
  */
 router.get('/', getMyWallet);
 
 /**
- * GET /wallet/transactions
- * Get current user's wallet transactions.
+ * @openapi
+ * /wallet/transactions:
+ *   get:
+ *     tags: [Wallet]
+ *     summary: Lịch sử giao dịch ví
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200:
+ *         description: Danh sách giao dịch
  */
 router.get('/transactions', getMyWalletTransactions);
 
 /**
- * POST /wallet/deposit
- * Simulate deposit (no real payment gateway).
+ * @openapi
+ * /wallet/deposit:
+ *   post:
+ *     tags: [Wallet]
+ *     summary: Nạp tiền (simulate, chưa tích hợp payment)
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               amount: { type: number }
+ *     responses:
+ *       200:
+ *         description: Nạp thành công
  */
 router.post('/deposit', depositToWallet);
 
 /**
- * POST /wallet/withdraw
- * Simulate withdraw (no real payout provider).
+ * @openapi
+ * /wallet/withdraw:
+ *   post:
+ *     tags: [Wallet]
+ *     summary: Rút tiền (simulate)
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               amount: { type: number }
+ *     responses:
+ *       200:
+ *         description: Rút thành công
  */
 router.post('/withdraw', withdrawFromWallet);
 
