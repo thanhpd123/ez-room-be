@@ -23,7 +23,7 @@ async function createRental(ownerId, body) {
         throw Object.assign(new Error('Dữ liệu không hợp lệ'), { statusCode: 400, errors });
     }
 
-    const { title, description, city, district, address, images, documents } = body;
+    const { title, description, city, district, address, images } = body;
 
     let location = await prisma.location.findFirst({
         where: {
@@ -54,22 +54,10 @@ async function createRental(ownerId, body) {
                 ...(images && images.length > 0
                     ? { images: { create: images.map((url) => ({ imageUrl: url })) } }
                     : {}),
-                ...(documents && documents.length > 0
-                    ? {
-                          rental_documents: {
-                              create: documents.map((doc) => ({
-                                  document_type: doc.documentType,
-                                  image_url: doc.imageUrl,
-                                  status: 'PENDING',
-                              })),
-                          },
-                      }
-                    : {}),
             },
             include: {
                 location: true,
                 images: true,
-                rental_documents: true,
             },
         });
         await tx.moderation_queue.create({
