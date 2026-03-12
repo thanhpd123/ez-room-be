@@ -12,24 +12,76 @@ const router = express.Router();
 router.use(verifyJWT);
 
 /**
- * GET /roommate/suggestions – potential roommates (same gender, lifestyle score).
- * Query: ?limit=20
+ * @openapi
+ * /roommate/suggestions:
+ *   get:
+ *     tags: [Roommate]
+ *     summary: Gợi ý bạn ở ghép (cùng giới, lifestyle)
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 20 }
+ *     responses:
+ *       200:
+ *         description: Danh sách gợi ý
  */
 router.get('/suggestions', getSuggestions);
 
 /**
- * GET /roommate/matches – list my sent + received match requests.
+ * @openapi
+ * /roommate/matches:
+ *   get:
+ *     tags: [Roommate]
+ *     summary: Danh sách match đã gửi và nhận
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200:
+ *         description: Danh sách matches
  */
 router.get('/matches', getMyMatches);
 
 /**
- * POST /roommate/request/:targetId – send a roommate match request (PENDING).
+ * @openapi
+ * /roommate/request/{targetId}:
+ *   post:
+ *     tags: [Roommate]
+ *     summary: Gửi yêu cầu kết bạn ở ghép (PENDING)
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: targetId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       201:
+ *         description: Gửi yêu cầu thành công
  */
 router.post('/request/:targetId', sendRequest);
 
 /**
- * PATCH /roommate/matches/:matchId – accept or reject (target only).
- * Body: { status: 'ACCEPTED' | 'REJECTED' }
+ * @openapi
+ * /roommate/matches/{matchId}:
+ *   patch:
+ *     tags: [Roommate]
+ *     summary: Chấp nhận hoặc từ chối match (target)
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: matchId
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [status]
+ *             properties:
+ *               status: { type: string, enum: [ACCEPTED, REJECTED] }
+ *     responses:
+ *       200:
+ *         description: Cập nhật thành công
  */
 router.patch('/matches/:matchId', updateMatchStatus);
 

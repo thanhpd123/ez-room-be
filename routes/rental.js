@@ -16,66 +16,172 @@ const { deleteRental: deleteRentalAdmin } = require('../controllers/rentals.cont
 const router = express.Router();
 
 /**
- * GET /rentals/stats
-
- * Thống kê bài đăng (Admin/Moderator)
-
- * Admin/Moderator dashboard rental stats. Must be before /:rentalId
+ * @openapi
+ * /rentals/stats:
+ *   get:
+ *     tags: [Rentals]
+ *     summary: Thống kê bài đăng (MODERATOR/ADMIN)
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200:
+ *         description: Thống kê rentals
  */
 router.get('/stats', verifyJWT, requireRole('MODERATOR', 'ADMIN'), getRentalStats);
 
 /**
- * GET /rentals/my-rentals
- * Landlord xem danh sách rentals của mình
- * ⚠️ Route này phải đặt TRƯỚC /:rentalId để tránh conflict
+ * @openapi
+ * /rentals/my-rentals:
+ *   get:
+ *     tags: [Rentals]
+ *     summary: Landlord xem danh sách rentals của mình
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200:
+ *         description: Danh sách rentals
  */
 router.get('/my-rentals', verifyJWT, requireRole('LANDLORD'), getMyRentals);
 
 /**
- * GET /rentals
- * Lấy danh sách rentals (có filter, phân trang) - PUBLIC
- * Query: ?page=1&limit=10&status=AVAILABLE&search=keyword
+ * @openapi
+ * /rentals:
+ *   get:
+ *     tags: [Rentals]
+ *     summary: Lấy danh sách rentals (PUBLIC)
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer }
+ *       - in: query
+ *         name: status
+ *         schema: { type: string, enum: [AVAILABLE, HIDDEN, PENDING, ARCHIVED] }
+ *       - in: query
+ *         name: search
+ *         schema: { type: string }
+ *   post:
+ *     tags: [Rentals]
+ *     summary: Landlord tạo rental mới (status=HIDDEN)
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               title: { type: string }
+ *               description: { type: string }
+ *               address: { type: string }
+ *               district: { type: string }
+ *               city: { type: string }
+ *               images: { type: array, items: { type: string } }
+ *     responses:
+ *       201:
+ *         description: Tạo thành công
  */
 router.get('/', getRentals);
+router.post('/', verifyJWT, requireRole('LANDLORD'), createRental);
 
 /**
- * GET /rentals/moderation
- * Moderator/Admin lấy danh sách rentals để duyệt
- * Query: ?status=PENDING&search=keyword&page=1&limit=50
+ * @openapi
+ * /rentals/moderation:
+ *   get:
+ *     tags: [Rentals]
+ *     summary: Moderator/Admin lấy rentals cần duyệt
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: query
+ *         name: status
+ *         schema: { type: string, enum: [PENDING] }
+ *       - in: query
+ *         name: search
+ *         schema: { type: string }
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer }
+ *     responses:
+ *       200:
+ *         description: Danh sách rentals cần duyệt
  */
 router.get('/moderation', verifyJWT, requireRole('MODERATOR', 'ADMIN'), getRentalsForModeration);
 
 /**
- * GET /rentals/:rentalId
- * Lấy chi tiết một rental - PUBLIC
+ * @openapi
+ * /rentals/{rentalId}:
+ *   get:
+ *     tags: [Rentals]
+ *     summary: Chi tiết rental (PUBLIC)
+ *     parameters:
+ *       - in: path
+ *         name: rentalId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Chi tiết rental
+ *   put:
+ *     tags: [Rentals]
+ *     summary: Landlord cập nhật rental
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: rentalId
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               title: { type: string }
+ *               description: { type: string }
+ *               address: { type: string }
+ *               district: { type: string }
+ *               city: { type: string }
+ *               images: { type: array, items: { type: string } }
+ *     responses:
+ *       200:
+ *         description: Cập nhật thành công
+ *   patch:
+ *     tags: [Rentals]
+ *     summary: Moderator/Admin duyệt rental
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: rentalId
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               status: { type: string, enum: [AVAILABLE, HIDDEN] }
+ *     responses:
+ *       200:
+ *         description: Cập nhật status thành công
+ *   delete:
+ *     tags: [Rentals]
+ *     summary: Landlord xóa rental / Admin xóa vĩnh viễn
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: rentalId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Xóa thành công
  */
 router.get('/:rentalId', getRentalById);
-
-/**
- * POST /rentals
- * Landlord tạo rental mới (status mặc định = HIDDEN)
- */
-router.post('/', verifyJWT, requireRole('LANDLORD'), createRental);
-
-/**
- * PATCH /rentals/:rentalId/status
- * Moderator/Admin duyệt rental (đổi status)
- * Body: { status: 'AVAILABLE' }
- */
 router.patch('/:rentalId/status', verifyJWT, requireRole('MODERATOR', 'ADMIN'), updateRentalStatus);
-
-/**
- * PUT /rentals/:rentalId
- * Landlord cập nhật rental của mình
- * Body: { title?, description?, address?, district?, city?, images? }
- */
 router.put('/:rentalId', verifyJWT, requireRole('LANDLORD'), updateRental);
-
-/**
- * DELETE /rentals/:rentalId
- * Landlord xóa rental của mình (không thể xóa nếu có đơn cọc đang hoạt động)
- * Admin xóa vĩnh viễn bài đăng
- */
 router.delete('/:rentalId', verifyJWT, requireRole('LANDLORD', 'ADMIN'), (req, res, next) => {
     const userRole = req.auth.user.role;
     

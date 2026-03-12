@@ -9,23 +9,51 @@ const {
 const router = express.Router();
 
 /**
- * GET /preorders/landlord
- * Get list of rental requests for landlord
- * Protected: LANDLORD only
+ * @openapi
+ * /preorders/landlord:
+ *   get:
+ *     tags: [Preorders]
+ *     summary: Landlord xem danh sách yêu cầu thuê
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200:
+ *         description: Danh sách preorder requests
  */
 router.get('/landlord', verifyJWT, requireRole('LANDLORD'), getLandlordRequests);
 
 /**
- * PATCH /preorders/:preorderId/confirm
- * Landlord confirms a rental request
- * Protected: LANDLORD only
+ * @openapi
+ * /preorders/{preorderId}/confirm:
+ *   patch:
+ *     tags: [Preorders]
+ *     summary: Landlord xác nhận yêu cầu thuê
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: preorderId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Xác nhận thành công
  */
 router.patch('/:preorderId/confirm', verifyJWT, requireRole('LANDLORD'), confirmRequest);
 
 /**
- * PATCH /preorders/:preorderId/reject
- * Landlord rejects a rental request
- * Protected: LANDLORD only
+ * @openapi
+ * /preorders/{preorderId}/reject:
+ *   patch:
+ *     tags: [Preorders]
+ *     summary: Landlord từ chối yêu cầu thuê
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: preorderId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Từ chối thành công
  */
 router.patch('/:preorderId/reject', verifyJWT, requireRole('LANDLORD'), rejectRequest);
 

@@ -5,15 +5,48 @@ const { createFeedback, getFeedbackByRentalPeriod } = require('../controllers/fe
 const router = express.Router();
 
 /**
- * POST /feedback
- * Tenant tạo đánh giá phòng
- * Body: { rentalPeriodId, roomId, rating, comment, cleanlinessRating?, locationRating?, valueRating?, landlordRating? }
+ * @openapi
+ * /feedback:
+ *   post:
+ *     tags: [Feedback]
+ *     summary: Tenant tạo đánh giá phòng
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [rentalPeriodId, roomId, rating, comment]
+ *             properties:
+ *               rentalPeriodId: { type: string }
+ *               roomId: { type: string }
+ *               rating: { type: number }
+ *               comment: { type: string }
+ *               cleanlinessRating: { type: number }
+ *               locationRating: { type: number }
+ *               valueRating: { type: number }
+ *               landlordRating: { type: number }
+ *     responses:
+ *       201:
+ *         description: Tạo đánh giá thành công
  */
 router.post('/', verifyJWT, createFeedback);
 
 /**
- * GET /feedback/by-rental-period/:rentalPeriodId
- * Tenant xem feedback của mình
+ * @openapi
+ * /feedback/by-rental-period/{rentalPeriodId}:
+ *   get:
+ *     tags: [Feedback]
+ *     summary: Xem feedback theo rental period
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: rentalPeriodId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Chi tiết feedback
  */
 router.get('/by-rental-period/:rentalPeriodId', verifyJWT, getFeedbackByRentalPeriod);
 

@@ -1,7 +1,9 @@
 const express = require('express');
 const cors = require('cors');
+const swaggerUi = require('swagger-ui-express');
 require('dotenv').config();
 
+const swaggerSpec = require('./config/swagger');
 const supabase = require('./config/supabase');
 const prisma = require('./config/prisma');
 const authRoutes = require('./routes/auth');
@@ -43,6 +45,16 @@ app.use(cors({
     credentials: true,
 }));
 app.use(express.json());
+
+// Swagger API Documentation
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
+  customCss: '.swagger-ui .topbar { display: none }',
+  customSiteTitle: 'EZ-Room API Docs',
+}));
+app.get('/api-docs.json', (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.send(swaggerSpec);
+});
 
 // Routes
 app.use('/auth', authRoutes);
