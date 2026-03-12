@@ -18,57 +18,186 @@ router.use(verifyJWT);
 router.use(requireRole('ADMIN'));
 
 /**
- * GET /admin/stats
- * Thống kê tổng quan cho dashboard
+ * @openapi
+ * /admin/stats:
+ *   get:
+ *     tags: [Admin]
+ *     summary: Thống kê tổng quan dashboard
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200:
+ *         description: Thống kê tổng quan
  */
 router.get('/stats', getDashboardStats);
 
 /**
- * GET /admin/users
- * Lấy danh sách users (phân trang, filter)
- * Query: ?page=1&limit=10&role=TENANT&status=ACTIVE&search=keyword
+ * @openapi
+ * /admin/users:
+ *   get:
+ *     tags: [Admin]
+ *     summary: Lấy danh sách users
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, default: 1 }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 10 }
+ *       - in: query
+ *         name: role
+ *         schema: { type: string, enum: [TENANT, LANDLORD, MODERATOR, ADMIN] }
+ *       - in: query
+ *         name: status
+ *         schema: { type: string, enum: [ACTIVE, BANNED, SUSPENDED] }
+ *       - in: query
+ *         name: search
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Danh sách users
  */
 router.get('/users', getAllUsers);
 
 /**
- * GET /admin/users/:userId
- * Lấy thông tin chi tiết một user (bao gồm rentals, wallet, preferences)
+ * @openapi
+ * /admin/users/{userId}:
+ *   get:
+ *     tags: [Admin]
+ *     summary: Chi tiết user (rentals, wallet, preferences)
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Chi tiết user
  */
 router.get('/users/:userId', getUserById);
 
 /**
- * PATCH /admin/users/:userId/role
- * Thay đổi role của user
- * Body: { role: 'LANDLORD' }
+ * @openapi
+ * /admin/users/{userId}/role:
+ *   patch:
+ *     tags: [Admin]
+ *     summary: Thay đổi role của user
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [role]
+ *             properties:
+ *               role: { type: string, enum: [LANDLORD, MODERATOR, ADMIN] }
+ *     responses:
+ *       200:
+ *         description: Cập nhật thành công
  */
 router.patch('/users/:userId/role', updateUserRole);
 
 /**
- * PATCH /admin/users/:userId/status
- * Thay đổi status của user (khóa/mở khóa)
- * Body: { status: 'BANNED' }
+ * @openapi
+ * /admin/users/{userId}/status:
+ *   patch:
+ *     tags: [Admin]
+ *     summary: Thay đổi status user (khóa/mở khóa)
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [status]
+ *             properties:
+ *               status: { type: string, enum: [ACTIVE, BANNED, SUSPENDED] }
+ *     responses:
+ *       200:
+ *         description: Cập nhật thành công
  */
 router.patch('/users/:userId/status', updateUserStatus);
 
-// ==================== WALLETS (READ-ONLY) ====================
-
 /**
- * GET /admin/wallets/stats
- * Thống kê tổng quan ví
+ * @openapi
+ * /admin/wallets/stats:
+ *   get:
+ *     tags: [Admin]
+ *     summary: Thống kê tổng quan ví
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200:
+ *         description: Thống kê ví
  */
 router.get('/wallets/stats', getWalletStats);
 
 /**
- * GET /admin/wallets
- * Lấy danh sách ví (phân trang, filter)
- * Query: ?page=1&limit=10&search=keyword&minBalance=0&maxBalance=999999
+ * @openapi
+ * /admin/wallets:
+ *   get:
+ *     tags: [Admin]
+ *     summary: Lấy danh sách ví
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer }
+ *       - in: query
+ *         name: search
+ *         schema: { type: string }
+ *       - in: query
+ *         name: minBalance
+ *         schema: { type: number }
+ *       - in: query
+ *         name: maxBalance
+ *         schema: { type: number }
+ *     responses:
+ *       200:
+ *         description: Danh sách ví
  */
 router.get('/wallets', getAllWallets);
 
 /**
- * GET /admin/wallets/:walletId/transactions
- * Lấy lịch sử giao dịch của ví (READ-ONLY)
- * Query: ?page=1&limit=20&type=DEPOSIT&status=SUCCESS
+ * @openapi
+ * /admin/wallets/{walletId}/transactions:
+ *   get:
+ *     tags: [Admin]
+ *     summary: Lịch sử giao dịch của ví
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: walletId
+ *         required: true
+ *         schema: { type: string }
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer }
+ *       - in: query
+ *         name: type
+ *         schema: { type: string, enum: [DEPOSIT, WITHDRAW, PAYMENT] }
+ *       - in: query
+ *         name: status
+ *         schema: { type: string, enum: [PENDING, SUCCESS, FAILED] }
+ *     responses:
+ *       200:
+ *         description: Lịch sử giao dịch
  */
 router.get('/wallets/:walletId/transactions', getWalletTransactions);
 

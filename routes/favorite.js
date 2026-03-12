@@ -13,23 +13,60 @@ const router = express.Router();
 router.use(verifyJWT);
 
 /**
- * GET /favorites – List my favorite rooms (full details)
+ * @openapi
+ * /favorites:
+ *   get:
+ *     tags: [Favorites]
+ *     summary: Danh sách phòng yêu thích (chi tiết đầy đủ)
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200:
+ *         description: Danh sách phòng yêu thích
  */
 router.get('/', getMyFavorites);
 
 /**
- * GET /favorites/ids – List only favorite room IDs (for sync/check)
+ * @openapi
+ * /favorites/ids:
+ *   get:
+ *     tags: [Favorites]
+ *     summary: Danh sách ID phòng yêu thích (để sync/check)
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200:
+ *         description: Mảng room IDs
  */
 router.get('/ids', getFavoriteIds);
 
 /**
- * POST /favorites/:roomId – Add room to favorites
+ * @openapi
+ * /favorites/{roomId}:
+ *   post:
+ *     tags: [Favorites]
+ *     summary: Thêm phòng vào yêu thích
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: roomId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       201:
+ *         description: Đã thêm vào yêu thích
+ *   delete:
+ *     tags: [Favorites]
+ *     summary: Xóa phòng khỏi yêu thích
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: roomId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Đã xóa khỏi yêu thích
  */
 router.post('/:roomId', addFavorite);
-
-/**
- * DELETE /favorites/:roomId – Remove room from favorites
- */
 router.delete('/:roomId', removeFavorite);
 
 module.exports = router;

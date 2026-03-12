@@ -5,38 +5,130 @@ const { register, registerOAuth, getCitizenCard, upsertCitizenCard, registerLand
 const router = express.Router();
 
 /**
- * GET /auth/suggest-password
- * Returns a suggested strong password (8+ chars, upper, number, special).
+ * @openapi
+ * /auth/suggest-password:
+ *   get:
+ *     tags: [Auth]
+ *     summary: Gợi ý mật khẩu mạnh
+ *     responses:
+ *       200:
+ *         description: Mật khẩu gợi ý (8+ ký tự, hoa, số, đặc biệt)
  */
 router.get('/suggest-password', suggestPassword);
 
 /**
- * POST /auth/register
- * Body: { fullName, email, phone?, password, confirmPassword }
+ * @openapi
+ * /auth/register:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Đăng ký tài khoản mới
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [fullName, email, password, confirmPassword]
+ *             properties:
+ *               fullName: { type: string }
+ *               email: { type: string, format: email }
+ *               phone: { type: string }
+ *               password: { type: string }
+ *               confirmPassword: { type: string }
+ *     responses:
+ *       201:
+ *         description: Đăng ký thành công
+ *       400:
+ *         description: Dữ liệu không hợp lệ
  */
 router.post('/register', register);
 
 /**
- * POST /auth/login
- * Body: { email, password }
+ * @openapi
+ * /auth/login:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Đăng nhập
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [email, password]
+ *             properties:
+ *               email: { type: string, format: email }
+ *               password: { type: string }
+ *     responses:
+ *       200:
+ *         description: Đăng nhập thành công, trả về JWT token
+ *       401:
+ *         description: Sai email hoặc mật khẩu
  */
 router.post('/login', login);
 
 /**
- * POST /auth/forgot-password
- * Body: { email }
+ * @openapi
+ * /auth/forgot-password:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Gửi email đặt lại mật khẩu
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [email]
+ *             properties:
+ *               email: { type: string, format: email }
+ *     responses:
+ *       200:
+ *         description: Email đã được gửi
  */
 router.post('/forgot-password', forgotPassword);
 
 /**
- * POST /auth/reset-password
- * Body: { token, newPassword, confirmPassword }
+ * @openapi
+ * /auth/reset-password:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Đặt lại mật khẩu với token
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [token, newPassword, confirmPassword]
+ *             properties:
+ *               token: { type: string }
+ *               newPassword: { type: string }
+ *               confirmPassword: { type: string }
+ *     responses:
+ *       200:
+ *         description: Đặt mật khẩu thành công
  */
 router.post('/reset-password', resetPassword);
 
 /**
- * POST /auth/register-oauth
- * Body: { email, fullName, phone? }
+ * @openapi
+ * /auth/register-oauth:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Đăng ký qua OAuth (Google, etc.)
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [email, fullName, role]
+ *             properties:
+ *               email: { type: string }
+ *               fullName: { type: string }
+ *               phone: { type: string }
+ *               role: { type: string, enum: [TENANT, LANDLORD] }
+ *     responses:
+ *       201:
+ *         description: Đăng ký thành công
  */
 router.post('/register-oauth', registerOAuth);
 
@@ -58,19 +150,105 @@ router.put('/citizen-card', verifyJWT, upsertCitizenCard);
 router.post('/register-landlord', verifyJWT, registerLandlord);
 
 /**
- * PATCH /auth/profile – Body: { fullName?, phone?, avatarUrl? }
+ * @openapi
+ * /auth/profile:
+ *   patch:
+ *     tags: [Auth]
+ *     summary: Cập nhật profile
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               fullName: { type: string }
+ *               phone: { type: string }
+ *               avatarUrl: { type: string }
+ *     responses:
+ *       200:
+ *         description: Cập nhật thành công
  */
 router.patch('/profile', verifyJWT, updateProfile);
 
+/**
+ * @openapi
+ * /auth/lifestyle:
+ *   get:
+ *     tags: [Auth]
+ *     summary: Lấy thông tin lifestyle
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200:
+ *         description: Thông tin lifestyle
+ *   put:
+ *     tags: [Auth]
+ *     summary: Cập nhật lifestyle
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               wakeTime: { type: string }
+ *               sleepTime: { type: string }
+ *               smoking: { type: boolean }
+ *               pets: { type: boolean }
+ *               cleanliness: { type: string }
+ *               noiseLevel: { type: string }
+ *     responses:
+ *       200:
+ *         description: Cập nhật thành công
+ */
 router.get('/lifestyle', verifyJWT, getLifestyle);
 router.put('/lifestyle', verifyJWT, upsertLifestyle);
+
+/**
+ * @openapi
+ * /auth/preference:
+ *   get:
+ *     tags: [Auth]
+ *     summary: Lấy preference tìm phòng
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200:
+ *         description: Thông tin preference
+ *   put:
+ *     tags: [Auth]
+ *     summary: Cập nhật preference tìm phòng
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               district: { type: string }
+ *               city: { type: string }
+ *               minPrice: { type: number }
+ *               maxPrice: { type: number }
+ *               roomType: { type: string }
+ *     responses:
+ *       200:
+ *         description: Cập nhật thành công
+ */
 router.get('/preference', verifyJWT, getPreference);
 router.put('/preference', verifyJWT, upsertPreference);
 
 /**
- * GET /auth/me
- * Returns the current user (Supabase OAuth or Backend JWT).
- * Requires: Authorization: Bearer <token>
+ * @openapi
+ * /auth/me:
+ *   get:
+ *     tags: [Auth]
+ *     summary: Lấy thông tin user hiện tại
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Thông tin user
+ *       401:
+ *         description: Chưa xác thực
  */
 router.get('/me', verifyJWT, (req, res) => {
     try {

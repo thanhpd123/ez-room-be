@@ -5,8 +5,14 @@ const { getRecommend } = require('../controllers/search.controller');
 const router = express.Router();
 
 /**
- * GET /search
- * Search API placeholder – extend with your search logic (e.g. semantic search).
+ * @openapi
+ * /search:
+ *   get:
+ *     tags: [Search]
+ *     summary: Search API (placeholder)
+ *     responses:
+ *       200:
+ *         description: Kết quả tìm kiếm
  */
 router.get('/', (req, res) => {
     res.json({
@@ -17,8 +23,15 @@ router.get('/', (req, res) => {
 });
 
 /**
- * GET /search/recommend
- * Personalized room recommendations (auth required). Returns rooms sorted by user preference.
+ * @openapi
+ * /search/recommend:
+ *   get:
+ *     tags: [Search]
+ *     summary: Gợi ý phòng cá nhân hóa (theo preference)
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200:
+ *         description: Danh sách phòng gợi ý
  */
 router.get('/recommend', verifyJWT, getRecommend);
 

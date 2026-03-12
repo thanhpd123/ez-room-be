@@ -18,9 +18,26 @@ const upload = multer({
 });
 
 /**
- * POST /upload/image
- * multipart/form-data, field name: "file"
- * Returns: { success: true, url: string } (Cloudinary secure_url)
+ * @openapi
+ * /upload/image:
+ *   post:
+ *     tags: [Upload]
+ *     summary: Tải ảnh lên Cloudinary
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               file:
+ *                 type: string
+ *                 format: binary
+ *     responses:
+ *       200:
+ *         description: { success: true, url: string }
+ *       400:
+ *         description: Không có file ảnh
  */
 router.post('/image', verifyJWT, upload.single('file'), (req, res) => {
     if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
@@ -63,10 +80,26 @@ router.post('/image', verifyJWT, upload.single('file'), (req, res) => {
 });
 
 /**
- * POST /upload/rental-image
- * Upload ảnh rental lên Supabase Storage bucket "rental-images".
- * multipart/form-data, field name: "file"
- * Returns: { success: true, url: string } (Supabase public URL)
+ * @openapi
+ * /upload/rental-image:
+ *   post:
+ *     tags: [Upload]
+ *     summary: Tải ảnh rental lên Supabase Storage
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               file:
+ *                 type: string
+ *                 format: binary
+ *     responses:
+ *       200:
+ *         description: { success: true, url: string }
+ *       400:
+ *         description: Không có file ảnh
  */
 router.post('/rental-image', verifyJWT, upload.single('file'), async (req, res) => {
     try {

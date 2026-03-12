@@ -24,14 +24,18 @@ model User {
   vip_role                                                 user_role_enum?
   vip_expires_at                                           DateTime?                  @db.Timestamp(6)
   favoriteRooms                                            FavoriteRoom[]
+  feedback_feedback_reviewed_byTousers                     feedback[]           @relation("feedback_reviewed_byTousers")
   feedback                                                 feedback[]
   lifestyleProfile                                         LifestyleProfile?
   receivedMessages                                         Message[]                  @relation("MessageReceiver")
   sentMessages                                             Message[]                  @relation("MessageSender")
+  moderation_queue                                         moderation_queue[]
+  moderator_logs                                           moderator_logs[]
   notifications                                            Notification[]
   payment_orders_payment_orders_refund_requested_byTousers payment_orders[]           @relation("payment_orders_refund_requested_byTousers")
   payment_orders_payment_orders_user_idTousers             payment_orders[]           @relation("payment_orders_user_idTousers")
   preorders                                                Preorder[]
+  rentals_rentals_moderated_byTousers                      Rental[]             @relation("rentals_moderated_byTousers")
   rentals                                                  Rental[]
   room_compare                                             room_compare[]
   rentalPeriods                                            RoomRentalPeriod[]
@@ -39,9 +43,12 @@ model User {
   reportsReviewed                                          Report[]                   @relation("ReportReviewedBy")
   roommate_matches_roommate_matches_requester_idTousers    RoommateMatch[]            @relation("roommate_matches_requester_idTousers")
   roommate_matches_roommate_matches_target_idTousers       RoommateMatch[]            @relation("roommate_matches_target_idTousers")
+  rooms                                                    rooms[]
   searchPrompts                                            SearchPrompt[]
   preference                                               UserPreference?
   user_vip_purchases                                       user_vip_purchases[]
+  user_warnings_user_warnings_issued_byTousers             user_warnings[]      @relation("user_warnings_issued_byTousers")
+  user_warnings_user_warnings_user_idTousers               user_warnings[]      @relation("user_warnings_user_idTousers")
   wallet                                                   Wallet?
   citizenCardVerification                                  CitizenCardVerification?   @relation("CitizenCardOwner")
   citizenCardReviews                                       CitizenCardVerification[]  @relation("CitizenCardReviewer")
@@ -172,18 +179,21 @@ model Location {
 }
 
 model Rental {
-  id               String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  owner_id         String              @db.Uuid
-  locationId       String?             @map("location_id") @db.Uuid
-  title            String              @db.VarChar(200)
-  description      String?
-  status           rental_status_enum? @default(PENDING)
-  createdAt        DateTime?           @default(now()) @map("created_at") @db.Timestamp(6)
-  rental_documents rental_documents[]
-  images           RentalImage[]
-  location         Location?           @relation(fields: [locationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  users            User                @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  rooms            rooms[]
+  id                                String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  owner_id                          String              @db.Uuid
+  locationId                        String?             @map("location_id") @db.Uuid
+  title                             String              @db.VarChar(200)
+  description                       String?
+  status                            rental_status_enum? @default(PENDING)
+  createdAt                         DateTime?           @default(now()) @map("created_at") @db.Timestamp(6)
+  moderated_by                      String?             @db.Uuid
+  moderated_at                      DateTime?           @db.Timestamp(6)
+  rental_documents                  rental_documents[]
+  images                            RentalImage[]
+  location                          Location?           @relation(fields: [locationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users_rentals_moderated_byTousers User?               @relation("rentals_moderated_byTousers", fields: [moderated_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users                             User                @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  rooms                             rooms[]
 
   @@index([owner_id], map: "idx_rentals_owner")
   @@map("rentals")
@@ -245,11 +255,15 @@ model RoomRentalPeriod {
   deposit     Decimal?                  @default(0) @db.Decimal(12, 2)
   status      rental_period_status_enum @default(ACTIVE)
   updatedAt   DateTime?                 @updatedAt @map("updated_at") @db.Timestamp(6)
+  preorder_id String?                   @unique @db.Uuid
+  feedback    feedback[]
+  preorders   Preorder?                 @relation(fields: [preorder_id], references: [id], onUpdate: NoAction)
   room        rooms                     @relation(fields: [roomId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   tenant      User                      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([status], map: "idx_room_rental_periods_status")
   @@index([userId], map: "idx_room_rental_periods_user_id")
+  @@index([preorder_id], map: "idx_room_rental_periods_preorder")
   @@map("room_rental_periods")
 }
 
@@ -265,19 +279,20 @@ model FavoriteRoom {
 }
 
 model Preorder {
-  id             String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId         String                 @map("user_id") @db.Uuid
-  roomId         String                 @map("room_id") @db.Uuid
-  status         preorder_status_enum?  @default(PENDING)
-  payment_status preorder_payment_enum? @default(UNPAID)
-  deposit_amount Decimal?               @db.Decimal(12, 2)
-  createdAt      DateTime?              @default(now()) @map("created_at") @db.Timestamp(6)
-  refund_status  preorder_refund_enum?  @default(NOT_APPLICABLE)
-  refund_amount  Decimal?               @db.Decimal(12, 2)
-  refunded_at    DateTime?              @db.Timestamp(6)
-  cancel_reason  String?                @db.VarChar(200)
-  room           rooms                  @relation(fields: [roomId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  user           User                   @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  id                  String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId              String                 @map("user_id") @db.Uuid
+  roomId              String                 @map("room_id") @db.Uuid
+  status              preorder_status_enum?  @default(PENDING)
+  payment_status      preorder_payment_enum? @default(UNPAID)
+  deposit_amount      Decimal?               @db.Decimal(12, 2)
+  createdAt           DateTime?              @default(now()) @map("created_at") @db.Timestamp(6)
+  refund_status       preorder_refund_enum?  @default(NOT_APPLICABLE)
+  refund_amount       Decimal?               @db.Decimal(12, 2)
+  refunded_at         DateTime?              @db.Timestamp(6)
+  cancel_reason       String?                @db.VarChar(200)
+  room                rooms                  @relation(fields: [roomId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user                User                   @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  room_rental_periods RoomRentalPeriod?
 
   @@index([userId], map: "idx_preorders_user")
   @@map("preorders")
@@ -356,14 +371,33 @@ model amenities {
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 /// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
 model feedback {
-  id          String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  user_id     String               @db.Uuid
-  target_type feedback_target_enum
-  target_id   String               @db.Uuid
-  rating      Int?
-  comment     String?
-  created_at  DateTime?            @default(now()) @db.Timestamp(6)
-  users       User                 @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  id                                String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id                           String                @db.Uuid
+  target_type                       feedback_target_enum
+  target_id                         String                @db.Uuid
+  rating                            Int?
+  comment                           String?
+  created_at                        DateTime?             @default(now()) @db.Timestamp(6)
+  rental_period_id                  String?               @db.Uuid
+  updated_at                        DateTime?             @db.Timestamptz(6)
+  cleanliness_rating                Int?
+  location_rating                   Int?
+  value_rating                      Int?
+  landlord_rating                   Int?
+  landlord_reply                    String?
+  replied_at                        DateTime?             @db.Timestamptz(6)
+  status                            feedback_status_enum? @default(PENDING)
+  reviewed_by                       String?               @db.Uuid
+  reviewed_at                       DateTime?             @db.Timestamptz(6)
+  moderator_note                    String?
+  room_rental_periods               RoomRentalPeriod?     @relation(fields: [rental_period_id], references: [id], onUpdate: NoAction)
+  users_feedback_reviewed_byTousers User?                 @relation("feedback_reviewed_byTousers", fields: [reviewed_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users                             User                  @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([user_id, rental_period_id], map: "uq_feedback_user_rental_period")
+  @@index([rental_period_id], map: "idx_feedback_rental_period")
+  @@index([target_type, target_id], map: "idx_feedback_target")
+  @@index([status], map: "idx_feedback_status")
 }
 
 /// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
@@ -379,24 +413,28 @@ model room_compare {
 
 /// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
 model rooms {
-  id            String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  rental_id     String             @db.Uuid
-  room_name     String?            @db.VarChar(100)
-  room_type     room_type_enum?    @default(PRIVATE)
-  price         Decimal            @db.Decimal(12, 2)
-  size_m2       Decimal?           @db.Decimal(8, 2)
-  max_people    Int?               @default(1)
-  created_at    DateTime?          @default(now()) @db.Timestamp(6)
-  description   String?
-  status        room_status_enum?  @default(PENDING)
-  updated_at    DateTime?          @updatedAt @db.Timestamp(6)
-  favorites     FavoriteRoom[]
-  preorders     Preorder[]
-  roomAmenities RoomAmenity[]      @relation("RoomAmenities")
-  room_compare  room_compare[]
-  images        RoomImage[]
-  rentalPeriods RoomRentalPeriod[]
-  rentals       Rental             @relation(fields: [rental_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  id                   String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  rental_id            String                @db.Uuid
+  room_name            String?               @db.VarChar(100)
+  room_type            room_type_enum?       @default(PRIVATE)
+  price                Decimal               @db.Decimal(12, 2)
+  size_m2              Decimal?              @db.Decimal(8, 2)
+  max_people           Int?                  @default(1)
+  created_at           DateTime?             @default(now()) @db.Timestamp(6)
+  description          String?
+  status               room_status_enum?     @default(PENDING)
+  updated_at           DateTime?             @updatedAt @db.Timestamp(6)
+  moderated_by         String?               @db.Uuid
+  moderated_at         DateTime?             @db.Timestamp(6)
+  favorites            FavoriteRoom[]
+  preorders            Preorder[]
+  roomAmenities        RoomAmenity[]         @relation("RoomAmenities")
+  room_compare         room_compare[]
+  images               RoomImage[]
+  rentalPeriods        RoomRentalPeriod[]
+  room_text_embeddings room_text_embeddings?
+  users                User?                 @relation(fields: [moderated_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  rentals              Rental                @relation(fields: [rental_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([rental_id], map: "idx_rooms_rental")
 }
@@ -485,10 +523,86 @@ model vip_packages {
   user_vip_purchases user_vip_purchases[]
 }
 
+model room_text_embeddings {
+  id         String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  room_id    String                @unique @db.Uuid
+  model      embedding_model_enum? @default(OPENAI)
+  embedding  Unsupported("vector")
+  content    String
+  created_at DateTime?             @default(now()) @db.Timestamp(6)
+  updated_at DateTime?             @db.Timestamp(6)
+  rooms      rooms                 @relation(fields: [room_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model moderation_queue {
+  id          String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  target_type mod_target_enum
+  target_id   String            @db.Uuid
+  priority    mod_priority_enum @default(NORMAL)
+  category    mod_category_enum
+  status      queue_status_enum @default(OPEN)
+  assigned_to String?           @db.Uuid
+  assigned_at DateTime?         @db.Timestamp(6)
+  resolved_at DateTime?         @db.Timestamp(6)
+  due_by      DateTime?         @db.Timestamp(6)
+  source      queue_source_enum @default(SYSTEM)
+  version     Int               @default(0)
+  created_at  DateTime          @default(now()) @db.Timestamp(6)
+  users       User?             @relation(fields: [assigned_to], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([assigned_to], map: "idx_mod_queue_assigned")
+  @@index([due_by], map: "idx_mod_queue_due")
+  @@index([status, priority], map: "idx_mod_queue_status_priority")
+  @@index([target_type, target_id], map: "idx_mod_queue_target")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model moderator_logs {
+  id              String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  moderator_id    String          @db.Uuid
+  target_type     mod_target_enum
+  target_id       String          @db.Uuid
+  action          mod_action_enum
+  previous_status String?         @db.VarChar(30)
+  new_status      String?         @db.VarChar(30)
+  reason          String?
+  note            String?
+  metadata        Json?
+  created_at      DateTime        @default(now()) @db.Timestamp(6)
+  users           User            @relation(fields: [moderator_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([action], map: "idx_mod_logs_action")
+  @@index([created_at], map: "idx_mod_logs_created")
+  @@index([moderator_id], map: "idx_mod_logs_moderator")
+  @@index([target_type, target_id], map: "idx_mod_logs_target")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model user_warnings {
+  id                                   String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id                              String             @db.Uuid
+  issued_by                            String             @db.Uuid
+  level                                warning_level_enum @default(WARNING)
+  reason                               String
+  related_type                         mod_target_enum?
+  related_id                           String?            @db.Uuid
+  expires_at                           DateTime?          @db.Timestamp(6)
+  acknowledged                         Boolean            @default(false)
+  acknowledged_at                      DateTime?          @db.Timestamp(6)
+  created_at                           DateTime           @default(now()) @db.Timestamp(6)
+  users_user_warnings_issued_byTousers User               @relation("user_warnings_issued_byTousers", fields: [issued_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users_user_warnings_user_idTousers   User               @relation("user_warnings_user_idTousers", fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([user_id], map: "idx_warnings_user")
+  @@index([user_id, level], map: "idx_warnings_user_level")
+}
+
 enum embedding_model_enum {
   CLIP
   OPENAI
   CUSTOM
+  GEMINI
 }
 
 enum feedback_target_enum {
@@ -675,4 +789,81 @@ enum refund_status_enum {
   SUCCESS
   FAILED
   CANCELLED
+}
+
+enum feedback_status_enum {
+  PENDING
+  APPROVED
+  REJECTED
+  HIDDEN
+}
+
+enum mod_action_enum {
+  APPROVE
+  REJECT
+  HIDE
+  CLAIM
+  RELEASE
+  UNHIDE
+  SUSPEND
+  UNSUSPEND
+  BAN
+  WARN
+  ESCALATE
+  DISMISS
+  REOPEN
+  FORCE_CANCEL
+  EDIT
+  DELETE
+}
+
+enum mod_category_enum {
+  NEW_LISTING
+  DOCUMENT_REVIEW
+  REPORTED_CONTENT
+  FEEDBACK_REVIEW
+  USER_COMPLAINT
+  FRAUD_SUSPICION
+  POLICY_VIOLATION
+}
+
+enum mod_priority_enum {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum mod_target_enum {
+  RENTAL
+  ROOM
+  USER
+  QUEUE
+  FEEDBACK
+  REPORT
+  DOCUMENT
+  PREORDER
+  MESSAGE
+}
+
+enum queue_source_enum {
+  SYSTEM
+  USER_REPORT
+  AUTO_FLAG
+  MANUAL
+}
+
+enum queue_status_enum {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  ESCALATED
+  EXPIRED
+}
+
+enum warning_level_enum {
+  NOTICE
+  WARNING
+  STRIKE
+  FINAL_WARNING
 }
