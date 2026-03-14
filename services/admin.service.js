@@ -198,12 +198,7 @@ async function approveWalletWithdrawal(transactionId, adminId) {
             throw Object.assign(new Error('Không tìm thấy ví'), { statusCode: 404 });
         }
 
-        const balance = Number(wallet.balance || 0);
         const amount = Number(withdrawalTx.amount || 0);
-        if (balance < amount) {
-            throw Object.assign(new Error('Số dư ví không đủ để duyệt rút tiền'), { statusCode: 400 });
-        }
-
         const updatedTx = await tx.walletTransaction.updateMany({
             where: {
                 id: transactionId,
@@ -219,10 +214,20 @@ async function approveWalletWithdrawal(transactionId, adminId) {
             throw Object.assign(new Error('Yêu cầu đã được xử lý trước đó'), { statusCode: 409 });
         }
 
-        const updatedWallet = await tx.wallet.update({
-            where: { id: wallet.id },
+        // Atomic decrement để tránh race condition khi nhiều yêu cầu rút được duyệt đồng thời.
+        const walletUpdated = await tx.wallet.updateMany({
+            where: {
+                id: wallet.id,
+                balance: { gte: amount },
+            },
             data: { balance: { decrement: amount } },
         });
+
+        if (walletUpdated.count === 0) {
+            throw Object.assign(new Error('Số dư ví không đủ để duyệt rút tiền'), { statusCode: 400 });
+        }
+
+        const updatedWallet = await tx.wallet.findUnique({ where: { id: wallet.id } });
 
         await tx.notification.create({
             data: {

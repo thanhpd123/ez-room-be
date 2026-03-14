@@ -72,9 +72,21 @@ async function withdrawFromWallet(req, res) {
     }
 }
 
+async function verifyWalletDeposit(req, res) {
+    try {
+        const { orderCode } = req.query;
+        const result = await walletService.verifyWalletDeposit(req.auth.user.id, orderCode);
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        const statusCode = err.statusCode || 500;
+        return res.status(statusCode).json({ success: false, message: err.message });
+    }
+}
+
 module.exports = {
     getMyWallet,
     getMyWalletTransactions,
     depositToWallet,
     withdrawFromWallet,
+    verifyWalletDeposit,
 };
