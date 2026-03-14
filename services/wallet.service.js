@@ -73,6 +73,18 @@ function mapOrderStatusToWalletTxStatus(orderStatus) {
     return 'FAILED';
 }
 
+async function getPayOSPaymentByOrderCode(payos, orderCode) {
+    if (payos?.paymentRequests?.get) {
+        return payos.paymentRequests.get(orderCode);
+    }
+
+    if (payos?.paymentRequests?.getByOrderCode) {
+        return payos.paymentRequests.getByOrderCode(orderCode);
+    }
+
+    throw new Error('SDK PayOS không hỗ trợ truy vấn theo orderCode');
+}
+
 async function syncPendingWalletTopups(userId, walletId) {
     const now = new Date();
     const pendingWindowStart = new Date(
@@ -132,7 +144,7 @@ async function syncPendingWalletTopups(userId, walletId) {
 
         let payosPayment;
         try {
-            payosPayment = await payos.paymentRequests.getByOrderCode(orderCode);
+            payosPayment = await getPayOSPaymentByOrderCode(payos, orderCode);
         } catch (_) {
             continue;
         }
@@ -451,7 +463,7 @@ async function verifyWalletDeposit(userId, orderCode) {
     const payos = getPayOSClient();
     let payosPayment;
     try {
-        payosPayment = await payos.paymentRequests.getByOrderCode(Number(orderCode));
+        payosPayment = await getPayOSPaymentByOrderCode(payos, Number(orderCode));
     } catch (err) {
         throw Object.assign(
             new Error(`Không thể xác minh với PayOS: ${err.message}`),
