@@ -9,6 +9,8 @@ const {
     getAllWallets,
     getWalletTransactions,
     getWalletStats,
+    approveWalletWithdrawal,
+    rejectWalletWithdrawal,
 } = require('../controllers/admin.controller');
 
 const router = express.Router();
@@ -200,5 +202,48 @@ router.get('/wallets', getAllWallets);
  *         description: Lịch sử giao dịch
  */
 router.get('/wallets/:walletId/transactions', getWalletTransactions);
+
+/**
+ * @openapi
+ * /admin/wallets/withdrawals/{transactionId}/approve:
+ *   patch:
+ *     tags: [Admin]
+ *     summary: Duyệt yêu cầu rút tiền ví
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: transactionId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Duyệt thành công
+ */
+router.patch('/wallets/withdrawals/:transactionId/approve', approveWalletWithdrawal);
+
+/**
+ * @openapi
+ * /admin/wallets/withdrawals/{transactionId}/reject:
+ *   patch:
+ *     tags: [Admin]
+ *     summary: Từ chối yêu cầu rút tiền ví
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: transactionId
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               reason: { type: string }
+ *     responses:
+ *       200:
+ *         description: Từ chối thành công
+ */
+router.patch('/wallets/withdrawals/:transactionId/reject', rejectWalletWithdrawal);
 
 module.exports = router;

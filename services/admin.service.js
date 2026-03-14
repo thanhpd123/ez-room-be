@@ -127,7 +127,7 @@ async function getWalletTransactions(walletId, params) {
  * Thống kê tổng quan ví
  */
 async function getWalletStats() {
-    const [totalWallets, aggregation, txByType, txByStatus] = await Promise.all([
+    const [totalWallets, aggregation, txByType, txByStatus, pendingWithdrawRequests] = await Promise.all([
         prisma.wallet.count(),
         prisma.wallet.aggregate({
             _sum: { balance: true },
@@ -143,6 +143,12 @@ async function getWalletStats() {
             by: ['status'],
             _count: true,
         }),
+        prisma.walletTransaction.count({
+            where: {
+                transaction_type: 'WITHDRAW',
+                status: 'PENDING',
+            },
+        }),
     ]);
 
     return {
@@ -151,6 +157,7 @@ async function getWalletStats() {
             totalBalance: aggregation._sum.balance || 0,
             avgBalance: aggregation._avg.balance || 0,
             maxBalance: aggregation._max.balance || 0,
+            pendingWithdrawRequests,
             transactionsByType: txByType.map((t) => ({
                 type: t.transaction_type,
                 count: t._count,
@@ -161,6 +168,139 @@ async function getWalletStats() {
                 count: s._count,
             })),
         },
+    };
+}
+
+/**
+ * Admin duyệt yêu cầu rút tiền
+ */
+async function approveWalletWithdrawal(transactionId, adminId) {
+    const result = await prisma.$transaction(async (tx) => {
+        const withdrawalTx = await tx.walletTransaction.findUnique({
+            where: { id: transactionId },
+            include: { wallet: true },
+        });
+
+        if (!withdrawalTx) {
+            throw Object.assign(new Error('Không tìm thấy giao dịch rút tiền'), { statusCode: 404 });
+        }
+
+        if (withdrawalTx.transaction_type !== 'WITHDRAW') {
+            throw Object.assign(new Error('Giao dịch không phải rút tiền'), { statusCode: 400 });
+        }
+
+        if (withdrawalTx.status !== 'PENDING') {
+            throw Object.assign(new Error(`Giao dịch đã được xử lý (${withdrawalTx.status})`), { statusCode: 400 });
+        }
+
+        const wallet = await tx.wallet.findUnique({ where: { id: withdrawalTx.walletId } });
+        if (!wallet) {
+            throw Object.assign(new Error('Không tìm thấy ví'), { statusCode: 404 });
+        }
+
+        const balance = Number(wallet.balance || 0);
+        const amount = Number(withdrawalTx.amount || 0);
+        if (balance < amount) {
+            throw Object.assign(new Error('Số dư ví không đủ để duyệt rút tiền'), { statusCode: 400 });
+        }
+
+        const updatedTx = await tx.walletTransaction.updateMany({
+            where: {
+                id: transactionId,
+                status: 'PENDING',
+            },
+            data: {
+                status: 'SUCCESS',
+                description: `${withdrawalTx.description || 'Yêu cầu rút tiền'} (Duyệt bởi admin ${adminId})`,
+            },
+        });
+
+        if (updatedTx.count === 0) {
+            throw Object.assign(new Error('Yêu cầu đã được xử lý trước đó'), { statusCode: 409 });
+        }
+
+        const updatedWallet = await tx.wallet.update({
+            where: { id: wallet.id },
+            data: { balance: { decrement: amount } },
+        });
+
+        await tx.notification.create({
+            data: {
+                userId: wallet.userId,
+                type: 'PAYMENT',
+                status: 'UNREAD',
+                title: 'Yêu cầu rút tiền đã được duyệt',
+                body: `Yêu cầu rút ${amount.toLocaleString('vi-VN')} VND đã được duyệt và trừ khỏi ví.`,
+            },
+        });
+
+        const latestTx = await tx.walletTransaction.findUnique({ where: { id: transactionId } });
+        return { wallet: updatedWallet, transaction: latestTx };
+    });
+
+    return {
+        message: 'Đã duyệt yêu cầu rút tiền',
+        data: result,
+    };
+}
+
+/**
+ * Admin từ chối yêu cầu rút tiền
+ */
+async function rejectWalletWithdrawal(transactionId, adminId, body) {
+    const reason = typeof body?.reason === 'string' ? body.reason.trim() : '';
+
+    const result = await prisma.$transaction(async (tx) => {
+        const withdrawalTx = await tx.walletTransaction.findUnique({
+            where: { id: transactionId },
+            include: { wallet: true },
+        });
+
+        if (!withdrawalTx) {
+            throw Object.assign(new Error('Không tìm thấy giao dịch rút tiền'), { statusCode: 404 });
+        }
+
+        if (withdrawalTx.transaction_type !== 'WITHDRAW') {
+            throw Object.assign(new Error('Giao dịch không phải rút tiền'), { statusCode: 400 });
+        }
+
+        if (withdrawalTx.status !== 'PENDING') {
+            throw Object.assign(new Error(`Giao dịch đã được xử lý (${withdrawalTx.status})`), { statusCode: 400 });
+        }
+
+        const updatedTx = await tx.walletTransaction.updateMany({
+            where: {
+                id: transactionId,
+                status: 'PENDING',
+            },
+            data: {
+                status: 'CANCELLED',
+                description: `${withdrawalTx.description || 'Yêu cầu rút tiền'} (Từ chối bởi admin ${adminId}${reason ? `: ${reason}` : ''})`,
+            },
+        });
+
+        if (updatedTx.count === 0) {
+            throw Object.assign(new Error('Yêu cầu đã được xử lý trước đó'), { statusCode: 409 });
+        }
+
+        await tx.notification.create({
+            data: {
+                userId: withdrawalTx.wallet.userId,
+                type: 'PAYMENT',
+                status: 'UNREAD',
+                title: 'Yêu cầu rút tiền bị từ chối',
+                body: reason
+                    ? `Yêu cầu rút tiền của bạn bị từ chối. Lý do: ${reason}`
+                    : 'Yêu cầu rút tiền của bạn bị từ chối.',
+            },
+        });
+
+        return tx.walletTransaction.findUnique({ where: { id: transactionId } });
+    });
+
+    return {
+        message: 'Đã từ chối yêu cầu rút tiền',
+        data: { transaction: result },
     };
 }
 
@@ -457,6 +597,8 @@ module.exports = {
     getAllWallets,
     getWalletTransactions,
     getWalletStats,
+    approveWalletWithdrawal,
+    rejectWalletWithdrawal,
     getAllUsers,
     getUserById,
     updateUserRole,
