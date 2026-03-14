@@ -50,6 +50,31 @@ async function getWalletStats(req, res) {
     }
 }
 
+async function approveWalletWithdrawal(req, res) {
+    try {
+        const result = await adminService.approveWalletWithdrawal(
+            req.params.transactionId,
+            req.auth.user.id
+        );
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi duyệt yêu cầu rút tiền');
+    }
+}
+
+async function rejectWalletWithdrawal(req, res) {
+    try {
+        const result = await adminService.rejectWalletWithdrawal(
+            req.params.transactionId,
+            req.auth.user.id,
+            req.body
+        );
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi từ chối yêu cầu rút tiền');
+    }
+}
+
 async function getAllUsers(req, res) {
     try {
         const result = await adminService.getAllUsers({
@@ -118,4 +143,6 @@ module.exports = {
     getAllWallets,
     getWalletTransactions,
     getWalletStats,
+    approveWalletWithdrawal,
+    rejectWalletWithdrawal,
 };
