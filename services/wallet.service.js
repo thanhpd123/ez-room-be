@@ -219,6 +219,10 @@ async function withdrawFromWallet(userId, body) {
 
     const result = await prisma.$transaction(async (tx) => {
         const wallet = await ensureWallet(userId, tx);
+
+        // Khóa theo ví trong phạm vi transaction để tránh 2 request rút chạy đồng thời.
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${wallet.id}))`;
+
         const currentBalance = toNumber(wallet.balance);
         const pendingWithdrawAgg = await tx.walletTransaction.aggregate({
             where: {
