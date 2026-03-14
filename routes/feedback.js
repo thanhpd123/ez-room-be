@@ -1,6 +1,6 @@
 const express = require('express');
 const { verifyJWT } = require('../middleware/auth');
-const { createFeedback, getFeedbackByRentalPeriod, getLandlordReviews, replyToReview } = require('../controllers/feedback.controller');
+const { createFeedback, getFeedbackByRentalPeriod, getRoomReviews, getLandlordReviews, replyToReview } = require('../controllers/feedback.controller');
 
 const router = express.Router();
 
@@ -75,6 +75,29 @@ router.get('/by-rental-period/:rentalPeriodId', verifyJWT, getFeedbackByRentalPe
  *         description: Danh sách đánh giá
  */
 router.get('/landlord/reviews', verifyJWT, getLandlordReviews);
+
+/**
+ * @openapi
+ * /feedback/room/{roomId}:
+ *   get:
+ *     tags: [Feedback]
+ *     summary: Lấy danh sách đánh giá của một phòng (công khai)
+ *     parameters:
+ *       - in: path
+ *         name: roomId
+ *         required: true
+ *         schema: { type: string }
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, default: 1 }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 5 }
+ *     responses:
+ *       200:
+ *         description: Danh sách đánh giá của phòng
+ */
+router.get('/room/:roomId', getRoomReviews);
 
 /**
  * @openapi

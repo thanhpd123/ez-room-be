@@ -9,7 +9,7 @@ datasource db {
 }
 
 model User {
-làddoongj  id                                                       String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  id                                                       String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   fullName                                                 String               @map("full_name") @db.VarChar(100)
   email                                                    String               @unique @db.Citext
   password_hash                                            String
