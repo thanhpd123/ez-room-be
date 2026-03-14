@@ -25,6 +25,45 @@ async function getLandlordRequests(req, res) {
     }
 }
 
+async function getMyPreorders(req, res) {
+    try {
+        const result = await preorderService.getMyPreorders(req.auth.user.id, {
+            status: req.query.status,
+            paymentStatus: req.query.paymentStatus,
+            page: req.query.page,
+            limit: req.query.limit,
+        });
+        return res.status(200).json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi tải danh sách đặt cọc của bạn');
+    }
+}
+
+async function createDepositPayment(req, res) {
+    try {
+        const result = await preorderService.createDepositPayment(req.auth.user.id, req.body);
+        return res.status(201).json({
+            success: true,
+            ...result,
+        });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi tạo thanh toán đặt cọc');
+    }
+}
+
+async function handlePayOSWebhook(req, res) {
+    try {
+        const result = await preorderService.handlePayOSWebhook(req.body);
+        return res.status(200).json({ success: true, ...result });
+    } catch (err) {
+        const statusCode = err.statusCode || 400;
+        return res.status(statusCode).json({
+            success: false,
+            message: err.message || 'Webhook không hợp lệ',
+        });
+    }
+}
+
 async function confirmRequest(req, res) {
     try {
         const result = await preorderService.confirmRequest(
@@ -59,6 +98,9 @@ async function rejectRequest(req, res) {
 }
 
 module.exports = {
+    getMyPreorders,
+    createDepositPayment,
+    handlePayOSWebhook,
     getLandlordRequests,
     confirmRequest,
     rejectRequest,

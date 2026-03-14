@@ -29,6 +29,7 @@
   },
   "homepage": "https://github.com/thanhpd123/ez-room-be#readme",
   "dependencies": {
+    "@payos/node": "^2.0.5",
     "@prisma/client": "^6.19.2",
     "@supabase/supabase-js": "^2.95.3",
     "axios": "^1.7.9",

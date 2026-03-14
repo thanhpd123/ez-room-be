@@ -42,7 +42,7 @@ router.get('/transactions', getMyWalletTransactions);
  * /wallet/deposit:
  *   post:
  *     tags: [Wallet]
- *     summary: Nạp tiền (simulate, chưa tích hợp payment)
+ *     summary: Tạo link nạp tiền ví qua PayOS
  *     security: [{ bearerAuth: [] }]
  *     requestBody:
  *       content:
@@ -53,7 +53,7 @@ router.get('/transactions', getMyWalletTransactions);
  *               amount: { type: number }
  *     responses:
  *       200:
- *         description: Nạp thành công
+ *         description: Tạo link nạp ví thành công
  */
 router.post('/deposit', depositToWallet);
 
@@ -62,7 +62,7 @@ router.post('/deposit', depositToWallet);
  * /wallet/withdraw:
  *   post:
  *     tags: [Wallet]
- *     summary: Rút tiền (simulate)
+ *     summary: Rút tiền từ ví nội bộ
  *     security: [{ bearerAuth: [] }]
  *     requestBody:
  *       content:
