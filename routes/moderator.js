@@ -20,6 +20,7 @@ const {
     getReviewDetail,
     updateReviewStatus,
     deleteReview,
+    getQueueStatusForTarget,
 } = require('../controllers/moderator.controller');
 
 const router = express.Router();
@@ -66,6 +67,28 @@ router.get('/queue', getModerationQueue);
  *         description: Activity data
  */
 router.get('/queue/activity', getQueueActivity);
+
+/**
+ * @openapi
+ * /moderator/queue/check:
+ *   get:
+ *     tags: [Moderator]
+ *     summary: Kiểm tra trạng thái queue của một target
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: query
+ *         name: targetType
+ *         required: true
+ *         schema: { type: string }
+ *       - in: query
+ *         name: targetId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Trạng thái queue
+ */
+router.get('/queue/check', getQueueStatusForTarget);
 
 /**
  * @openapi

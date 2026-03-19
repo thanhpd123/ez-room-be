@@ -439,6 +439,10 @@ async function getLandlordRequests(landlordId, params) {
             userId: true,
             roomId: true,
             status: true,
+            payment_status: true,
+            deposit_amount: true,
+            refund_status: true,
+            cancel_reason: true,
             createdAt: true,
             user: {
                 select: {
@@ -495,6 +499,12 @@ async function confirmRequest(preorderId, landlordId) {
         throw Object.assign(new Error('Chỉ có thể xác nhận yêu cầu đang chờ'), { statusCode: 400 });
     }
 
+    if (preorder.payment_status !== 'PAID') {
+        throw Object.assign(new Error('Chỉ có thể xác nhận yêu cầu đã thanh toán đặt cọc'), {
+            statusCode: 400,
+        });
+    }
+
     const updated = await prisma.preorder.update({
         where: { id: preorderId },
         data: { status: 'CONFIRMED' },
@@ -530,12 +540,103 @@ async function rejectRequest(preorderId, landlordId, body) {
         throw Object.assign(new Error('Chỉ có thể từ chối yêu cầu đang chờ'), { statusCode: 400 });
     }
 
-    const updated = await prisma.preorder.update({
-        where: { id: preorderId },
-        data: {
-            status: 'CANCELLED',
-            cancel_reason: reason || null,
-        },
+    const normalizedReason = typeof reason === 'string' ? reason.trim() : '';
+    const cancelReason = normalizedReason || null;
+
+    const updated = await prisma.$transaction(async (tx) => {
+        const latest = await tx.preorder.findUnique({ where: { id: preorderId } });
+        if (!latest) {
+            throw Object.assign(new Error('Yêu cầu không tồn tại'), { statusCode: 404 });
+        }
+
+        if (latest.status !== 'PENDING') {
+            throw Object.assign(new Error('Yêu cầu đã được xử lý trước đó'), { statusCode: 409 });
+        }
+
+        // Nếu tenant đã thanh toán cọc, hoàn về ví nội bộ ngay khi landlord từ chối.
+        if (latest.payment_status === 'PAID') {
+            const refundAmount = toNumber(latest.deposit_amount);
+            if (refundAmount <= 0) {
+                throw Object.assign(new Error('Không tìm thấy số tiền cọc hợp lệ để hoàn'), {
+                    statusCode: 400,
+                });
+            }
+
+            const tenantWallet = await tx.wallet.findUnique({ where: { userId: latest.userId } })
+                || await tx.wallet.create({
+                    data: {
+                        userId: latest.userId,
+                        balance: 0,
+                    },
+                });
+
+            await tx.wallet.update({
+                where: { id: tenantWallet.id },
+                data: { balance: { increment: refundAmount } },
+            });
+
+            await tx.walletTransaction.create({
+                data: {
+                    walletId: tenantWallet.id,
+                    transaction_type: 'REFUND',
+                    status: 'SUCCESS',
+                    amount: refundAmount,
+                    description: `Hoàn cọc preorder ${latest.id}${cancelReason ? ` - ${cancelReason}` : ''}`,
+                    ref_type: 'PREORDER_REFUND',
+                    ref_id: latest.id,
+                },
+            });
+
+            await tx.payment_orders.updateMany({
+                where: {
+                    purpose: 'PREORDER_DEPOSIT',
+                    ref_type: 'PREORDER',
+                    ref_id: latest.id,
+                    status: 'SUCCESS',
+                },
+                data: {
+                    vnp_refund_status: 'SUCCESS',
+                    refund_amount: refundAmount,
+                    refund_reason: cancelReason || 'LANDLORD_REJECTED',
+                    refund_requested_at: new Date(),
+                    refund_completed_at: new Date(),
+                    refund_requested_by: landlordId,
+                },
+            });
+
+            const cancelledAndRefunded = await tx.preorder.update({
+                where: { id: latest.id },
+                data: {
+                    status: 'CANCELLED',
+                    payment_status: 'REFUNDED',
+                    refund_status: 'REFUNDED',
+                    refund_amount: refundAmount,
+                    refunded_at: new Date(),
+                    cancel_reason: cancelReason,
+                },
+            });
+
+            await tx.notification.create({
+                data: {
+                    userId: latest.userId,
+                    type: 'PAYMENT',
+                    status: 'UNREAD',
+                    title: 'Yêu cầu đặt cọc bị từ chối',
+                    body: `Bạn đã được hoàn ${refundAmount.toLocaleString('vi-VN')} VND vào ví nội bộ.${cancelReason ? ` Lý do: ${cancelReason}` : ''}`,
+                },
+            });
+
+            return cancelledAndRefunded;
+        }
+
+        return tx.preorder.update({
+            where: { id: latest.id },
+            data: {
+                status: 'CANCELLED',
+                refund_status: 'NOT_APPLICABLE',
+                cancel_reason: cancelReason,
+            },
+        });
     });
 
     return { data: updated };

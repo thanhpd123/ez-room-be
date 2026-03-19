@@ -5,6 +5,7 @@ const {
     getMyWalletTransactions,
     depositToWallet,
     withdrawFromWallet,
+    verifyWalletDeposit,
 } = require('../controllers/wallet.controller');
 
 const router = express.Router();
@@ -76,5 +77,23 @@ router.post('/deposit', depositToWallet);
  *         description: Rút thành công
  */
 router.post('/withdraw', withdrawFromWallet);
+
+/**
+ * @openapi
+ * /wallet/verify-deposit:
+ *   get:
+ *     tags: [Wallet]
+ *     summary: Xác minh giao dịch nạp tiền từ PayOS return URL
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: query
+ *         name: orderCode
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Kết quả xác minh
+ */
+router.get('/verify-deposit', verifyWalletDeposit);
 
 module.exports = router;
