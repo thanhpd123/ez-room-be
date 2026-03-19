@@ -247,6 +247,19 @@ async function deleteReview(req, res) {
     }
 }
 
+async function getQueueStatusForTarget(req, res) {
+    try {
+        const { targetType, targetId } = req.query;
+        if (!targetType || !targetId) {
+            return res.status(400).json({ success: false, message: 'targetType và targetId là bắt buộc' });
+        }
+        const result = await moderatorService.getQueueStatusForTarget(targetType, targetId);
+        return res.json({ success: true, data: result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi kiểm tra trạng thái queue');
+    }
+}
+
 module.exports = {
     getAllUsers,
     getUserById,
@@ -267,4 +280,5 @@ module.exports = {
     getReviewDetail,
     updateReviewStatus,
     deleteReview,
+    getQueueStatusForTarget,
 };

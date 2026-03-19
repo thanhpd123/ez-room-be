@@ -24,6 +24,7 @@ const reportRoutes = require('./routes/report');
 const preorderRoutes = require('./routes/preorder');
 const feedbackRoutes = require('./routes/feedback');
 const documentRoutes = require('./routes/document');
+const { startStaleCron } = require('./cron/release-stale-tasks');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -141,4 +142,5 @@ app.use((err, req, res, next) => {
 
 app.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
+    startStaleCron();
 });
