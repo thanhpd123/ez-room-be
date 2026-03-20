@@ -849,6 +849,7 @@ enum mod_action_enum {
   DELETE
   CLAIM
   RELEASE
+  RESOLVE
 }
 
 enum mod_category_enum {

@@ -404,9 +404,93 @@ async function updateMatchStatus(userId, matchId, body) {
     };
 }
 
+/**
+ * Lấy public profile của một user (dùng cho roommate view)
+ */
+async function getPublicProfile(userId) {
+    const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+            id: true,
+            fullName: true,
+            avatarUrl: true,
+            gender: true,
+            createdAt: true,
+            lifestyleProfile: true,
+            preference: {
+                select: {
+                    preferred_districts: true,
+                    room_type: true,
+                    budget_min: true,
+                    budget_max: true,
+                    preferred_amenities: true,
+                    must_have_amenities: true,
+                    preferred_lease_months: true,
+                    pet_friendly: true,
+                    transport_nearby: true,
+                },
+            },
+        },
+    });
+
+    if (!user) {
+        throw Object.assign(new Error('Không tìm thấy người dùng'), { statusCode: 404 });
+    }
+
+    const lp = user.lifestyleProfile;
+    return {
+        data: {
+            user: {
+                id: user.id,
+                fullName: user.fullName,
+                avatarUrl: user.avatarUrl,
+                gender: user.gender,
+                memberSince: user.createdAt,
+            },
+            lifestyle: lp
+                ? {
+                      smoking: lp.smoking,
+                      drinking: lp.drinking,
+                      pets_allowed: lp.pets_allowed,
+                      sleep_schedule: lp.sleep_schedule,
+                      work_from_home: lp.work_from_home,
+                      personalityType: lp.personalityType,
+                      social_level: lp.social_level,
+                      cleanliness: lp.cleanliness,
+                      noise_tolerance: lp.noise_tolerance,
+                      guest_frequency: lp.guest_frequency,
+                      cooking_frequency: lp.cooking_frequency,
+                      wake_time: lp.wake_time,
+                      bedtime: lp.bedtime,
+                      occupation_type: lp.occupation_type,
+                      temperature_preference: lp.temperature_preference,
+                      quiet_hours_preference: lp.quiet_hours_preference,
+                      interests: lp.interests || [],
+                      languages: lp.languages || [],
+                      preferred_lease_months: lp.preferred_lease_months,
+                  }
+                : null,
+            preference: user.preference
+                ? {
+                      preferred_districts: user.preference.preferred_districts || [],
+                      room_type: user.preference.room_type,
+                      budget_min: user.preference.budget_min ? Number(user.preference.budget_min) : null,
+                      budget_max: user.preference.budget_max ? Number(user.preference.budget_max) : null,
+                      preferred_amenities: user.preference.preferred_amenities || [],
+                      must_have_amenities: user.preference.must_have_amenities || [],
+                      preferred_lease_months: user.preference.preferred_lease_months,
+                      pet_friendly: user.preference.pet_friendly,
+                      transport_nearby: user.preference.transport_nearby,
+                  }
+                : null,
+        },
+    };
+}
+
 module.exports = {
     getSuggestions,
     sendRequest,
     getMyMatches,
     updateMatchStatus,
+    getPublicProfile,
 };
