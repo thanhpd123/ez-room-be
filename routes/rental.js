@@ -10,6 +10,7 @@ const {
     updateRental,
     deleteRental,
     getRentalStats,
+    getLandlordDashboardStats,
 } = require('../controllers/rental.controller');
 const { deleteRental: deleteRentalAdmin } = require('../controllers/rentals.controller');
 
@@ -27,6 +28,19 @@ const router = express.Router();
  *         description: Thống kê rentals
  */
 router.get('/stats', verifyJWT, requireRole('MODERATOR', 'ADMIN'), getRentalStats);
+
+/**
+ * @openapi
+ * /rentals/dashboard:
+ *   get:
+ *     tags: [Rentals]
+ *     summary: Landlord xem dashboard thống kê
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200:
+ *         description: Thống kê dashboard landlord
+ */
+router.get('/dashboard', verifyJWT, requireRole('LANDLORD'), getLandlordDashboardStats);
 
 /**
  * @openapi

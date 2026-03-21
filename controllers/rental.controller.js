@@ -172,6 +172,15 @@ async function deleteRental(req, res) {
     }
 }
 
+async function getLandlordDashboardStats(req, res) {
+    try {
+        const result = await rentalService.getLandlordDashboardStats(req.auth.user.id);
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi lấy thống kê');
+    }
+}
+
 module.exports = {
     createRental,
     getRentals,
@@ -186,4 +195,5 @@ module.exports = {
     getPublicRentalById,
     getPublicRoomTypes,
     getLandlordProfile,
+    getLandlordDashboardStats,
 };
