@@ -910,6 +910,133 @@ async function deleteRental(rentalId, userId) {
     };
 }
 
+/**
+ * Get landlord dashboard statistics
+ */
+async function getLandlordDashboardStats(landlordId) {
+    const [
+        totalRentals,
+        totalRooms,
+        rentalsByStatus,
+        wallet,
+        totalFeedback,
+        feedbackStats,
+        totalPreorders,
+        preorderStats,
+    ] = await Promise.all([
+        // Tổng số nhà trọ
+        prisma.rental.count({ where: { owner_id: landlordId } }),
+        
+        // Tổng số phòng trọ
+        prisma.rooms.count({
+            where: { rentals: { owner_id: landlordId } },
+        }),
+        
+        // Trạng thái nhà trọ
+        prisma.rental.groupBy({
+            by: ['status'],
+            where: { owner_id: landlordId },
+            _count: { id: true },
+        }),
+        
+        // Ví của landlord
+        prisma.wallet.findUnique({
+            where: { userId: landlordId },
+            select: { balance: true },
+        }),
+        
+        // Tổng feedback nhận được
+        prisma.feedback.count({
+            where: {
+                target_type: 'ROOM',
+                status: 'APPROVED',
+                room_rental_periods: { room: { rentals: { owner_id: landlordId } } },
+            },
+        }),
+        
+        // Thống kê feedback (rating trung bình, etc)
+        prisma.feedback.aggregate({
+            where: {
+                target_type: 'ROOM',
+                status: 'APPROVED',
+                rating: { not: null },
+                room_rental_periods: { room: { rentals: { owner_id: landlordId } } },
+            },
+            _avg: { rating: true },
+            _count: { id: true },
+        }),
+        
+        // Tổng đặt cọc
+        prisma.preorder.count({
+            where: {
+                room: { rentals: { owner_id: landlordId } },
+            },
+        }),
+        
+        // Thống kê đặt cọc theo trạng thái
+        prisma.preorder.groupBy({
+            by: ['status'],
+            where: {
+                room: { rentals: { owner_id: landlordId } },
+            },
+            _count: { id: true },
+        }),
+    ]);
+
+    // Format rental status data
+    const rentalStatusMap = {
+        AVAILABLE: 0,
+        UNAVAILABLE: 0,
+        HIDDEN: 0,
+        PENDING: 0,
+        SUSPEND: 0,
+        VIOLATE: 0,
+    };
+    
+    rentalsByStatus.forEach((item) => {
+        if (rentalStatusMap.hasOwnProperty(item.status)) {
+            rentalStatusMap[item.status] = item._count.id;
+        }
+    });
+
+    // Format preorder status data
+    const preorderStatusMap = {
+        PENDING: 0,
+        CONFIRMED: 0,
+        CANCELLED: 0,
+        EXPIRED: 0,
+    };
+    
+    preorderStats.forEach((item) => {
+        if (preorderStatusMap.hasOwnProperty(item.status)) {
+            preorderStatusMap[item.status] = item._count.id;
+        }
+    });
+
+    return {
+        data: {
+            rentals: {
+                total: totalRentals,
+                byStatus: rentalStatusMap,
+            },
+            rooms: {
+                total: totalRooms,
+            },
+            wallet: {
+                balance: wallet ? Number(wallet.balance) : 0,
+            },
+            feedback: {
+                total: totalFeedback,
+                averageRating: feedbackStats._avg.rating ? Number(feedbackStats._avg.rating) : 0,
+            },
+            preorders: {
+                total: totalPreorders,
+                byStatus: preorderStatusMap,
+            },
+        },
+    };
+}
+
 module.exports = {
     createRental,
     getRentals,
@@ -924,4 +1051,5 @@ module.exports = {
     getPublicRentalById,
     getPublicRoomTypes,
     getLandlordProfile,
+    getLandlordDashboardStats,
 };

@@ -9,48 +9,51 @@ datasource db {
 }
 
 model User {
-làddoongj  id                                                       String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  fullName                                                 String               @map("full_name") @db.VarChar(100)
-  email                                                    String               @unique @db.Citext
+  id                                                       String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  fullName                                                 String                   @map("full_name") @db.VarChar(100)
+  email                                                    String                   @unique @db.Citext
   password_hash                                            String
-  phone                                                    String?              @db.VarChar(20)
-  avatarUrl                                                String?              @map("avatar_url")
-  role                                                     user_role_enum?      @default(TENANT)
-  status                                                   user_status_enum?    @default(ACTIVE)
-  createdAt                                                DateTime?            @default(now()) @map("created_at") @db.Timestamp(6)
-  updated_at                                               DateTime?            @default(now()) @db.Timestamp(6)
-  isVip                                                    Boolean?             @default(false) @map("is_vip")
-  gender                                                   String?              @db.VarChar(20)
+  phone                                                    String?                  @db.VarChar(20)
+  avatarUrl                                                String?                  @map("avatar_url")
+  role                                                     user_role_enum?          @default(TENANT)
+  status                                                   user_status_enum?        @default(ACTIVE)
+  createdAt                                                DateTime?                @default(now()) @map("created_at") @db.Timestamp(6)
+  updated_at                                               DateTime?                @default(now()) @db.Timestamp(6)
+  isVip                                                    Boolean?                 @default(false) @map("is_vip")
+  gender                                                   String?                  @db.VarChar(20)
   vip_role                                                 user_role_enum?
-  vip_expires_at                                           DateTime?            @db.Timestamp(6)
+  vip_expires_at                                           DateTime?                @db.Timestamp(6)
   favoriteRooms                                            FavoriteRoom[]
-  feedback_feedback_reviewed_byTousers                     feedback[]           @relation("feedback_reviewed_byTousers")
+  feedback_feedback_reviewed_byTousers                     feedback[]               @relation("feedback_reviewed_byTousers")
   feedback                                                 feedback[]
+  image_search_logs                                        image_search_logs[]
   lifestyleProfile                                         LifestyleProfile?
-  receivedMessages                                         Message[]            @relation("MessageReceiver")
-  sentMessages                                             Message[]            @relation("MessageSender")
+  receivedMessages                                         Message[]                @relation("MessageReceiver")
+  sentMessages                                             Message[]                @relation("MessageSender")
   moderation_queue                                         moderation_queue[]
   moderator_logs                                           moderator_logs[]
   notifications                                            Notification[]
-  payment_orders_payment_orders_refund_requested_byTousers payment_orders[]     @relation("payment_orders_refund_requested_byTousers")
-  payment_orders_payment_orders_user_idTousers             payment_orders[]     @relation("payment_orders_user_idTousers")
+  payment_orders_payment_orders_refund_requested_byTousers payment_orders[]         @relation("payment_orders_refund_requested_byTousers")
+  payment_orders_payment_orders_user_idTousers             payment_orders[]         @relation("payment_orders_user_idTousers")
   preorders                                                Preorder[]
-  rentals_rentals_moderated_byTousers                      Rental[]             @relation("rentals_moderated_byTousers")
+  rentals_rentals_moderated_byTousers                      Rental[]                 @relation("rentals_moderated_byTousers")
   rentals                                                  Rental[]
-  reportsFiled                                             Report[]             @relation("ReportReporter")
-  reportsReviewed                                          Report[]             @relation("ReportReviewedBy")
+  reportsFiled                                             Report[]                 @relation("ReportReporter")
+  reportsReviewed                                          Report[]                 @relation("ReportReviewedBy")
   room_compare                                             room_compare[]
   rentalPeriods                                            RoomRentalPeriod[]
-  roommate_matches_roommate_matches_requester_idTousers    RoommateMatch[]      @relation("roommate_matches_requester_idTousers")
-  roommate_matches_roommate_matches_target_idTousers       RoommateMatch[]      @relation("roommate_matches_target_idTousers")
+  roommate_matches_roommate_matches_requester_idTousers    RoommateMatch[]          @relation("roommate_matches_requester_idTousers")
+  roommate_matches_roommate_matches_target_idTousers       RoommateMatch[]          @relation("roommate_matches_target_idTousers")
   rooms                                                    rooms[]
   searchPrompts                                            SearchPrompt[]
   preference                                               UserPreference?
+  user_room_interactions                                   user_room_interactions[]
   user_vip_purchases                                       user_vip_purchases[]
-  user_warnings_user_warnings_issued_byTousers             user_warnings[]      @relation("user_warnings_issued_byTousers")
-  user_warnings_user_warnings_user_idTousers               user_warnings[]      @relation("user_warnings_user_idTousers")
+  user_warnings_user_warnings_issued_byTousers             user_warnings[]          @relation("user_warnings_issued_byTousers")
+  user_warnings_user_warnings_user_idTousers               user_warnings[]          @relation("user_warnings_user_idTousers")
   wallet                                                   Wallet?
   document_access_logs                                     document_access_log[]
+
 
   @@index([role], map: "idx_users_role")
   @@map("users")
@@ -187,7 +190,6 @@ model rental_documents {
   note          String?
   created_at    DateTime?            @default(now()) @map("created_at") @db.Timestamp(6)
   updated_at    DateTime?            @db.Timestamp(6)
-  
   rentals       Rental               @relation(fields: [rental_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   access_logs   document_access_log[]
 
@@ -360,8 +362,11 @@ model ClipVector {
   model         embedding_model_enum? @default(CLIP)
   embedding     Unsupported("vector")
   createdAt     DateTime?             @default(now()) @map("created_at") @db.Timestamp(6)
+  model_version String?               @default("ViT-B/32") @db.VarChar(50)
+  dimensions    Int?                  @default(512)
   room_images   RoomImage             @relation(fields: [room_image_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
+  @@index([embedding], map: "idx_clip_vectors_embedding")
   @@map("clip_vectors")
 }
 
@@ -417,28 +422,29 @@ model room_compare {
 
 /// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
 model rooms {
-  id                   String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  rental_id            String                @db.Uuid
-  room_name            String?               @db.VarChar(100)
-  room_type            room_type_enum?       @default(PRIVATE)
-  price                Decimal               @db.Decimal(12, 2)
-  size_m2              Decimal?              @db.Decimal(8, 2)
-  max_people           Int?                  @default(1)
-  created_at           DateTime?             @default(now()) @db.Timestamp(6)
-  description          String?
-  status               room_status_enum?     @default(PENDING)
-  updated_at           DateTime?             @updatedAt @db.Timestamp(6)
-  moderated_by         String?               @db.Uuid
-  moderated_at         DateTime?             @db.Timestamp(6)
-  favorites            FavoriteRoom[]
-  preorders            Preorder[]
-  roomAmenities        RoomAmenity[]         @relation("RoomAmenities")
-  room_compare         room_compare[]
-  images               RoomImage[]
-  rentalPeriods        RoomRentalPeriod[]
-  room_text_embeddings room_text_embeddings?
-  users                User?                 @relation(fields: [moderated_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  rentals              Rental                @relation(fields: [rental_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  id                     String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  rental_id              String                   @db.Uuid
+  room_name              String?                  @db.VarChar(100)
+  room_type              room_type_enum?          @default(PRIVATE)
+  price                  Decimal                  @db.Decimal(12, 2)
+  size_m2                Decimal?                 @db.Decimal(8, 2)
+  max_people             Int?                     @default(1)
+  created_at             DateTime?                @default(now()) @db.Timestamp(6)
+  description            String?
+  status                 room_status_enum?        @default(PENDING)
+  updated_at             DateTime?                @updatedAt @db.Timestamp(6)
+  moderated_by           String?                  @db.Uuid
+  moderated_at           DateTime?                @db.Timestamp(6)
+  favorites              FavoriteRoom[]
+  preorders              Preorder[]
+  roomAmenities          RoomAmenity[]            @relation("RoomAmenities")
+  room_compare           room_compare[]
+  images                 RoomImage[]
+  rentalPeriods          RoomRentalPeriod[]
+  room_text_embeddings   room_text_embeddings?
+  users                  User?                    @relation(fields: [moderated_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  rentals                Rental                   @relation(fields: [rental_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user_room_interactions user_room_interactions[]
 
   @@index([rental_id], map: "idx_rooms_rental")
 }
@@ -600,6 +606,30 @@ model user_warnings {
 
   @@index([user_id], map: "idx_warnings_user")
   @@index([user_id, level], map: "idx_warnings_user_level")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model user_room_interactions {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id          String    @db.Uuid
+  room_id          String    @db.Uuid
+  interaction_type String    @db.VarChar(50)
+  created_at       DateTime? @default(now()) @db.Timestamp(6)
+  rooms            rooms     @relation(fields: [room_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users            User      @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([room_id], map: "idx_user_room_interactions_room")
+  @@index([interaction_type], map: "idx_user_room_interactions_type")
+  @@index([user_id], map: "idx_user_room_interactions_user")
+}
+
+model image_search_logs {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id         String?   @db.Uuid
+  query_image_url String
+  results_count   Int?      @default(0)
+  created_at      DateTime? @default(now()) @db.Timestamp(6)
+  users           User?     @relation(fields: [user_id], references: [id], onUpdate: NoAction)
 }
 
 enum embedding_model_enum {
@@ -806,8 +836,6 @@ enum mod_action_enum {
   APPROVE
   REJECT
   HIDE
-  CLAIM
-  RELEASE
   UNHIDE
   SUSPEND
   UNSUSPEND
@@ -819,6 +847,9 @@ enum mod_action_enum {
   FORCE_CANCEL
   EDIT
   DELETE
+  CLAIM
+  RELEASE
+  RESOLVE
 }
 
 enum mod_category_enum {
@@ -842,12 +873,12 @@ enum mod_target_enum {
   RENTAL
   ROOM
   USER
-  QUEUE
   FEEDBACK
   REPORT
   DOCUMENT
   PREORDER
   MESSAGE
+  QUEUE
 }
 
 enum queue_source_enum {

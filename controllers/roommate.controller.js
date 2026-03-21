@@ -64,9 +64,19 @@ async function updateMatchStatus(req, res) {
     }
 }
 
+async function getProfile(req, res) {
+    try {
+        const result = await roommateService.getPublicProfile(req.params.userId);
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi tải hồ sơ');
+    }
+}
+
 module.exports = {
     getSuggestions,
     sendRequest,
     getMyMatches,
     updateMatchStatus,
+    getProfile,
 };

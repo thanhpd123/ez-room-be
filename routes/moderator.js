@@ -20,6 +20,8 @@ const {
     getReviewDetail,
     updateReviewStatus,
     deleteReview,
+    getQueueStatusForTarget,
+    getModeratorList,
 } = require('../controllers/moderator.controller');
 
 const router = express.Router();
@@ -27,6 +29,19 @@ const router = express.Router();
 // Tất cả routes yêu cầu: đăng nhập + role MODERATOR hoặc ADMIN
 router.use(verifyJWT);
 router.use(requireRole('MODERATOR', 'ADMIN'));
+
+/**
+ * @openapi
+ * /moderator/moderators:
+ *   get:
+ *     tags: [Moderator]
+ *     summary: Danh sách moderator (cho filter dropdown)
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200:
+ *         description: Danh sách moderators
+ */
+router.get('/moderators', getModeratorList);
 
 /**
  * @openapi
@@ -66,6 +81,28 @@ router.get('/queue', getModerationQueue);
  *         description: Activity data
  */
 router.get('/queue/activity', getQueueActivity);
+
+/**
+ * @openapi
+ * /moderator/queue/check:
+ *   get:
+ *     tags: [Moderator]
+ *     summary: Kiểm tra trạng thái queue của một target
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: query
+ *         name: targetType
+ *         required: true
+ *         schema: { type: string }
+ *       - in: query
+ *         name: targetId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Trạng thái queue
+ */
+router.get('/queue/check', getQueueStatusForTarget);
 
 /**
  * @openapi

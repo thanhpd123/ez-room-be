@@ -134,10 +134,21 @@ async function getQueueActivity(req, res) {
             limit: req.query.limit,
             action: req.query.action,
             moderatorId: req.query.moderatorId,
+            dateFrom: req.query.dateFrom,
+            dateTo: req.query.dateTo,
         });
         return res.json({ success: true, ...result });
     } catch (err) {
         return handleError(err, res, 'Lỗi khi lấy lịch sử thao tác queue');
+    }
+}
+
+async function getModeratorList(req, res) {
+    try {
+        const result = await moderatorService.getModeratorList();
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi lấy danh sách moderator');
     }
 }
 
@@ -247,6 +258,19 @@ async function deleteReview(req, res) {
     }
 }
 
+async function getQueueStatusForTarget(req, res) {
+    try {
+        const { targetType, targetId } = req.query;
+        if (!targetType || !targetId) {
+            return res.status(400).json({ success: false, message: 'targetType và targetId là bắt buộc' });
+        }
+        const result = await moderatorService.getQueueStatusForTarget(targetType, targetId);
+        return res.json({ success: true, data: result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi kiểm tra trạng thái queue');
+    }
+}
+
 module.exports = {
     getAllUsers,
     getUserById,
@@ -267,4 +291,6 @@ module.exports = {
     getReviewDetail,
     updateReviewStatus,
     deleteReview,
+    getQueueStatusForTarget,
+    getModeratorList,
 };

@@ -65,8 +65,24 @@ async function getLandlordReviews(req, res) {
     }
 }
 
-/**
- * Reply to a review
+/** * Get reviews for a specific room (public endpoint for tenants)
+ */
+async function getRoomReviews(req, res) {
+    try {
+        const { roomId } = req.params;
+        const { page = 1, limit = 5 } = req.query;
+
+        const result = await feedbackService.getRoomReviews(roomId, {
+            page: parseInt(page),
+            limit: parseInt(limit),
+        });
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi lấy danh sách đánh giá');
+    }
+}
+
+/** * Reply to a review
  */
 async function replyToReview(req, res) {
     try {
@@ -83,6 +99,7 @@ async function replyToReview(req, res) {
 module.exports = {
     createFeedback,
     getFeedbackByRentalPeriod,
+    getRoomReviews,
     getLandlordReviews,
     replyToReview,
 };
