@@ -13,6 +13,7 @@ const {
     getLandlordDashboardStats,
 } = require('../controllers/rental.controller');
 const { deleteRental: deleteRentalAdmin } = require('../controllers/rentals.controller');
+const { getRejectionInfo } = require('../controllers/moderator.controller');
 
 const router = express.Router();
 
@@ -54,6 +55,28 @@ router.get('/dashboard', verifyJWT, requireRole('LANDLORD'), getLandlordDashboar
  *         description: Danh sách rentals
  */
 router.get('/my-rentals', verifyJWT, requireRole('LANDLORD'), getMyRentals);
+
+/**
+ * @openapi
+ * /rentals/rejection-info:
+ *   get:
+ *     tags: [Rentals]
+ *     summary: Landlord lấy thông tin từ chối gần nhất
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: query
+ *         name: targetType
+ *         required: true
+ *         schema: { type: string, enum: [RENTAL, ROOM] }
+ *       - in: query
+ *         name: targetId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Thông tin từ chối
+ */
+router.get('/rejection-info', verifyJWT, requireRole('LANDLORD'), getRejectionInfo);
 
 /**
  * @openapi

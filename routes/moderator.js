@@ -22,6 +22,7 @@ const {
     deleteReview,
     getQueueStatusForTarget,
     getModeratorList,
+    getRejectionInfo,
 } = require('../controllers/moderator.controller');
 
 const router = express.Router();
@@ -465,5 +466,29 @@ router.get('/reviews', getReviewsForModeration);
 router.get('/reviews/:reviewId', getReviewDetail);
 router.patch('/reviews/:reviewId', updateReviewStatus);
 router.delete('/reviews/:reviewId', deleteReview);
+
+// ═══════════════════ Rejection Info (Audit Trail) ═══════════════════
+
+/**
+ * @openapi
+ * /moderator/rejection-info:
+ *   get:
+ *     tags: [Moderator]
+ *     summary: Lấy thông tin từ chối gần nhất của một target
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: query
+ *         name: targetType
+ *         required: true
+ *         schema: { type: string, enum: [RENTAL, ROOM] }
+ *       - in: query
+ *         name: targetId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Thông tin từ chối
+ */
+router.get('/rejection-info', getRejectionInfo);
 
 module.exports = router;
