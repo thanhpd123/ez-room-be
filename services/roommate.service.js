@@ -132,7 +132,7 @@ function computeLifestyleScore(myLifestyle, candidateLifestyle, myPrefs, candida
         }
     }
 
-    if (maxPossible === 0) return 50;
+    if (maxPossible === 0) return 0;
     return Math.min(100, Math.max(0, Math.round((score / maxPossible) * 100)));
 }
 
@@ -228,6 +228,9 @@ async function getSuggestions(userId, params) {
                 ? {
                       preferred_districts: u.preference.preferred_districts || [],
                       room_type: u.preference.room_type,
+                      budget_min: u.preference.budget_min ? Number(u.preference.budget_min) : null,
+                      budget_max: u.preference.budget_max ? Number(u.preference.budget_max) : null,
+                      preferredLocation: u.preference.preferredLocation || null,
                   }
                 : null,
             matchScore: Math.min(100, baseScore + genderBoost),
