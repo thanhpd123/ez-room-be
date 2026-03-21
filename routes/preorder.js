@@ -48,10 +48,12 @@ router.get('/mine', verifyJWT, requireRole('TENANT'), getMyPreorders);
  *         application/json:
  *           schema:
  *             type: object
- *             required: [roomId, depositAmount]
+ *             required: [roomId]
  *             properties:
  *               roomId: { type: string }
- *               depositAmount: { type: number, description: Số tiền VND, số nguyên dương }
+ *               depositMonths: { type: number, description: Số tháng cọc (ví dụ 0.5, 1, 2), hệ thống quy đổi sang phần trăm }
+ *               depositPercent: { type: number, description: Phần trăm tiền cọc theo giá phòng, phải < 100% }
+ *               depositAmount: { type: number, description: Legacy field (tùy chọn), hệ thống sẽ quy đổi sang phần trăm rồi chuẩn hóa lại }
  *               buyerName: { type: string }
  *               buyerEmail: { type: string }
  *               buyerPhone: { type: string }

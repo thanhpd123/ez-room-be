@@ -2,6 +2,10 @@ const prisma = require('../config/prisma');
 const { getPayOSClient } = require('../config/payos');
 
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+const PREORDER_DEFAULT_DEPOSIT_PERCENT = Number(process.env.PREORDER_DEFAULT_DEPOSIT_PERCENT || 30);
+const PREORDER_MIN_DEPOSIT_PERCENT = Number(process.env.PREORDER_MIN_DEPOSIT_PERCENT || 5);
+const PREORDER_MAX_DEPOSIT_PERCENT = Number(process.env.PREORDER_MAX_DEPOSIT_PERCENT || 80);
+const PREORDER_DEPOSIT_PERCENT_BASE_MONTHS = Number(process.env.PREORDER_DEPOSIT_PERCENT_BASE_MONTHS || 12);
 
 function toNumber(value) {
     if (value == null) return 0;
@@ -14,6 +18,59 @@ function parseDepositAmount(rawAmount) {
     if (!Number.isFinite(amount) || amount <= 0) return null;
     if (!Number.isInteger(amount)) return null;
     return amount;
+}
+
+function parseDepositPercent(rawPercent) {
+    const percent = Number(rawPercent);
+    if (!Number.isFinite(percent) || percent <= 0) return null;
+    if (percent >= 100) return null;
+    return Math.round(percent * 100) / 100;
+}
+
+function clampDepositPercentConfig() {
+    const min = Number.isFinite(PREORDER_MIN_DEPOSIT_PERCENT)
+        ? PREORDER_MIN_DEPOSIT_PERCENT
+        : 5;
+    const max = Number.isFinite(PREORDER_MAX_DEPOSIT_PERCENT)
+        ? PREORDER_MAX_DEPOSIT_PERCENT
+        : 80;
+    const safeMin = Math.max(0.01, Math.min(min, 99.99));
+    const safeMax = Math.max(safeMin, Math.min(max, 99.99));
+    const safeDefault = Number.isFinite(PREORDER_DEFAULT_DEPOSIT_PERCENT)
+        ? PREORDER_DEFAULT_DEPOSIT_PERCENT
+        : 30;
+    const defaultPercent = Math.max(safeMin, Math.min(safeDefault, safeMax));
+    return { min: safeMin, max: safeMax, defaultPercent };
+}
+
+function computeDepositAmountByPercent(roomPrice, depositPercent) {
+    const computed = Math.round((roomPrice * depositPercent) / 100);
+    return Number.isFinite(computed) && computed > 0 ? computed : 0;
+}
+
+function parseDepositMonths(rawMonths) {
+    const months = Number(rawMonths);
+    if (!Number.isFinite(months) || months <= 0) return null;
+    return Math.round(months * 100) / 100;
+}
+
+function convertMonthsToPercent(months) {
+    const baseMonths = Number.isFinite(PREORDER_DEPOSIT_PERCENT_BASE_MONTHS)
+        ? PREORDER_DEPOSIT_PERCENT_BASE_MONTHS
+        : 12;
+    const safeBaseMonths = Math.max(1, baseMonths);
+    return Math.round(((months / safeBaseMonths) * 100) * 100) / 100;
+}
+
+async function ensureWallet(userId, txClient) {
+    const wallet = await txClient.wallet.findUnique({ where: { userId } });
+    if (wallet) return wallet;
+    return txClient.wallet.create({
+        data: {
+            userId,
+            balance: 0,
+        },
+    });
 }
 
 function buildPayOSRedirectUrl(type, preorderId) {
@@ -83,14 +140,12 @@ function mapWalletTxnStatus(orderStatus) {
  */
 async function createDepositPayment(userId, body) {
     const roomId = String(body?.roomId || '').trim();
-    const depositAmount = parseDepositAmount(body?.depositAmount);
+    const rawDepositMonths = body?.depositMonths;
+    const rawDepositPercent = body?.depositPercent;
+    const rawDepositAmount = body?.depositAmount;
 
     if (!roomId) {
         throw Object.assign(new Error('Thiếu roomId'), { statusCode: 400 });
-    }
-
-    if (!depositAmount) {
-        throw Object.assign(new Error('Số tiền đặt cọc phải là số nguyên dương (VND)'), { statusCode: 400 });
     }
 
     const room = await prisma.rooms.findUnique({
@@ -108,6 +163,71 @@ async function createDepositPayment(userId, body) {
 
     if (room.rentals?.owner_id === userId) {
         throw Object.assign(new Error('Không thể tự đặt cọc phòng của chính bạn'), { statusCode: 400 });
+    }
+
+    const roomPrice = toNumber(room.price);
+    if (roomPrice <= 0) {
+        throw Object.assign(new Error('Giá phòng không hợp lệ để tính tiền đặt cọc'), {
+            statusCode: 400,
+        });
+    }
+
+    const { min, max, defaultPercent } = clampDepositPercentConfig();
+
+    let depositPercent;
+    let depositMonths = null;
+    if (rawDepositMonths != null && String(rawDepositMonths).trim() !== '') {
+        depositMonths = parseDepositMonths(rawDepositMonths);
+        if (!depositMonths) {
+            throw Object.assign(new Error('Số tháng đặt cọc phải là số dương'), {
+                statusCode: 400,
+            });
+        }
+        depositPercent = convertMonthsToPercent(depositMonths);
+    } else if (rawDepositPercent != null && String(rawDepositPercent).trim() !== '') {
+        depositPercent = parseDepositPercent(rawDepositPercent);
+        if (!depositPercent) {
+            throw Object.assign(
+                new Error('Phần trăm đặt cọc phải là số dương và nhỏ hơn 100%'),
+                { statusCode: 400 }
+            );
+        }
+    } else if (rawDepositAmount != null && String(rawDepositAmount).trim() !== '') {
+        const requestedAmount = parseDepositAmount(rawDepositAmount);
+        if (!requestedAmount) {
+            throw Object.assign(new Error('Số tiền đặt cọc phải là số nguyên dương (VND)'), {
+                statusCode: 400,
+            });
+        }
+        depositPercent = Math.round(((requestedAmount / roomPrice) * 100) * 100) / 100;
+    } else {
+        depositPercent = defaultPercent;
+    }
+
+    if (!Number.isFinite(depositPercent) || depositPercent <= 0) {
+        throw Object.assign(new Error('Không thể xác định phần trăm đặt cọc hợp lệ'), {
+            statusCode: 400,
+        });
+    }
+
+    if (depositPercent >= 100) {
+        throw Object.assign(new Error('Tiền đặt cọc không được bằng hoặc vượt 100% giá phòng'), {
+            statusCode: 400,
+        });
+    }
+
+    if (depositPercent < min || depositPercent > max) {
+        throw Object.assign(
+            new Error(`Phần trăm đặt cọc phải nằm trong khoảng ${min}% - ${max}%`),
+            { statusCode: 400 }
+        );
+    }
+
+    const depositAmount = computeDepositAmountByPercent(roomPrice, depositPercent);
+    if (depositAmount <= 0 || depositAmount >= roomPrice) {
+        throw Object.assign(new Error('Số tiền đặt cọc sau khi tính theo phần trăm không hợp lệ'), {
+            statusCode: 400,
+        });
     }
 
     const existing = await prisma.preorder.findFirst({
@@ -173,6 +293,8 @@ async function createDepositPayment(userId, body) {
                 preorderId: created.preorder.id,
                 roomId,
                 depositAmount,
+                depositPercent,
+                ...(depositMonths != null ? { depositMonths } : {}),
                 payment: {
                     provider: 'PAYOS',
                     orderCode: String(orderCode),
@@ -478,36 +600,109 @@ async function getLandlordRequests(landlordId, params) {
  * Landlord xác nhận yêu cầu thuê
  */
 async function confirmRequest(preorderId, landlordId) {
-    const preorder = await prisma.preorder.findUnique({
-        where: { id: preorderId },
-        include: {
-            room: { include: { rentals: true } },
-        },
-    });
+    const updated = await prisma.$transaction(async (tx) => {
+        // Lock theo preorder để tránh race-condition khi confirm đồng thời.
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${preorderId}))`;
 
-    if (!preorder) {
-        throw Object.assign(new Error('Yêu cầu không tồn tại'), { statusCode: 404 });
-    }
-
-    if (preorder.room.rentals.owner_id !== landlordId) {
-        throw Object.assign(new Error('Bạn không có quyền xác nhận yêu cầu này'), {
-            statusCode: 403,
+        const preorder = await tx.preorder.findUnique({
+            where: { id: preorderId },
+            include: {
+                room: { include: { rentals: true } },
+            },
         });
-    }
 
-    if (preorder.status !== 'PENDING') {
-        throw Object.assign(new Error('Chỉ có thể xác nhận yêu cầu đang chờ'), { statusCode: 400 });
-    }
+        if (!preorder) {
+            throw Object.assign(new Error('Yêu cầu không tồn tại'), { statusCode: 404 });
+        }
 
-    if (preorder.payment_status !== 'PAID') {
-        throw Object.assign(new Error('Chỉ có thể xác nhận yêu cầu đã thanh toán đặt cọc'), {
-            statusCode: 400,
+        if (preorder.room.rentals.owner_id !== landlordId) {
+            throw Object.assign(new Error('Bạn không có quyền xác nhận yêu cầu này'), {
+                statusCode: 403,
+            });
+        }
+
+        if (preorder.status === 'CONFIRMED') {
+            return preorder;
+        }
+
+        if (preorder.status !== 'PENDING') {
+            throw Object.assign(new Error('Chỉ có thể xác nhận yêu cầu đang chờ'), { statusCode: 400 });
+        }
+
+        if (preorder.payment_status !== 'PAID') {
+            throw Object.assign(new Error('Chỉ có thể xác nhận yêu cầu đã thanh toán đặt cọc'), {
+                statusCode: 400,
+            });
+        }
+
+        const payoutAmount = toNumber(preorder.deposit_amount);
+        if (payoutAmount <= 0) {
+            throw Object.assign(new Error('Không tìm thấy tiền cọc hợp lệ để chuyển cho chủ trọ'), {
+                statusCode: 400,
+            });
+        }
+
+        const landlordWallet = await ensureWallet(landlordId, tx);
+
+        const existingPayoutTxn = await tx.walletTransaction.findFirst({
+            where: {
+                walletId: landlordWallet.id,
+                transaction_type: 'PREORDER',
+                status: 'SUCCESS',
+                ref_type: 'PREORDER_PAYOUT',
+                ref_id: preorder.id,
+            },
+            select: { id: true },
         });
-    }
 
-    const updated = await prisma.preorder.update({
-        where: { id: preorderId },
-        data: { status: 'CONFIRMED' },
+        if (!existingPayoutTxn) {
+            await tx.wallet.update({
+                where: { id: landlordWallet.id },
+                data: { balance: { increment: payoutAmount } },
+            });
+
+            await tx.walletTransaction.create({
+                data: {
+                    walletId: landlordWallet.id,
+                    transaction_type: 'PREORDER',
+                    status: 'SUCCESS',
+                    amount: payoutAmount,
+                    description: `Nhận tiền đặt cọc preorder ${preorder.id}`,
+                    ref_type: 'PREORDER_PAYOUT',
+                    ref_id: preorder.id,
+                },
+            });
+
+            await tx.notification.create({
+                data: {
+                    userId: landlordId,
+                    type: 'PAYMENT',
+                    status: 'UNREAD',
+                    title: 'Bạn nhận được tiền đặt cọc',
+                    body: `Ví của bạn đã được cộng ${payoutAmount.toLocaleString('vi-VN')} VND từ yêu cầu thuê ${preorder.id}.`,
+                },
+            });
+        }
+
+        const confirmed = await tx.preorder.update({
+            where: { id: preorderId },
+            data: {
+                status: 'CONFIRMED',
+                refund_status: 'NOT_APPLICABLE',
+            },
+        });
+
+        await tx.notification.create({
+            data: {
+                userId: preorder.userId,
+                type: 'PREORDER',
+                status: 'UNREAD',
+                title: 'Yêu cầu đặt cọc đã được xác nhận',
+                body: 'Chủ trọ đã xác nhận yêu cầu của bạn. Tiền đặt cọc đã được ghi nhận cho chủ trọ.',
+            },
+        });
+
+        return confirmed;
     });
 
     return { data: updated };
