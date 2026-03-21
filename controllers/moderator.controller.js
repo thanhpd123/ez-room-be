@@ -134,10 +134,21 @@ async function getQueueActivity(req, res) {
             limit: req.query.limit,
             action: req.query.action,
             moderatorId: req.query.moderatorId,
+            dateFrom: req.query.dateFrom,
+            dateTo: req.query.dateTo,
         });
         return res.json({ success: true, ...result });
     } catch (err) {
         return handleError(err, res, 'Lỗi khi lấy lịch sử thao tác queue');
+    }
+}
+
+async function getModeratorList(req, res) {
+    try {
+        const result = await moderatorService.getModeratorList();
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi lấy danh sách moderator');
     }
 }
 
@@ -281,4 +292,5 @@ module.exports = {
     updateReviewStatus,
     deleteReview,
     getQueueStatusForTarget,
+    getModeratorList,
 };

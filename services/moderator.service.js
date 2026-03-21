@@ -368,6 +368,13 @@ async function updateRentalStatus(rentalId, body, moderatorId) {
             data: { status },
             include: { location: true },
         });
+        const queueItems = await tx.moderation_queue.findMany({
+            where: {
+                target_type: 'RENTAL',
+                target_id: rentalId,
+                status: { in: ['OPEN', 'IN_PROGRESS'] },
+            },
+        });
         await tx.moderation_queue.updateMany({
             where: {
                 target_type: 'RENTAL',
@@ -387,6 +394,24 @@ async function updateRentalStatus(rentalId, body, moderatorId) {
                 note: body.note || null,
             },
         });
+        // Log RESOLVE action for queue activity tracking
+        for (const qi of queueItems) {
+            await tx.moderator_logs.create({
+                data: {
+                    moderator_id: moderatorId,
+                    target_type: 'QUEUE',
+                    target_id: qi.id,
+                    action: 'RESOLVE',
+                    previous_status: qi.status,
+                    new_status: 'RESOLVED',
+                    metadata: {
+                        queue_target_type: qi.target_type,
+                        queue_target_id: qi.target_id,
+                        queue_category: qi.category,
+                    },
+                },
+            });
+        }
         return rental;
     });
 
@@ -512,6 +537,13 @@ async function moderateRoom(roomId, body, moderatorId) {
                 rentals: { include: { location: true } },
             },
         });
+        const roomQueueItems = await tx.moderation_queue.findMany({
+            where: {
+                target_type: 'ROOM',
+                target_id: roomId,
+                status: { in: ['OPEN', 'IN_PROGRESS'] },
+            },
+        });
         await tx.moderation_queue.updateMany({
             where: {
                 target_type: 'ROOM',
@@ -531,6 +563,24 @@ async function moderateRoom(roomId, body, moderatorId) {
                 note: note || null,
             },
         });
+        // Log RESOLVE action for queue activity tracking
+        for (const qi of roomQueueItems) {
+            await tx.moderator_logs.create({
+                data: {
+                    moderator_id: moderatorId,
+                    target_type: 'QUEUE',
+                    target_id: qi.id,
+                    action: 'RESOLVE',
+                    previous_status: qi.status,
+                    new_status: 'RESOLVED',
+                    metadata: {
+                        queue_target_type: qi.target_type,
+                        queue_target_id: qi.target_id,
+                        queue_category: qi.category,
+                    },
+                },
+            });
+        }
         return updatedRoom;
     });
 
@@ -575,14 +625,23 @@ async function getModeratorLogs(params) {
 }
 
 async function getQueueActivity(params) {
-    const { page = 1, limit = 20, action, moderatorId } = params;
+    const { page = 1, limit = 20, action, moderatorId, dateFrom, dateTo } = params;
     const pageNum = Math.max(1, parseInt(page));
     const limitNum = Math.min(50, Math.max(1, parseInt(limit)));
     const skip = (pageNum - 1) * limitNum;
 
-    const where = { target_type: 'QUEUE', action: { in: ['CLAIM', 'RELEASE'] } };
-    if (action && ['CLAIM', 'RELEASE'].includes(action.toUpperCase())) where.action = action.toUpperCase();
+    const where = { target_type: 'QUEUE', action: { in: ['CLAIM', 'RELEASE', 'RESOLVE'] } };
+    if (action && ['CLAIM', 'RELEASE', 'RESOLVE'].includes(action.toUpperCase())) where.action = action.toUpperCase();
     if (moderatorId) where.moderator_id = moderatorId;
+    if (dateFrom || dateTo) {
+        where.created_at = {};
+        if (dateFrom) where.created_at.gte = new Date(dateFrom);
+        if (dateTo) {
+            const end = new Date(dateTo);
+            end.setHours(23, 59, 59, 999);
+            where.created_at.lte = end;
+        }
+    }
 
     const [items, total] = await Promise.all([
         prisma.moderator_logs.findMany({
@@ -601,6 +660,15 @@ async function getQueueActivity(params) {
         data: items,
         pagination: { page: pageNum, limit: limitNum, total, totalPages: Math.ceil(total / limitNum) },
     };
+}
+
+async function getModeratorList() {
+    const moderators = await prisma.user.findMany({
+        where: { role: 'MODERATOR' },
+        select: { id: true, fullName: true, email: true },
+        orderBy: { fullName: 'asc' },
+    });
+    return { data: moderators };
 }
 
 // ═══════════════════ Moderation Queue ═══════════════════
@@ -814,6 +882,13 @@ async function handleReport(id, body, moderatorId) {
                 moderator: { select: { id: true, fullName: true } },
             },
         });
+        const reportQueueItems = await tx.moderation_queue.findMany({
+            where: {
+                target_type: 'REPORT',
+                target_id: id,
+                status: { in: ['OPEN', 'IN_PROGRESS'] },
+            },
+        });
         await tx.moderation_queue.updateMany({
             where: {
                 target_type: 'REPORT',
@@ -833,6 +908,24 @@ async function handleReport(id, body, moderatorId) {
                 note: moderatorNote || null,
             },
         });
+        // Log RESOLVE action for queue activity tracking
+        for (const qi of reportQueueItems) {
+            await tx.moderator_logs.create({
+                data: {
+                    moderator_id: moderatorId,
+                    target_type: 'QUEUE',
+                    target_id: qi.id,
+                    action: 'RESOLVE',
+                    previous_status: qi.status,
+                    new_status: 'RESOLVED',
+                    metadata: {
+                        queue_target_type: qi.target_type,
+                        queue_target_id: qi.target_id,
+                        queue_category: qi.category,
+                    },
+                },
+            });
+        }
         return reportUpdated;
     });
 
@@ -1195,4 +1288,5 @@ module.exports = {
     updateReviewStatus,
     deleteReview,
     getQueueStatusForTarget,
+    getModeratorList,
 };

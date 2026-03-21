@@ -5,6 +5,7 @@ const {
     sendRequest,
     getMyMatches,
     updateMatchStatus,
+    getProfile,
 } = require('../controllers/roommate.controller');
 
 const router = express.Router();
@@ -84,5 +85,23 @@ router.post('/request/:targetId', sendRequest);
  *         description: Cập nhật thành công
  */
 router.patch('/matches/:matchId', updateMatchStatus);
+
+/**
+ * @openapi
+ * /roommate/profile/{userId}:
+ *   get:
+ *     tags: [Roommate]
+ *     summary: Xem hồ sơ công khai của một user (lifestyle + preference)
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Hồ sơ công khai
+ */
+router.get('/profile/:userId', getProfile);
 
 module.exports = router;
