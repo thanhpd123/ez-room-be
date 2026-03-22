@@ -1037,6 +1037,152 @@ async function getLandlordDashboardStats(landlordId) {
     };
 }
 
+async function getLandlordPerformanceMetrics(landlordId) {
+    const now = new Date();
+    const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const thisMonthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    
+    const [
+        totalRooms,
+        activeRentals,
+        thisMonthRevenue,
+        totalRevenue,
+        cancelledPeriods,
+        totalPeriods,
+        confirmedPreorders,
+        totalPreorders,
+    ] = await Promise.all([
+        // Tổng số phòng
+        prisma.rooms.count({
+            where: { rentals: { owner_id: landlordId } },
+        }),
+        
+        // Số phòng đang thuê (ACTIVE periods)
+        prisma.RoomRentalPeriod.count({
+            where: {
+                room: { rentals: { owner_id: landlordId } },
+                status: 'ACTIVE',
+            },
+        }),
+        
+        // Doanh thu tháng này
+        prisma.RoomRentalPeriod.aggregate({
+            where: {
+                room: { rentals: { owner_id: landlordId } },
+                createdAt: { gte: thisMonthStart, lte: thisMonthEnd },
+            },
+            _sum: { actualPrice: true },
+        }),
+        
+        // Tổng doanh thu
+        prisma.RoomRentalPeriod.aggregate({
+            where: {
+                room: { rentals: { owner_id: landlordId } },
+            },
+            _sum: { actualPrice: true },
+        }),
+        
+        // Số đơn hủy
+        prisma.RoomRentalPeriod.count({
+            where: {
+                room: { rentals: { owner_id: landlordId } },
+                status: 'CANCELLED',
+            },
+        }),
+        
+        // Tổng đơn kết thúc (COMPLETED hoặc CANCELLED)
+        prisma.RoomRentalPeriod.count({
+            where: {
+                room: { rentals: { owner_id: landlordId } },
+                OR: [
+                    { status: 'COMPLETED' },
+                    { status: 'CANCELLED' },
+                ],
+            },
+        }),
+        
+        // Đơn đã xác nhận
+        prisma.Preorder.count({
+            where: {
+                room: { rentals: { owner_id: landlordId } },
+                status: 'CONFIRMED',
+            },
+        }),
+        
+        // Tổng đơn đặt cọc
+        prisma.Preorder.count({
+            where: {
+                room: { rentals: { owner_id: landlordId } },
+                NOT: { status: 'PENDING' },
+            },
+        }),
+    ]);
+
+    // Tính toán metrics
+    const occupancyRate = totalRooms > 0 ? (activeRentals / totalRooms) * 100 : 0;
+    const cancellationRate = totalPeriods > 0 ? (cancelledPeriods / totalPeriods) * 100 : 0;
+    const conversionRate = totalPreorders > 0 ? (confirmedPreorders / totalPreorders) * 100 : 0;
+
+    return {
+        data: {
+            occupancyRate: parseFloat(occupancyRate.toFixed(2)),
+            revenue: {
+                thisMonth: Number(thisMonthRevenue._sum.actualPrice ?? 0),
+                total: Number(totalRevenue._sum.actualPrice ?? 0),
+            },
+            cancellationRate: parseFloat(cancellationRate.toFixed(2)),
+            conversionRate: parseFloat(conversionRate.toFixed(2)),
+            bookingStats: {
+                active: activeRentals,
+                cancelled: cancelledPeriods,
+                total: totalPeriods,
+            },
+        },
+    };
+}
+
+async function getTopSearchedRooms(landlordId, limit = 5) {
+    const topRooms = await prisma.rooms.findMany({
+        where: {
+            rentals: { owner_id: landlordId },
+        },
+        select: {
+            id: true,
+            room_name: true,
+            price: true,
+            search_count: true,
+            images: {
+                take: 1,
+                select: { imageUrl: true },
+            },
+            rentals: {
+                select: {
+                    title: true,
+                    location: {
+                        select: { address: true, district: true, city: true },
+                    },
+                },
+            },
+        },
+        orderBy: { search_count: 'desc' },
+        take: limit,
+    });
+
+    return {
+        data: {
+            rooms: topRooms.map(room => ({
+                id: room.id,
+                name: room.room_name,
+                price: room.price,
+                searchCount: room.search_count || 0,
+                image: room.images?.[0]?.imageUrl || null,
+                rentalTitle: room.rentals?.title,
+                location: room.rentals?.location,
+            })),
+        },
+    };
+}
+
 module.exports = {
     createRental,
     getRentals,
@@ -1052,4 +1198,6 @@ module.exports = {
     getPublicRoomTypes,
     getLandlordProfile,
     getLandlordDashboardStats,
+    getLandlordPerformanceMetrics,
+    getTopSearchedRooms,
 };

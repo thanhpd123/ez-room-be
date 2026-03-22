@@ -11,6 +11,8 @@ const {
     deleteRental,
     getRentalStats,
     getLandlordDashboardStats,
+    getLandlordPerformanceMetrics,
+    getTopSearchedRooms,
 } = require('../controllers/rental.controller');
 const { deleteRental: deleteRentalAdmin } = require('../controllers/rentals.controller');
 
@@ -41,6 +43,37 @@ router.get('/stats', verifyJWT, requireRole('MODERATOR', 'ADMIN'), getRentalStat
  *         description: Thống kê dashboard landlord
  */
 router.get('/dashboard', verifyJWT, requireRole('LANDLORD'), getLandlordDashboardStats);
+
+/**
+ * @openapi
+ * /rentals/performance:
+ *   get:
+ *     tags: [Rentals]
+ *     summary: Landlord xem chỉ số hiệu suất thuê phòng
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200:
+ *         description: Chỉ số hiệu suất của landlord
+ */
+router.get('/performance', verifyJWT, requireRole('LANDLORD'), getLandlordPerformanceMetrics);
+
+/**
+ * @openapi
+ * /rentals/top-searched:
+ *   get:
+ *     tags: [Rentals]
+ *     summary: Landlord xem phòng được tìm kiếm nhiều
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 5 }
+ *         description: Số lượng phòng muốn lấy (mặc định 5)
+ *     responses:
+ *       200:
+ *         description: Danh sách phòng được tìm kiếm nhiều
+ */
+router.get('/top-searched', verifyJWT, requireRole('LANDLORD'), getTopSearchedRooms);
 
 /**
  * @openapi

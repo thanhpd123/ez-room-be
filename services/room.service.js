@@ -222,6 +222,12 @@ async function getRoomById(roomId) {
         throw Object.assign(new Error('Không tìm thấy phòng'), { statusCode: 404 });
     }
 
+    // Increment search_count (async, don't await)
+    prisma.rooms.update({
+        where: { id: roomId },
+        data: { search_count: { increment: 1 } },
+    }).catch(err => console.error('Error incrementing search_count:', err));
+
     return {
         data: {
             ...formatRoomResponse(room),

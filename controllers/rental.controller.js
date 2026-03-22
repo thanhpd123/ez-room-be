@@ -181,6 +181,25 @@ async function getLandlordDashboardStats(req, res) {
     }
 }
 
+async function getLandlordPerformanceMetrics(req, res) {
+    try {
+        const result = await rentalService.getLandlordPerformanceMetrics(req.auth.user.id);
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi lấy chỉ số hiệu suất');
+    }
+}
+
+async function getTopSearchedRooms(req, res) {
+    try {
+        const limit = parseInt(req.query.limit) || 5;
+        const result = await rentalService.getTopSearchedRooms(req.auth.user.id, limit);
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi lấy phòng được tìm kiếm nhiều');
+    }
+}
+
 module.exports = {
     createRental,
     getRentals,
@@ -196,4 +215,6 @@ module.exports = {
     getPublicRoomTypes,
     getLandlordProfile,
     getLandlordDashboardStats,
+    getLandlordPerformanceMetrics,
+    getTopSearchedRooms,
 };
