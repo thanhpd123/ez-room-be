@@ -271,6 +271,19 @@ async function getQueueStatusForTarget(req, res) {
     }
 }
 
+async function getRejectionInfo(req, res) {
+    try {
+        const { targetType, targetId } = req.query;
+        if (!targetType || !targetId) {
+            return res.status(400).json({ success: false, message: 'targetType và targetId là bắt buộc' });
+        }
+        const result = await moderatorService.getLatestRejection(targetType, targetId);
+        return res.json({ success: true, data: result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi lấy thông tin từ chối');
+    }
+}
+
 module.exports = {
     getAllUsers,
     getUserById,
@@ -293,4 +306,5 @@ module.exports = {
     deleteReview,
     getQueueStatusForTarget,
     getModeratorList,
+    getRejectionInfo,
 };

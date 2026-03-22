@@ -24,6 +24,7 @@ const reportRoutes = require('./routes/report');
 const preorderRoutes = require('./routes/preorder');
 const feedbackRoutes = require('./routes/feedback');
 const documentRoutes = require('./routes/document');
+const { startPreorderPayoutReconciliationJob } = require('./services/preorder-reconciliation.service');
 const { startStaleCron } = require('./cron/release-stale-tasks');
 
 const app = express();
@@ -50,12 +51,12 @@ app.use(express.json());
 
 // Swagger API Documentation
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
-  customCss: '.swagger-ui .topbar { display: none }',
-  customSiteTitle: 'EZ-Room API Docs',
+    customCss: '.swagger-ui .topbar { display: none }',
+    customSiteTitle: 'EZ-Room API Docs',
 }));
 app.get('/api-docs.json', (req, res) => {
-  res.setHeader('Content-Type', 'application/json');
-  res.send(swaggerSpec);
+    res.setHeader('Content-Type', 'application/json');
+    res.send(swaggerSpec);
 });
 
 // Routes
@@ -142,5 +143,6 @@ app.use((err, req, res, next) => {
 
 app.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
+    startPreorderPayoutReconciliationJob();
     startStaleCron();
 });

@@ -356,7 +356,10 @@ async function updateRentalStatus(rentalId, body, moderatorId) {
     if (!valid) throw Object.assign(new Error('Dữ liệu không hợp lệ'), { statusCode: 400, errors });
 
     const { status } = body;
-    const existingRental = await prisma.rental.findUnique({ where: { id: rentalId } });
+    const existingRental = await prisma.rental.findUnique({
+        where: { id: rentalId },
+        include: { users: { select: { id: true, fullName: true } } },
+    });
     if (!existingRental) {
         throw Object.assign(new Error('Không tìm thấy bài đăng'), { statusCode: 404 });
     }
@@ -414,6 +417,36 @@ async function updateRentalStatus(rentalId, body, moderatorId) {
         }
         return rental;
     });
+
+    // === Notification cho landlord ===
+    const ownerId = existingRental.owner_id;
+    const rentalTitle = existingRental.title || 'Bài đăng';
+    const noteValue = body.note || '';
+    try {
+        if (status === 'AVAILABLE') {
+            await prisma.notification.create({
+                data: {
+                    userId: ownerId,
+                    type: 'ADMIN_ALERT',
+                    title: 'Bài đăng nhà trọ đã được duyệt',
+                    body: `Bài đăng "${rentalTitle}" của bạn đã được duyệt và hiển thị công khai.`,
+                    status: 'UNREAD',
+                },
+            });
+        } else {
+            await prisma.notification.create({
+                data: {
+                    userId: ownerId,
+                    type: 'ADMIN_ALERT',
+                    title: 'Bài đăng nhà trọ bị từ chối',
+                    body: `Bài đăng "${rentalTitle}" bị từ chối.${noteValue ? ' Lý do: ' + noteValue : ''} Vui lòng chỉnh sửa và gửi lại.`,
+                    status: 'UNREAD',
+                },
+            });
+        }
+    } catch (notifErr) {
+        console.warn('Could not create rental moderation notification:', notifErr.message);
+    }
 
     return {
         message: `Đã cập nhật trạng thái bài đăng thành ${status}`,
@@ -521,7 +554,10 @@ async function moderateRoom(roomId, body, moderatorId) {
         throw Object.assign(new Error('decision phải là approved hoặc rejected'), { statusCode: 400 });
     }
 
-    const room = await prisma.rooms.findUnique({ where: { id: roomId } });
+    const room = await prisma.rooms.findUnique({
+        where: { id: roomId },
+        include: { rentals: { select: { owner_id: true, title: true } } },
+    });
     if (!room) throw Object.assign(new Error('Không tìm thấy phòng'), { statusCode: 404 });
 
     const newStatus = decision === 'approved' ? 'AVAILABLE' : 'MAINTENANCE';
@@ -583,6 +619,37 @@ async function moderateRoom(roomId, body, moderatorId) {
         }
         return updatedRoom;
     });
+
+    // === Notification cho landlord ===
+    const ownerId = room.rentals?.owner_id;
+    const roomTitle = room.room_name || room.rentals?.title || 'Phòng';
+    if (ownerId) {
+        try {
+            if (decision === 'approved') {
+                await prisma.notification.create({
+                    data: {
+                        userId: ownerId,
+                        type: 'ADMIN_ALERT',
+                        title: 'Phòng đã được duyệt',
+                        body: `Phòng "${roomTitle}" của bạn đã được duyệt và hiển thị công khai.`,
+                        status: 'UNREAD',
+                    },
+                });
+            } else {
+                await prisma.notification.create({
+                    data: {
+                        userId: ownerId,
+                        type: 'ADMIN_ALERT',
+                        title: 'Phòng bị từ chối',
+                        body: `Phòng "${roomTitle}" bị từ chối.${note ? ' Lý do: ' + note : ''} Vui lòng chỉnh sửa và gửi lại.`,
+                        status: 'UNREAD',
+                    },
+                });
+            }
+        } catch (notifErr) {
+            console.warn('Could not create room moderation notification:', notifErr.message);
+        }
+    }
 
     return {
         message: decision === 'approved' ? 'Đã duyệt phòng' : 'Đã từ chối phòng',
@@ -1267,6 +1334,33 @@ async function deleteReview(reviewId) {
     return { message: 'Đã xóa review thành công', data: { id: reviewId } };
 }
 
+// ═══════════════════ Rejection Info (Audit Trail) ═══════════════════
+
+async function getLatestRejection(targetType, targetId) {
+    const log = await prisma.moderator_logs.findFirst({
+        where: {
+            target_type: targetType,
+            target_id: targetId,
+            action: 'REJECT',
+        },
+        orderBy: { created_at: 'desc' },
+        include: {
+            users: { select: { id: true, fullName: true } },
+        },
+    });
+
+    if (!log) return { hasRejection: false };
+
+    return {
+        hasRejection: true,
+        reason: log.note || null,
+        moderatorName: log.users?.fullName || null,
+        rejectedAt: log.created_at,
+        previousStatus: log.previous_status,
+        newStatus: log.new_status,
+    };
+}
+
 module.exports = {
     getAllUsers,
     getUserById,
@@ -1289,4 +1383,5 @@ module.exports = {
     deleteReview,
     getQueueStatusForTarget,
     getModeratorList,
+    getLatestRejection,
 };

@@ -777,7 +777,7 @@ async function getLandlordProfile(userId) {
 }
 
 async function updateRental(rentalId, userId, body) {
-    const { title, description, address, district, city, images, status } = body;
+    const { title, description, address, district, city, images, status, resubmit } = body;
 
     const allowedStatuses = ['AVAILABLE', 'UNAVAILABLE', 'HIDDEN'];
     if (status && !allowedStatuses.includes(status)) {
@@ -797,10 +797,17 @@ async function updateRental(rentalId, userId, body) {
         throw Object.assign(new Error('Bạn không có quyền chỉnh sửa bài đăng này'), { statusCode: 403 });
     }
 
-    const moderatorOnlyStatuses = ['PENDING', 'SUSPEND', 'VIOLATE'];
-    if (status && moderatorOnlyStatuses.includes(rental.status)) {
+    // Khi resubmit: cho phép chỉnh sửa bài đăng bị từ chối (HIDDEN) và gửi lại để duyệt
+    const isResubmit = resubmit === true && rental.status === 'HIDDEN';
+
+    // Khi edit bài đăng đã duyệt (AVAILABLE/UNAVAILABLE): auto chuyển PENDING để moderator duyệt lại
+    const isEditApproved = ['AVAILABLE', 'UNAVAILABLE'].includes(rental.status);
+
+    // Chặn edit khi đang chờ duyệt (PENDING) hoặc bị tạm ngưng/vi phạm
+    const blockedStatuses = ['PENDING', 'SUSPEND', 'VIOLATE'];
+    if (!isResubmit && blockedStatuses.includes(rental.status)) {
         throw Object.assign(
-            new Error('Bài đăng đang chờ duyệt hoặc bị tạm ngưng, bạn không thể thay đổi trạng thái'),
+            new Error('Bài đăng đang chờ duyệt hoặc bị tạm ngưng. Vui lòng đợi moderator xử lý trước khi chỉnh sửa.'),
             { statusCode: 403 }
         );
     }
@@ -829,32 +836,57 @@ async function updateRental(rentalId, userId, body) {
         }
     }
 
-    await prisma.rental.update({
-        where: { id: rentalId },
-        data: {
-            ...(title ? { title: title.trim() } : {}),
-            ...(description !== undefined ? { description: description?.trim() || null } : {}),
-            ...(locationId !== rental.locationId ? { locationId } : {}),
-            ...(status ? { status } : {}),
-        },
-    });
+    // Xác định status mới: resubmit hoặc edit bài đã duyệt → PENDING
+    const needsModeration = isResubmit || isEditApproved;
+    const newStatus = needsModeration ? 'PENDING' : status;
 
-    if (images && Array.isArray(images)) {
-        await prisma.rentalImage.deleteMany({ where: { rentalId } });
-        if (images.length > 0) {
-            await prisma.rentalImage.createMany({
-                data: images.map((url) => ({ rentalId, imageUrl: url })),
+    const result = await prisma.$transaction(async (tx) => {
+        await tx.rental.update({
+            where: { id: rentalId },
+            data: {
+                ...(title ? { title: title.trim() } : {}),
+                ...(description !== undefined ? { description: description?.trim() || null } : {}),
+                ...(locationId !== rental.locationId ? { locationId } : {}),
+                ...(newStatus ? { status: newStatus } : {}),
+            },
+        });
+
+        if (images && Array.isArray(images)) {
+            await tx.rentalImage.deleteMany({ where: { rentalId } });
+            if (images.length > 0) {
+                await tx.rentalImage.createMany({
+                    data: images.map((url) => ({ rentalId, imageUrl: url })),
+                });
+            }
+        }
+
+        // Resubmit hoặc edit bài đã duyệt: tạo mục mới trong moderation queue
+        if (needsModeration) {
+            await tx.moderation_queue.create({
+                data: {
+                    target_type: 'RENTAL',
+                    target_id: rentalId,
+                    priority: 'NORMAL',
+                    category: 'NEW_LISTING',
+                    source: 'SYSTEM',
+                },
             });
         }
-    }
 
-    const result = await prisma.rental.findUnique({
-        where: { id: rentalId },
-        include: { location: true, images: true },
+        return tx.rental.findUnique({
+            where: { id: rentalId },
+            include: { location: true, images: true },
+        });
     });
 
+    const message = isResubmit
+        ? 'Đã gửi lại bài đăng để duyệt'
+        : needsModeration
+          ? 'Đã cập nhật và gửi bài đăng để duyệt lại'
+          : 'Cập nhật bài đăng thành công';
+
     return {
-        message: 'Cập nhật bài đăng thành công',
+        message,
         data: {
             id: result.id,
             title: result.title,

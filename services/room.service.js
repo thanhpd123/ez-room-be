@@ -273,37 +273,84 @@ async function updateRoom(roomId, userId, body) {
         throw Object.assign(new Error('Bạn không có quyền sửa phòng này'), { statusCode: 403 });
     }
 
+    // Khi resubmit: cho phép chỉnh sửa phòng bị từ chối (MAINTENANCE) và gửi lại để duyệt
+    const isResubmit = body.resubmit === true && existingRoom.status === 'MAINTENANCE';
+
+    // Khi edit phòng đã duyệt (AVAILABLE): auto chuyển PENDING để moderator duyệt lại
+    const isEditApproved = existingRoom.status === 'AVAILABLE';
+
+    // Chặn edit khi đang chờ duyệt (PENDING)
+    if (!isResubmit && existingRoom.status === 'PENDING') {
+        throw Object.assign(
+            new Error('Phòng đang chờ duyệt. Vui lòng đợi moderator xử lý trước khi chỉnh sửa.'),
+            { statusCode: 403 }
+        );
+    }
+
+    const needsModeration = isResubmit || isEditApproved;
+
     const updateData = {};
     const roomName = body.roomName || body.title;
     if (roomName !== undefined) updateData.room_name = roomName?.trim() || null;
+    if (body.description !== undefined) updateData.description = body.description?.trim() || null;
     if (body.roomType !== undefined) updateData.room_type = mapFeToDb(body.roomType);
     if (body.price !== undefined) updateData.price = parseFloat(body.price);
     const sizeM2 = body.sizeM2 || body.area;
     if (sizeM2 !== undefined) updateData.size_m2 = parseFloat(sizeM2);
     const maxPeople = body.maxPeople || body.max_occupants;
     if (maxPeople !== undefined) updateData.max_people = parseInt(maxPeople);
-    const newStatus = body.status;
-    const statusUpper = typeof newStatus === 'string' ? newStatus.toUpperCase() : null;
-    if (statusUpper && ['PENDING', 'AVAILABLE', 'RENTED', 'MAINTENANCE'].includes(statusUpper)) {
-        updateData.status = statusUpper;
+
+    if (needsModeration) {
+        // Resubmit hoặc edit bài đã duyệt: đổi status về PENDING
+        updateData.status = 'PENDING';
+    } else {
+        const newStatus = body.status;
+        const statusUpper = typeof newStatus === 'string' ? newStatus.toUpperCase() : null;
+        if (statusUpper && ['PENDING', 'AVAILABLE', 'RENTED', 'MAINTENANCE'].includes(statusUpper)) {
+            updateData.status = statusUpper;
+        }
     }
 
     const previousStatus = existingRoom.status;
-    const room = await prisma.rooms.update({
-        where: { id: roomId },
-        data: updateData,
-        include: {
-            images: true,
-            roomAmenities: { include: { amenity: true } },
-            rentals: { include: { location: true } },
-        },
+
+    const room = await prisma.$transaction(async (tx) => {
+        const updated = await tx.rooms.update({
+            where: { id: roomId },
+            data: updateData,
+            include: {
+                images: true,
+                roomAmenities: { include: { amenity: true } },
+                rentals: { include: { location: true } },
+            },
+        });
+
+        // Resubmit hoặc edit bài đã duyệt: tạo mục mới trong moderation queue
+        if (needsModeration) {
+            await tx.moderation_queue.create({
+                data: {
+                    target_type: 'ROOM',
+                    target_id: roomId,
+                    priority: 'NORMAL',
+                    category: 'NEW_LISTING',
+                    source: 'SYSTEM',
+                },
+            });
+        }
+
+        return updated;
     });
 
     if (previousStatus === 'RENTED' && room.status === 'AVAILABLE') {
         notifyFavoritersRoomAvailable(room).catch((err) => console.error('Notify favoriters error:', err));
     }
 
-    return { message: 'Cập nhật phòng thành công', data: formatRoomResponse(room) };
+    const message = isResubmit
+        ? 'Đã gửi lại phòng để duyệt'
+        : needsModeration
+          ? 'Đã cập nhật và gửi phòng để duyệt lại'
+          : 'Cập nhật phòng thành công';
+
+    return { message, data: formatRoomResponse(room) };
 }
 
 async function deleteRoom(roomId, userId) {
