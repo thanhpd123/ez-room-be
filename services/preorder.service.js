@@ -7,6 +7,9 @@ const PREORDER_MIN_DEPOSIT_PERCENT = Number(process.env.PREORDER_MIN_DEPOSIT_PER
 const PREORDER_MAX_DEPOSIT_PERCENT = Number(process.env.PREORDER_MAX_DEPOSIT_PERCENT || 80);
 const PREORDER_DEPOSIT_PERCENT_BASE_MONTHS = Number(process.env.PREORDER_DEPOSIT_PERCENT_BASE_MONTHS || 12);
 
+const SYSTEM_SETTING_PREORDER_DEPOSIT_KEY = 'preorder.deposit';
+const SYSTEM_SETTING_PLATFORM_COMMISSION_KEY = 'platform.commission';
+
 function toNumber(value) {
     if (value == null) return 0;
     const parsed = Number(value);
@@ -27,18 +30,28 @@ function parseDepositPercent(rawPercent) {
     return Math.round(percent * 100) / 100;
 }
 
-function clampDepositPercentConfig() {
-    const min = Number.isFinite(PREORDER_MIN_DEPOSIT_PERCENT)
-        ? PREORDER_MIN_DEPOSIT_PERCENT
-        : 5;
-    const max = Number.isFinite(PREORDER_MAX_DEPOSIT_PERCENT)
-        ? PREORDER_MAX_DEPOSIT_PERCENT
-        : 80;
+function clampDepositPercentConfig(overrides = null) {
+    const minOverride = overrides && Number.isFinite(Number(overrides.minPercent))
+        ? Number(overrides.minPercent)
+        : null;
+    const maxOverride = overrides && Number.isFinite(Number(overrides.maxPercent))
+        ? Number(overrides.maxPercent)
+        : null;
+    const defaultOverride = overrides && Number.isFinite(Number(overrides.defaultPercent))
+        ? Number(overrides.defaultPercent)
+        : null;
+
+    const min = minOverride != null
+        ? minOverride
+        : (Number.isFinite(PREORDER_MIN_DEPOSIT_PERCENT) ? PREORDER_MIN_DEPOSIT_PERCENT : 5);
+    const max = maxOverride != null
+        ? maxOverride
+        : (Number.isFinite(PREORDER_MAX_DEPOSIT_PERCENT) ? PREORDER_MAX_DEPOSIT_PERCENT : 80);
     const safeMin = Math.max(0.01, Math.min(min, 99.99));
     const safeMax = Math.max(safeMin, Math.min(max, 99.99));
-    const safeDefault = Number.isFinite(PREORDER_DEFAULT_DEPOSIT_PERCENT)
-        ? PREORDER_DEFAULT_DEPOSIT_PERCENT
-        : 30;
+    const safeDefault = defaultOverride != null
+        ? defaultOverride
+        : (Number.isFinite(PREORDER_DEFAULT_DEPOSIT_PERCENT) ? PREORDER_DEFAULT_DEPOSIT_PERCENT : 30);
     const defaultPercent = Math.max(safeMin, Math.min(safeDefault, safeMax));
     return { min: safeMin, max: safeMax, defaultPercent };
 }
@@ -54,12 +67,67 @@ function parseDepositMonths(rawMonths) {
     return Math.round(months * 100) / 100;
 }
 
-function convertMonthsToPercent(months) {
-    const baseMonths = Number.isFinite(PREORDER_DEPOSIT_PERCENT_BASE_MONTHS)
-        ? PREORDER_DEPOSIT_PERCENT_BASE_MONTHS
-        : 12;
+function convertMonthsToPercent(months, baseMonthsOverride) {
+    const baseMonths = Number.isFinite(Number(baseMonthsOverride))
+        ? Number(baseMonthsOverride)
+        : (Number.isFinite(PREORDER_DEPOSIT_PERCENT_BASE_MONTHS)
+            ? PREORDER_DEPOSIT_PERCENT_BASE_MONTHS
+            : 12);
     const safeBaseMonths = Math.max(1, baseMonths);
     return Math.round(((months / safeBaseMonths) * 100) * 100) / 100;
+}
+
+async function getPreorderDepositSettings() {
+    try {
+        const row = await prisma.systemSetting.findUnique({
+            where: { key: SYSTEM_SETTING_PREORDER_DEPOSIT_KEY },
+            select: { value_json: true },
+        });
+        const cfg = row?.value_json;
+        if (!cfg || typeof cfg !== 'object') return null;
+
+        const minPercent = Number(cfg.minPercent);
+        const maxPercent = Number(cfg.maxPercent);
+        const defaultPercent = Number(cfg.defaultPercent);
+        const baseMonths = Number(cfg.baseMonths);
+
+        if (!Number.isFinite(minPercent) || !Number.isFinite(maxPercent) || !Number.isFinite(defaultPercent)) {
+            return null;
+        }
+
+        return {
+            minPercent,
+            maxPercent,
+            defaultPercent,
+            baseMonths: Number.isFinite(baseMonths) ? baseMonths : null,
+        };
+    } catch (err) {
+        // Fallback to env-driven settings if DB settings are not available.
+        return null;
+    }
+}
+
+async function getPlatformPreorderFeeBps(txClient) {
+    const fallback = Math.max(0, Math.min(10000, Math.round(Number(process.env.PLATFORM_PREORDER_FEE_BPS || 0))));
+    try {
+        const row = await txClient.systemSetting.findUnique({
+            where: { key: SYSTEM_SETTING_PLATFORM_COMMISSION_KEY },
+            select: { value_json: true },
+        });
+        const bps = Number(row?.value_json?.preorderFeeBps);
+        if (!Number.isFinite(bps)) return fallback;
+        return Math.max(0, Math.min(10000, Math.round(bps)));
+    } catch {
+        return fallback;
+    }
+}
+
+function computeFeeAndPayout(amountVnd, feeBps) {
+    const amount = Math.max(0, Math.round(Number(amountVnd) || 0));
+    const bps = Math.max(0, Math.min(10000, Math.round(Number(feeBps) || 0)));
+    const fee = Math.max(0, Math.min(amount, Math.round((amount * bps) / 10000)));
+    const payout = Math.max(0, amount - fee);
+    return { feeAmount: fee, payoutAmount: payout, feeBps: bps };
 }
 
 async function ensureWallet(userId, txClient) {
@@ -172,7 +240,8 @@ async function createDepositPayment(userId, body) {
         });
     }
 
-    const { min, max, defaultPercent } = clampDepositPercentConfig();
+    const depositSettings = await getPreorderDepositSettings();
+    const { min, max, defaultPercent } = clampDepositPercentConfig(depositSettings);
 
     let depositPercent;
     let depositMonths = null;
@@ -183,7 +252,7 @@ async function createDepositPayment(userId, body) {
                 statusCode: 400,
             });
         }
-        depositPercent = convertMonthsToPercent(depositMonths);
+        depositPercent = convertMonthsToPercent(depositMonths, depositSettings?.baseMonths);
     } else if (rawDepositPercent != null && String(rawDepositPercent).trim() !== '') {
         depositPercent = parseDepositPercent(rawDepositPercent);
         if (!depositPercent) {
@@ -621,7 +690,46 @@ async function confirmRequest(preorderId, landlordId) {
             });
         }
 
+        const feeBps = await getPlatformPreorderFeeBps(tx);
+        const grossDepositAmount = toNumber(preorder.deposit_amount);
+        const computed = computeFeeAndPayout(grossDepositAmount, feeBps);
+
         if (preorder.status === 'CONFIRMED') {
+            // Backfill commission fields + ledger entry if missing (idempotent).
+            if (preorder.commission_rate_bps == null || preorder.platform_fee_amount == null || preorder.landlord_payout_amount == null || preorder.payout_at == null) {
+                await tx.preorder.update({
+                    where: { id: preorder.id },
+                    data: {
+                        commission_rate_bps: preorder.commission_rate_bps ?? computed.feeBps,
+                        platform_fee_amount: preorder.platform_fee_amount ?? computed.feeAmount,
+                        landlord_payout_amount: preorder.landlord_payout_amount ?? computed.payoutAmount,
+                        payout_at: preorder.payout_at ?? new Date(),
+                    },
+                });
+            }
+
+            if (computed.feeAmount > 0) {
+                const existingFee = await tx.platformLedgerEntry.findFirst({
+                    where: {
+                        entry_type: 'PREORDER_FEE',
+                        ref_type: 'PREORDER',
+                        ref_id: preorder.id,
+                    },
+                    select: { id: true },
+                });
+                if (!existingFee) {
+                    await tx.platformLedgerEntry.create({
+                        data: {
+                            entry_type: 'PREORDER_FEE',
+                            amount: computed.feeAmount,
+                            ref_type: 'PREORDER',
+                            ref_id: preorder.id,
+                            created_by: landlordId,
+                        },
+                    });
+                }
+            }
+
             return preorder;
         }
 
@@ -635,8 +743,7 @@ async function confirmRequest(preorderId, landlordId) {
             });
         }
 
-        const payoutAmount = toNumber(preorder.deposit_amount);
-        if (payoutAmount <= 0) {
+        if (grossDepositAmount <= 0) {
             throw Object.assign(new Error('Không tìm thấy tiền cọc hợp lệ để chuyển cho chủ trọ'), {
                 statusCode: 400,
             });
@@ -658,7 +765,7 @@ async function confirmRequest(preorderId, landlordId) {
         if (!existingPayoutTxn) {
             await tx.wallet.update({
                 where: { id: landlordWallet.id },
-                data: { balance: { increment: payoutAmount } },
+                data: { balance: { increment: computed.payoutAmount } },
             });
 
             await tx.walletTransaction.create({
@@ -666,12 +773,34 @@ async function confirmRequest(preorderId, landlordId) {
                     walletId: landlordWallet.id,
                     transaction_type: 'PREORDER',
                     status: 'SUCCESS',
-                    amount: payoutAmount,
-                    description: `Nhận tiền đặt cọc preorder ${preorder.id}`,
+                    amount: computed.payoutAmount,
+                    description: `Nhận tiền đặt cọc preorder ${preorder.id} (phí ${computed.feeAmount.toLocaleString('vi-VN')} VND)`,
                     ref_type: 'PREORDER_PAYOUT',
                     ref_id: preorder.id,
                 },
             });
+
+            if (computed.feeAmount > 0) {
+                const existingFee = await tx.platformLedgerEntry.findFirst({
+                    where: {
+                        entry_type: 'PREORDER_FEE',
+                        ref_type: 'PREORDER',
+                        ref_id: preorder.id,
+                    },
+                    select: { id: true },
+                });
+                if (!existingFee) {
+                    await tx.platformLedgerEntry.create({
+                        data: {
+                            entry_type: 'PREORDER_FEE',
+                            amount: computed.feeAmount,
+                            ref_type: 'PREORDER',
+                            ref_id: preorder.id,
+                            created_by: landlordId,
+                        },
+                    });
+                }
+            }
 
             await tx.notification.create({
                 data: {
@@ -679,7 +808,7 @@ async function confirmRequest(preorderId, landlordId) {
                     type: 'PAYMENT',
                     status: 'UNREAD',
                     title: 'Bạn nhận được tiền đặt cọc',
-                    body: `Ví của bạn đã được cộng ${payoutAmount.toLocaleString('vi-VN')} VND từ yêu cầu thuê ${preorder.id}.`,
+                    body: `Ví của bạn đã được cộng ${computed.payoutAmount.toLocaleString('vi-VN')} VND từ yêu cầu thuê ${preorder.id}.`,
                 },
             });
         }
@@ -689,6 +818,10 @@ async function confirmRequest(preorderId, landlordId) {
             data: {
                 status: 'CONFIRMED',
                 refund_status: 'NOT_APPLICABLE',
+                commission_rate_bps: computed.feeBps,
+                platform_fee_amount: computed.feeAmount,
+                landlord_payout_amount: computed.payoutAmount,
+                payout_at: new Date(),
             },
         });
 
