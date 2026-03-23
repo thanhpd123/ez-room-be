@@ -9,6 +9,36 @@ function toNumber(value) {
     return Number.isFinite(parsed) ? parsed : 0;
 }
 
+async function getPlatformPreorderFeeBps(txClient) {
+    const fallback = Math.max(0, Math.min(10000, Math.round(Number(process.env.PLATFORM_PREORDER_FEE_BPS || 0))));
+    try {
+        const row = await txClient.systemSetting.findUnique({
+            where: { key: 'platform.commission' },
+            select: { value_json: true },
+        });
+        const bps = Number(row?.value_json?.preorderFeeBps);
+        if (!Number.isFinite(bps)) return fallback;
+        return Math.max(0, Math.min(10000, Math.round(bps)));
+    } catch {
+        return fallback;
+    }
+}
+
+function computeFeeAndPayout(amountVnd, feeBps) {
+    const amount = Math.max(0, Math.round(Number(amountVnd) || 0));
+    const bps = Math.max(0, Math.min(10000, Math.round(Number(feeBps) || 0)));
+    const fee = Math.max(0, Math.min(amount, Math.round((amount * bps) / 10000)));
+    const payout = Math.max(0, amount - fee);
+    return { feeAmount: fee, payoutAmount: payout, feeBps: bps };
+}
+
+function computeBpsFromAmounts(gross, feeAmount, fallbackBps) {
+    const g = Math.max(0, Number(gross) || 0);
+    const f = Math.max(0, Number(feeAmount) || 0);
+    if (!Number.isFinite(g) || g <= 0) return fallbackBps;
+    return Math.max(0, Math.min(10000, Math.round((f / g) * 10000)));
+}
+
 async function ensureWallet(userId, txClient) {
     const wallet = await txClient.wallet.findUnique({ where: { userId } });
     if (wallet) return wallet;
@@ -87,8 +117,8 @@ async function reconcilePreorderPayoutsOnce(options = {}) {
                     return { fixed: false, reason: 'landlord_not_found' };
                 }
 
-                const payoutAmount = toNumber(preorder.deposit_amount);
-                if (payoutAmount <= 0) {
+                const grossDepositAmount = toNumber(preorder.deposit_amount);
+                if (grossDepositAmount <= 0) {
                     return { fixed: false, reason: 'invalid_payout_amount' };
                 }
 
@@ -102,11 +132,56 @@ async function reconcilePreorderPayoutsOnce(options = {}) {
                         ref_type: 'PREORDER_PAYOUT',
                         ref_id: preorder.id,
                     },
-                    select: { id: true },
+                    select: { id: true, amount: true },
                 });
 
+                const feeBpsSetting = await getPlatformPreorderFeeBps(tx);
+                const computed = computeFeeAndPayout(grossDepositAmount, feeBpsSetting);
+
+                const payoutAmount = existingPayout
+                    ? Math.max(0, Math.round(toNumber(existingPayout.amount)))
+                    : computed.payoutAmount;
+                const feeAmount = Math.max(0, grossDepositAmount - payoutAmount);
+                const frozenBps = computeBpsFromAmounts(grossDepositAmount, feeAmount, computed.feeBps);
+
+                // Backfill preorder frozen fields (idempotent)
+                if (preorder.commission_rate_bps == null || preorder.platform_fee_amount == null || preorder.landlord_payout_amount == null || preorder.payout_at == null) {
+                    await tx.preorder.update({
+                        where: { id: preorder.id },
+                        data: {
+                            commission_rate_bps: preorder.commission_rate_bps ?? frozenBps,
+                            platform_fee_amount: preorder.platform_fee_amount ?? feeAmount,
+                            landlord_payout_amount: preorder.landlord_payout_amount ?? payoutAmount,
+                            payout_at: preorder.payout_at ?? new Date(),
+                        },
+                    });
+                }
+
+                // Ensure platform fee ledger exists if fee > 0
+                if (feeAmount > 0) {
+                    const existingFee = await tx.platformLedgerEntry.findFirst({
+                        where: {
+                            entry_type: 'PREORDER_FEE',
+                            ref_type: 'PREORDER',
+                            ref_id: preorder.id,
+                        },
+                        select: { id: true },
+                    });
+                    if (!existingFee) {
+                        await tx.platformLedgerEntry.create({
+                            data: {
+                                entry_type: 'PREORDER_FEE',
+                                amount: feeAmount,
+                                ref_type: 'PREORDER',
+                                ref_id: preorder.id,
+                                created_by: ownerId,
+                            },
+                        });
+                    }
+                }
+
                 if (existingPayout) {
-                    return { fixed: false, reason: 'already_reconciled' };
+                    return { fixed: true, reason: 'backfilled_metadata' };
                 }
 
                 await tx.wallet.update({
