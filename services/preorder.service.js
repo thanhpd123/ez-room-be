@@ -1,5 +1,6 @@
 const prisma = require('../config/prisma');
 const { getPayOSClient } = require('../config/payos');
+const vipService = require('./vip.service');
 
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
 const PREORDER_DEFAULT_DEPOSIT_PERCENT = Number(process.env.PREORDER_DEFAULT_DEPOSIT_PERCENT || 30);
@@ -584,6 +585,13 @@ async function handlePayOSWebhook(payload) {
                         },
                     });
                 }
+            }
+        }
+
+        if (latestOrder.purpose === 'VIP_PURCHASE') {
+            const wasSuccess = latestOrder.status === 'SUCCESS';
+            if (!wasSuccess && finalOrderStatus === 'SUCCESS') {
+                await vipService.activateVipFromPaymentOrder(tx, latestOrder);
             }
         }
     });

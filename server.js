@@ -24,6 +24,7 @@ const reportRoutes = require('./routes/report');
 const preorderRoutes = require('./routes/preorder');
 const feedbackRoutes = require('./routes/feedback');
 const documentRoutes = require('./routes/document');
+const vipRoutes = require('./routes/vip');
 const { startPreorderPayoutReconciliationJob } = require('./services/preorder-reconciliation.service');
 const { startStaleCron } = require('./cron/release-stale-tasks');
 
@@ -78,6 +79,7 @@ app.use('/reports', reportRoutes);
 app.use('/preorders', preorderRoutes);
 app.use('/feedback', feedbackRoutes);
 app.use('/documents', documentRoutes);
+app.use('/vip', vipRoutes);
 
 // Test route
 app.get('/', (req, res) => {
