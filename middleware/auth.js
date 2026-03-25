@@ -2,7 +2,10 @@ const jwt = require('jsonwebtoken');
 const supabase = require('../config/supabase');
 const prisma = require('../config/prisma');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'ez-room-default-secret';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+    throw new Error('Missing required environment variable: JWT_SECRET');
+}
 
 async function resolveVipStatus(dbUser) {
     const isVip = dbUser.isVip === true;
@@ -101,6 +104,12 @@ async function verifyJWT(req, res, next) {
 
         // 2) Try backend JWT (email/password login)
         const payload = jwt.verify(token, JWT_SECRET);
+        if (payload.type && payload.type !== 'access') {
+            return res.status(401).json({
+                success: false,
+                message: 'Loại token không hợp lệ',
+            });
+        }
         const userId = payload.userId || payload.sub;
         if (!userId) {
             return res.status(401).json({
@@ -134,6 +143,7 @@ async function verifyJWT(req, res, next) {
             return res.status(401).json({
                 success: false,
                 message: 'Token đã hết hạn',
+                code: 'TOKEN_EXPIRED',
             });
         }
         const isPrismaSchemaError = err.code && String(err.code).startsWith('P') ||
@@ -216,6 +226,10 @@ async function optionalJWT(req, res, next) {
 
         // 2) Try backend JWT
         const payload = jwt.verify(token, JWT_SECRET);
+        if (payload.type && payload.type !== 'access') {
+            req.auth = null;
+            return next();
+        }
         const userId = payload.userId || payload.sub;
         if (userId) {
             const dbUser = await prisma.user.findUnique({ where: { id: userId } });
