@@ -37,7 +37,6 @@ describe('VIP service', () => {
                 id: 'u-1',
                 role: 'TENANT',
                 isVip: false,
-                vip_role: null,
                 vip_expires_at: null,
             }),
             update: async ({ data }) => ({ id: 'u-1', ...data }),

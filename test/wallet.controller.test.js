@@ -3,10 +3,18 @@ const assert = require('node:assert/strict');
 const { mockReq, mockRes, createMockPrisma, injectMock, clearModule } = require('./helpers');
 
 const mockPrisma = createMockPrisma();
+const mockPayOSClient = {
+    paymentRequests: {
+        create: async () => ({ checkoutUrl: 'https://pay', paymentLinkId: 'pl-1', status: 'PENDING' }),
+        get: async () => ({ status: 'PAID' }),
+    },
+};
 
 function loadController() {
     clearModule('../controllers/wallet.controller');
+    clearModule('../services/wallet.service');
     injectMock('../config/prisma', mockPrisma);
+    injectMock('../config/payos', { getPayOSClient: () => mockPayOSClient });
     return require('../controllers/wallet.controller');
 }
 
@@ -111,7 +119,10 @@ describe('Wallet > depositToWallet', () => {
         mockPrisma.wallet.findUnique = async () => fakeWallet;
         mockPrisma.wallet.create = async () => fakeWallet;
         mockPrisma.wallet.update = async () => ({ ...fakeWallet, balance: 1500000 });
+        mockPrisma.payment_orders.create = async ({ data }) => ({ id: 'po-1', ...data });
+        mockPrisma.payment_orders.update = async ({ data }) => ({ id: 'po-1', ...data });
         mockPrisma.walletTransaction.create = async () => fakeTx;
+        mockPrisma.walletTransaction.update = async ({ data }) => ({ ...fakeTx, ...data });
         mockPrisma.$transaction = async (fn) => fn(mockPrisma);
     });
 

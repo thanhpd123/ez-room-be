@@ -13,10 +13,11 @@ const mockLegacy = {
     expandDistrict: (d) => [d],
     extractLocationTermsFromQuery: () => ({ cities: [], districts: [] }),
 };
-const mockCache = { get: () => null, set: () => {}, invalidate: () => {} };
+const mockCache = { get: () => null, set: () => { }, invalidate: () => { } };
 
 function loadController() {
     clearModule('../controllers/rental.controller');
+    clearModule('../services/rental.service');
     injectMock('../config/prisma', mockPrisma);
     injectMock('../validators/rental.validator', mockValidator);
     injectMock('../utils/room-type-mapper', mockMapper);
@@ -43,6 +44,8 @@ describe('Rental > createRental', () => {
         mockPrisma.location.findFirst = async () => null;
         mockPrisma.location.create = async () => ({ id: 'loc-new', address: '123 St', district: 'Q1', city: 'HCM' });
         mockPrisma.rental.create = async () => fakeRental;
+        mockPrisma.moderation_queue.create = async () => ({ id: 'mq-1' });
+        mockPrisma.$transaction = async (fn) => fn(mockPrisma);
     });
 
     it('should create rental successfully', async () => {

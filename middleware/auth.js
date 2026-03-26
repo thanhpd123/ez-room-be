@@ -15,7 +15,6 @@ async function resolveVipStatus(dbUser) {
     if (!isVip || !isExpired) {
         return {
             isVip: isVip,
-            vipRole: dbUser.vip_role || null,
             vipExpiresAt: dbUser.vip_expires_at || null,
         };
     }
@@ -24,14 +23,12 @@ async function resolveVipStatus(dbUser) {
         where: { id: dbUser.id },
         data: {
             isVip: false,
-            vip_role: null,
             vip_expires_at: null,
         },
     });
 
     return {
         isVip: false,
-        vipRole: null,
         vipExpiresAt: null,
     };
 }
@@ -47,7 +44,6 @@ async function buildAuthUser(dbUser) {
         role: dbUser.role,
         phone: dbUser.phone ?? null,
         isVip: vip.isVip,
-        vip_role: vip.vipRole,
         vip_expires_at: vip.vipExpiresAt,
         gender: dbUser.gender ?? null,
     };

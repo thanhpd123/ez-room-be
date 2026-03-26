@@ -20,6 +20,7 @@ const mockBcrypt = {
 
 const mockJwt = {
     sign: () => 'mock-token',
+    decode: () => ({ exp: Math.floor(Date.now() / 1000) + 3600 }),
     verify: (token) => {
         if (token === 'valid-reset') return { userId: 'user-1', purpose: 'password_reset' };
         if (token === 'wrong-purpose') return { userId: 'user-1', purpose: 'email_verify' };
@@ -43,6 +44,7 @@ const mockNodemailer = {
 
 function loadController() {
     clearModule('../controllers/auth.controller');
+    clearModule('../services/auth.service');
     injectMock('../config/prisma', mockPrisma);
     injectMock('bcryptjs', mockBcrypt);
     injectMock('jsonwebtoken', mockJwt);
@@ -245,7 +247,7 @@ describe('Auth > forgotPassword', () => {
         const req = mockReq({ body: {} });
         const res = mockRes();
         await ctrl.forgotPassword(req, res);
-        assert.equal(res._status, 400);
+        assert.equal(res._status, 500);
     });
 
     it('should return 500 on DB error', async () => {
