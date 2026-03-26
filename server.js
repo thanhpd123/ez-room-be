@@ -48,7 +48,13 @@ app.use(cors({
     },
     credentials: true,
 }));
-app.use(express.json());
+
+// Routes - Rental routes MUST come BEFORE global JSON parser to allow multer to handle multipart
+app.use('/rentals', rentalRoutes);
+
+// Increase body size limit for file uploads in FormData
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Swagger API Documentation
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
@@ -60,13 +66,12 @@ app.get('/api-docs.json', (req, res) => {
     res.send(swaggerSpec);
 });
 
-// Routes
+// Routes - All other routes after JSON parser
 app.use('/auth', authRoutes);
 app.use('/admin', adminRoutes);
 app.use('/upload', uploadRoutes);
 app.use('/amenities', amenitiesRoutes);
 app.use('/locations', locationsRoutes);
-app.use('/rentals', rentalRoutes);
 app.use('/rooms', roomRoutes);
 app.use('/public', publicRoutes);
 app.use('/search', searchRoutes);

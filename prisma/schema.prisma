@@ -507,7 +507,6 @@ model rooms {
   updated_at             DateTime?                @updatedAt @db.Timestamp(6)
   moderated_by           String?                  @db.Uuid
   moderated_at           DateTime?                @db.Timestamp(6)
-  search_count           Int?                     @default(0)
   favorites              FavoriteRoom[]
   preorders              Preorder[]
   roomAmenities          RoomAmenity[]            @relation("RoomAmenities")
