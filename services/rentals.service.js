@@ -1,4 +1,5 @@
 const prisma = require('../config/prisma');
+const { publishPendingRoomsWhenRentalAvailable } = require('./sync-rental-rooms-on-approve');
 
 const VALID_RENTAL_STATUSES = ['AVAILABLE', 'UNAVAILABLE', 'HIDDEN', 'VIOLATE', 'PENDING', 'SUSPEND'];
 
@@ -185,10 +186,16 @@ async function updateRentalStatus(id, body, moderatorId) {
         throw Object.assign(new Error('Không tìm thấy bài đăng'), { statusCode: 404 });
     }
 
-    const rental = await prisma.rental.update({
-        where: { id },
-        data: { status: newStatus },
-        select: { id: true, title: true, status: true },
+    const rental = await prisma.$transaction(async (tx) => {
+        const updated = await tx.rental.update({
+            where: { id },
+            data: { status: newStatus },
+            select: { id: true, title: true, status: true },
+        });
+        if (newStatus === 'AVAILABLE') {
+            await publishPendingRoomsWhenRentalAvailable(id, tx);
+        }
+        return updated;
     });
 
     console.log(

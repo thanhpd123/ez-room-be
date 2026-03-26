@@ -1,5 +1,6 @@
 const prisma = require('../config/prisma');
 const { mapDbToFe } = require('../utils/room-type-mapper');
+const { recordInteraction } = require('./interaction.service');
 
 const placeholderImage = 'https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?w=800';
 
@@ -49,6 +50,11 @@ async function addFavorite(userId, roomId) {
         update: {},
     });
 
+    try {
+        await recordInteraction(userId, roomId, 'favorite');
+    } catch (_) {
+        // non-blocking
+    }
     return { roomId };
 }
 

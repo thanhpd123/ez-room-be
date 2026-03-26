@@ -151,4 +151,26 @@ function validateResetPassword(body) {
     return { valid: errors.length === 0, errors };
 }
 
-module.exports = { validateRegister, validateRegisterOAuth, validateLogin, validateForgotPassword, validateResetPassword, validatePasswordStrength };
+/**
+ * Validate change-password input. Fields: currentPassword, newPassword, confirmNewPassword
+ */
+function validateChangePassword(body) {
+    const errors = [];
+    const { currentPassword, newPassword, confirmNewPassword } = body || {};
+    if (!currentPassword || typeof currentPassword !== 'string' || !currentPassword.trim()) {
+        errors.push('Mật khẩu hiện tại là bắt buộc');
+    }
+    const newPasswordErrors = validatePasswordStrength(newPassword);
+    if (newPasswordErrors.length > 0) {
+        errors.push(...newPasswordErrors);
+    }
+    if (newPassword !== confirmNewPassword) {
+        errors.push('Xác nhận mật khẩu mới không khớp');
+    }
+    if (currentPassword && newPassword && currentPassword === newPassword) {
+        errors.push('Mật khẩu mới phải khác mật khẩu hiện tại');
+    }
+    return { valid: errors.length === 0, errors };
+}
+
+module.exports = { validateRegister, validateRegisterOAuth, validateLogin, validateForgotPassword, validateResetPassword, validateChangePassword, validatePasswordStrength };

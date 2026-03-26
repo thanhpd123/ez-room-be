@@ -1,5 +1,7 @@
 const authService = require('../services/auth.service');
 const prisma = require('../config/prisma');
+const bcrypt = require('bcryptjs');
+const { validateChangePassword } = require('../validators/auth.validator');
 
 function handleError(err, res, defaultMessage) {
     const statusCode = err.statusCode || 500;
@@ -62,10 +64,8 @@ async function forgotPassword(req, res) {
             message: result.message,
         });
     } catch (err) {
-        return res.status(500).json({
-            success: false,
-            message: 'Đã xảy ra lỗi. Vui lòng thử lại sau.',
-        });
+        console.error('[forgotPassword]', err?.message || err);
+        return handleError(err, res, 'Đã xảy ra lỗi. Vui lòng thử lại sau.');
     }
 }
 
@@ -94,18 +94,56 @@ async function registerOAuth(req, res) {
     }
 }
 
-function toCitizenCardResponse(record) {
-    if (!record) return null;
+/** Build API response from rental_documents CCCD rows (front + back). */
+function toCitizenCardResponseFromDocs(cccdDocs) {
+    if (!cccdDocs || cccdDocs.length === 0) return null;
+    let citizenCardNumber = '';
+    let frontImageUrl = '';
+    let backImageUrl = '';
+    let status = 'PENDING';
+    let reviewNote = null;
+    let submittedAt = null;
+    let reviewedAt = null;
+    let reviewedBy = null;
+    const id = cccdDocs[0]?.id ?? null;
+
+    for (const doc of cccdDocs) {
+        try {
+            const note = doc.note ? JSON.parse(doc.note) : {};
+            if (note.side === 'front') {
+                frontImageUrl = doc.image_url || '';
+                if (note.citizenCardNumber) citizenCardNumber = note.citizenCardNumber;
+            } else if (note.side === 'back') {
+                backImageUrl = doc.image_url || '';
+            }
+        } catch {
+            if (!frontImageUrl && doc.image_url) frontImageUrl = doc.image_url;
+            else if (!backImageUrl && doc.image_url) backImageUrl = doc.image_url;
+        }
+        if (doc.status === 'VERIFIED') status = 'VERIFIED';
+        else if (doc.status === 'REJECTED' && status !== 'VERIFIED') status = 'REJECTED';
+        if (doc.note && !citizenCardNumber) {
+            try {
+                const n = JSON.parse(doc.note);
+                if (n.citizenCardNumber) citizenCardNumber = n.citizenCardNumber;
+            } catch (_) {}
+        }
+        if (doc.created_at) submittedAt = doc.created_at;
+        reviewNote = doc.note && typeof doc.note === 'string' && !doc.note.startsWith('{') ? doc.note : reviewNote;
+    }
+    if (!frontImageUrl && cccdDocs[0]) frontImageUrl = cccdDocs[0].image_url || '';
+    if (!backImageUrl && cccdDocs[1]) backImageUrl = cccdDocs[1].image_url || '';
+
     return {
-        id: record.id,
-        citizenCardNumber: record.citizenCardNumber,
-        citizenCardFrontImageUrl: record.frontImageUrl,
-        citizenCardBackImageUrl: record.backImageUrl,
-        status: record.status,
-        reviewNote: record.reviewNote ?? null,
-        submittedAt: record.submittedAt,
-        reviewedAt: record.reviewedAt ?? null,
-        reviewedBy: record.reviewedBy ?? null,
+        id,
+        citizenCardNumber,
+        citizenCardFrontImageUrl: frontImageUrl,
+        citizenCardBackImageUrl: backImageUrl,
+        status,
+        reviewNote,
+        submittedAt,
+        reviewedAt,
+        reviewedBy,
     };
 }
 
@@ -116,13 +154,28 @@ async function getCitizenCard(req, res) {
             return res.status(401).json({ success: false, message: 'Chưa đăng nhập' });
         }
 
-        const record = await prisma.citizenCardVerification.findUnique({
-            where: { userId },
+        const rentals = await prisma.rental.findMany({
+            where: { owner_id: userId },
+            select: { id: true },
         });
+        const rentalIds = rentals.map((r) => r.id);
+        if (rentalIds.length === 0) {
+            return res.json({ success: true, citizenCard: null });
+        }
+
+        const cccdDocs = await prisma.rental_documents.findMany({
+            where: {
+                rental_id: { in: rentalIds },
+                document_type: 'CCCD',
+            },
+            orderBy: { created_at: 'asc' },
+        });
+
+        const citizenCard = toCitizenCardResponseFromDocs(cccdDocs);
 
         return res.json({
             success: true,
-            citizenCard: toCitizenCardResponse(record),
+            citizenCard,
         });
     } catch (err) {
         console.error('Get citizen card error:', err);
@@ -141,6 +194,7 @@ async function upsertCitizenCard(req, res) {
             citizenCardNumber,
             citizenCardFrontImageUrl,
             citizenCardBackImageUrl,
+            rentalId,
         } = req.body || {};
 
         const number = typeof citizenCardNumber === 'string' ? citizenCardNumber.trim() : '';
@@ -154,34 +208,60 @@ async function upsertCitizenCard(req, res) {
             return res.status(400).json({ success: false, message: 'Vui lòng cung cấp ảnh CCCD mặt trước và mặt sau' });
         }
 
-        const record = await prisma.citizenCardVerification.upsert({
-            where: { userId },
-            create: {
-                userId,
-                citizenCardNumber: number,
-                frontImageUrl: front,
-                backImageUrl: back,
-                status: 'PENDING',
-                reviewNote: null,
-                reviewedBy: null,
-                reviewedAt: null,
-            },
-            update: {
-                citizenCardNumber: number,
-                frontImageUrl: front,
-                backImageUrl: back,
-                status: 'PENDING',
-                reviewNote: null,
-                reviewedBy: null,
-                reviewedAt: null,
-                submittedAt: new Date(),
-            },
+        let rentalIdToUse = rentalId;
+        if (!rentalIdToUse) {
+            const firstRental = await prisma.rental.findFirst({
+                where: { owner_id: userId },
+                select: { id: true },
+            });
+            if (!firstRental) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Bạn cần tạo ít nhất một bài đăng nhà trọ trước khi gửi CCCD. Hoặc gửi kèm rentalId trong body.',
+                });
+            }
+            rentalIdToUse = firstRental.id;
+        } else {
+            const rental = await prisma.rental.findFirst({
+                where: { id: rentalIdToUse, owner_id: userId },
+            });
+            if (!rental) {
+                return res.status(403).json({ success: false, message: 'Bạn không có quyền gửi CCCD cho bài đăng này' });
+            }
+        }
+
+        await prisma.rental_documents.deleteMany({
+            where: { rental_id: rentalIdToUse, document_type: 'CCCD' },
+        });
+
+        await prisma.rental_documents.createMany({
+            data: [
+                {
+                    rental_id: rentalIdToUse,
+                    document_type: 'CCCD',
+                    image_url: front,
+                    status: 'PENDING',
+                    note: JSON.stringify({ side: 'front', citizenCardNumber: number }),
+                },
+                {
+                    rental_id: rentalIdToUse,
+                    document_type: 'CCCD',
+                    image_url: back,
+                    status: 'PENDING',
+                    note: JSON.stringify({ side: 'back' }),
+                },
+            ],
+        });
+
+        const cccdDocs = await prisma.rental_documents.findMany({
+            where: { rental_id: rentalIdToUse, document_type: 'CCCD' },
+            orderBy: { created_at: 'asc' },
         });
 
         return res.json({
             success: true,
             message: 'Đã gửi CCCD để xác minh. Vui lòng chờ duyệt.',
-            citizenCard: toCitizenCardResponse(record),
+            citizenCard: toCitizenCardResponseFromDocs(cccdDocs),
         });
     } catch (err) {
         console.error('Upsert citizen card error:', err);
@@ -227,17 +307,34 @@ async function registerLandlord(req, res) {
             where: { userId },
             select: { id: true },
         });
-        const citizenCard = await prisma.citizenCardVerification.findUnique({
-            where: { userId },
-            select: { id: true, status: true },
+
+        const userRentals = await prisma.rental.findMany({
+            where: { owner_id: userId },
+            select: { id: true },
         });
+        const rentalIds = userRentals.map((r) => r.id);
+        let citizenCardVerified = false;
+        let citizenCardStatus = 'NOT_SUBMITTED';
+        if (rentalIds.length > 0) {
+            const cccdDoc = await prisma.rental_documents.findFirst({
+                where: {
+                    rental_id: { in: rentalIds },
+                    document_type: 'CCCD',
+                },
+                select: { status: true },
+            });
+            if (cccdDoc) {
+                citizenCardStatus = cccdDoc.status;
+                citizenCardVerified = cccdDoc.status === 'VERIFIED';
+            }
+        }
 
         const checks = {
             profile: !!(user.fullName && String(user.fullName).trim().length >= 2 && user.phone && String(user.phone).trim() && user.gender && String(user.gender).trim()),
             lifestyle: !!lifestyle,
             preference: !!preference,
-            citizenCardVerified: citizenCard?.status === 'VERIFIED',
-            citizenCardStatus: citizenCard?.status || 'NOT_SUBMITTED',
+            citizenCardVerified,
+            citizenCardStatus,
         };
 
         if (!checks.profile || !checks.lifestyle || !checks.preference || !checks.citizenCardVerified) {
@@ -331,6 +428,60 @@ async function upsertPreference(req, res) {
     }
 }
 
+async function changePassword(req, res) {
+    try {
+        const userId = req.auth?.user?.id;
+        if (!userId) {
+            return res.status(401).json({ success: false, message: 'Chưa đăng nhập' });
+        }
+
+        const { valid, errors } = validateChangePassword(req.body);
+        if (!valid) {
+            return res.status(400).json({ success: false, message: 'Dữ liệu không hợp lệ', errors });
+        }
+
+        const { currentPassword, newPassword } = req.body;
+
+        const user = await prisma.user.findUnique({
+            where: { id: userId },
+            select: { id: true, password_hash: true },
+        });
+
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
+        }
+
+        if (!user.password_hash) {
+            return res.status(400).json({
+                success: false,
+                message: 'Tài khoản đăng nhập bằng Google không thể đổi mật khẩu tại đây.',
+            });
+        }
+
+        const isMatch = await bcrypt.compare(currentPassword, user.password_hash);
+        if (!isMatch) {
+            return res.status(400).json({ success: false, message: 'Mật khẩu hiện tại không đúng' });
+        }
+
+        const salt = await bcrypt.genSalt(10);
+        const password_hash = await bcrypt.hash(newPassword, salt);
+
+        await prisma.user.update({
+            where: { id: userId },
+            data: { password_hash },
+        });
+
+        return res.json({ success: true, message: 'Đổi mật khẩu thành công' });
+    } catch (err) {
+        console.error('Change password error:', err);
+        return res.status(500).json({
+            success: false,
+            message: 'Đổi mật khẩu thất bại',
+            error: err.message,
+        });
+    }
+}
+
 function suggestPassword(req, res) {
     try {
         const result = authService.suggestPassword();
@@ -349,6 +500,7 @@ module.exports = {
     login,
     forgotPassword,
     resetPassword,
+    changePassword,
     updateProfile,
     getLifestyle,
     upsertLifestyle,

@@ -63,4 +63,7 @@ async function getRecommend(req, res) {
     }
 }
 
-module.exports = { getPublicSearch, getRecommend };
+module.exports = {
+    getPublicSearch,
+    getRecommend,
+};

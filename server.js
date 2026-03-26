@@ -5,6 +5,7 @@ require('dotenv').config();
 
 const swaggerSpec = require('./config/swagger');
 const supabase = require('./config/supabase');
+const { isSupabaseConfigured } = require('./config/supabase-helpers');
 const prisma = require('./config/prisma');
 const authRoutes = require('./routes/auth');
 const adminRoutes = require('./routes/admin');
@@ -24,6 +25,7 @@ const moderatorRoutes = require('./routes/moderator');
 const reportRoutes = require('./routes/report');
 const preorderRoutes = require('./routes/preorder');
 const feedbackRoutes = require('./routes/feedback');
+const interactionRoutes = require('./routes/interactions');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -49,12 +51,12 @@ app.use(express.json());
 
 // Swagger API Documentation
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
-  customCss: '.swagger-ui .topbar { display: none }',
-  customSiteTitle: 'EZ-Room API Docs',
+    customCss: '.swagger-ui .topbar { display: none }',
+    customSiteTitle: 'EZ-Room API Docs',
 }));
 app.get('/api-docs.json', (req, res) => {
-  res.setHeader('Content-Type', 'application/json');
-  res.send(swaggerSpec);
+    res.setHeader('Content-Type', 'application/json');
+    res.send(swaggerSpec);
 });
 
 // Routes
@@ -76,6 +78,7 @@ app.use('/moderator', moderatorRoutes);
 app.use('/reports', reportRoutes);
 app.use('/preorders', preorderRoutes);
 app.use('/feedback', feedbackRoutes);
+app.use('/interactions', interactionRoutes);
 
 // Test route
 app.get('/', (req, res) => {
@@ -104,6 +107,12 @@ app.get('/test-prisma', async (req, res) => {
 // Test Supabase connection
 app.get('/test-db', async (req, res) => {
     try {
+        if (!isSupabaseConfigured() || !supabase) {
+            return res.status(503).json({
+                success: false,
+                message: 'Supabase chưa cấu hình. Thêm SUPABASE_URL và SUPABASE_SERVICE_ROLE_KEY vào .env',
+            });
+        }
         // Try to query any table or just check connection
         const { data, error } = await supabase.from('users').select('*').limit(1);
 
@@ -141,4 +150,14 @@ app.use((err, req, res, next) => {
 
 app.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
+
+    // Pre-load AI models in background (non-blocking)
+    const { preloadEmbedding } = require('./utils/embedding');
+    const { preloadCLIP } = require('./utils/clip');
+    preloadEmbedding().then((ok) => {
+        if (ok) console.log('[Embedding] Model ready for smart search');
+    });
+    preloadCLIP().then((ok) => {
+        if (ok) console.log('[CLIP] Model ready for image search');
+    });
 });

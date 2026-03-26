@@ -12,7 +12,8 @@
     "db:migrate": "prisma migrate dev",
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
-    "db:seed": "node prisma/seed.js"
+    "db:seed": "node prisma/seed.js",
+    "diagnose:clip": "node scripts/diagnose-clip.js"
   },
   "prisma": {
     "seed": "node prisma/seed.js"
@@ -29,6 +30,8 @@
   },
   "homepage": "https://github.com/thanhpd123/ez-room-be#readme",
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@huggingface/transformers": "^3.8.1",
     "@prisma/client": "^6.19.2",
     "@supabase/supabase-js": "^2.95.3",
     "axios": "^1.7.9",
@@ -41,6 +44,7 @@
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.0.2",
     "nodemailer": "^8.0.1",
+    "openai": "^6.27.0",
     "swagger-jsdoc": "^6.2.8",
     "swagger-ui-express": "^5.0.1"
   },

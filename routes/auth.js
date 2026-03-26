@@ -1,6 +1,6 @@
 const express = require('express');
 const { verifyJWT } = require('../middleware/auth');
-const { register, registerOAuth, getCitizenCard, upsertCitizenCard, registerLandlord, login, forgotPassword, resetPassword, updateProfile, getLifestyle, upsertLifestyle, getPreference, upsertPreference, suggestPassword } = require('../controllers/auth.controller');
+const { register, registerOAuth, getCitizenCard, upsertCitizenCard, registerLandlord, login, forgotPassword, resetPassword, changePassword, updateProfile, getLifestyle, upsertLifestyle, getPreference, upsertPreference, suggestPassword } = require('../controllers/auth.controller');
 
 const router = express.Router();
 
@@ -148,6 +148,12 @@ router.put('/citizen-card', verifyJWT, upsertCitizenCard);
  * Requires CCCD verification status = VERIFIED
  */
 router.post('/register-landlord', verifyJWT, registerLandlord);
+
+/**
+ * PATCH /auth/change-password
+ * Body: { currentPassword, newPassword, confirmNewPassword }
+ */
+router.patch('/change-password', verifyJWT, changePassword);
 
 /**
  * @openapi
