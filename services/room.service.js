@@ -6,6 +6,15 @@ const { sendEmail } = require('../utils/email');
 
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5174';
 const AMENITIES_CACHE_KEY = 'rooms:amenities';
+const FREE_TIER_LANDLORD_MAX_ROOMS = Math.max(
+    1,
+    Number(process.env.FREE_TIER_LANDLORD_MAX_ROOMS || 5)
+);
+
+function isActiveVipLandlord(authUser) {
+    if (!authUser) return false;
+    return authUser.role === 'LANDLORD' && authUser.isVip === true;
+}
 
 function formatRoomResponse(room) {
     return {
@@ -74,7 +83,7 @@ function mapRentalPeriodStatus(s) {
     return m[s] || 'active';
 }
 
-async function createRoom(userId, body) {
+async function createRoom(userId, body, authUser = null) {
     const rentalId = body.rentalId || body.rental_id;
     const roomName = body.roomName || body.title;
     const description = body.description;
@@ -105,6 +114,27 @@ async function createRoom(userId, body) {
         throw Object.assign(new Error('Bạn không có quyền thêm phòng cho bất động sản này'), { statusCode: 403 });
     }
 
+    const vipLandlord = isActiveVipLandlord(authUser);
+    if (!vipLandlord) {
+        const ownedRoomsCount = await prisma.rooms.count({
+            where: {
+                rentals: {
+                    owner_id: userId,
+                },
+            },
+        });
+
+        if (ownedRoomsCount >= FREE_TIER_LANDLORD_MAX_ROOMS) {
+            const err = new Error(
+                `Tài khoản thường chỉ có thể đăng tối đa ${FREE_TIER_LANDLORD_MAX_ROOMS} phòng. Vui lòng nâng cấp VIP để mở rộng quota.`
+            );
+            err.statusCode = 403;
+            err.code = 'FREE_TIER_ROOM_LIMIT_REACHED';
+            err.upgradePath = '/vip-plans';
+            throw err;
+        }
+    }
+
     const room = await prisma.$transaction(async (tx) => {
         const created = await tx.rooms.create({
             data: {
@@ -131,7 +161,7 @@ async function createRoom(userId, body) {
             data: {
                 target_type: 'ROOM',
                 target_id: created.id,
-                priority: 'NORMAL',
+                priority: vipLandlord ? 'HIGH' : 'NORMAL',
                 category: 'NEW_LISTING',
                 source: 'SYSTEM',
             },
@@ -178,17 +208,17 @@ async function getRooms(params) {
             ...formatRoomResponse(room),
             rental: room.rentals
                 ? {
-                      id: room.rentals.id,
-                      title: room.rentals.title,
-                      status: room.rentals.status,
-                      location: room.rentals.location
-                          ? {
-                                address: room.rentals.location.address,
-                                district: room.rentals.location.district,
-                                city: room.rentals.location.city,
-                            }
-                          : null,
-                  }
+                    id: room.rentals.id,
+                    title: room.rentals.title,
+                    status: room.rentals.status,
+                    location: room.rentals.location
+                        ? {
+                            address: room.rentals.location.address,
+                            district: room.rentals.location.district,
+                            city: room.rentals.location.city,
+                        }
+                        : null,
+                }
                 : null,
         })),
         pagination: { page: pageNum, limit: pageSize, total, pages: Math.ceil(total / pageSize) },
@@ -227,27 +257,27 @@ async function getRoomById(roomId) {
             ...formatRoomResponse(room),
             rental: room.rentals
                 ? {
-                      id: room.rentals.id,
-                      title: room.rentals.title,
-                      description: room.rentals.description,
-                      status: room.rentals.status,
-                      location: room.rentals.location
-                          ? {
-                                address: room.rentals.location.address,
-                                district: room.rentals.location.district,
-                                city: room.rentals.location.city,
-                            }
-                          : null,
-                      owner: room.rentals.users
-                          ? {
-                                id: room.rentals.users.id,
-                                fullName: room.rentals.users.fullName,
-                                email: room.rentals.users.email,
-                                phone: room.rentals.users.phone,
-                                avatarUrl: room.rentals.users.avatarUrl,
-                            }
-                          : null,
-                  }
+                    id: room.rentals.id,
+                    title: room.rentals.title,
+                    description: room.rentals.description,
+                    status: room.rentals.status,
+                    location: room.rentals.location
+                        ? {
+                            address: room.rentals.location.address,
+                            district: room.rentals.location.district,
+                            city: room.rentals.location.city,
+                        }
+                        : null,
+                    owner: room.rentals.users
+                        ? {
+                            id: room.rentals.users.id,
+                            fullName: room.rentals.users.fullName,
+                            email: room.rentals.users.email,
+                            phone: room.rentals.users.phone,
+                            avatarUrl: room.rentals.users.avatarUrl,
+                        }
+                        : null,
+                }
                 : null,
         },
     };
@@ -341,8 +371,8 @@ async function updateRoom(roomId, userId, body) {
     const message = isResubmit
         ? 'Đã gửi lại phòng để duyệt'
         : needsModeration
-          ? 'Đã cập nhật và gửi phòng để duyệt lại'
-          : 'Cập nhật phòng thành công';
+            ? 'Đã cập nhật và gửi phòng để duyệt lại'
+            : 'Cập nhật phòng thành công';
 
     return { message, data: formatRoomResponse(room) };
 }

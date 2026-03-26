@@ -2,7 +2,56 @@ const jwt = require('jsonwebtoken');
 const supabase = require('../config/supabase');
 const prisma = require('../config/prisma');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'ez-room-default-secret';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+    throw new Error('Missing required environment variable: JWT_SECRET');
+}
+
+async function resolveVipStatus(dbUser) {
+    const isVip = dbUser.isVip === true;
+    const expiresAt = dbUser.vip_expires_at ? new Date(dbUser.vip_expires_at) : null;
+    const isExpired = expiresAt && expiresAt.getTime() <= Date.now();
+
+    if (!isVip || !isExpired) {
+        return {
+            isVip: isVip,
+            vipRole: dbUser.vip_role || null,
+            vipExpiresAt: dbUser.vip_expires_at || null,
+        };
+    }
+
+    await prisma.user.update({
+        where: { id: dbUser.id },
+        data: {
+            isVip: false,
+            vip_role: null,
+            vip_expires_at: null,
+        },
+    });
+
+    return {
+        isVip: false,
+        vipRole: null,
+        vipExpiresAt: null,
+    };
+}
+
+async function buildAuthUser(dbUser) {
+    const vip = await resolveVipStatus(dbUser);
+    return {
+        id: dbUser.id,
+        email: dbUser.email,
+        full_name: dbUser.fullName,
+        avatar_url: dbUser.avatarUrl ?? null,
+        created_at: dbUser.createdAt,
+        role: dbUser.role,
+        phone: dbUser.phone ?? null,
+        isVip: vip.isVip,
+        vip_role: vip.vipRole,
+        vip_expires_at: vip.vipExpiresAt,
+        gender: dbUser.gender ?? null,
+    };
+}
 
 /**
  * Verify Supabase JWT (Google OAuth) or Backend JWT (email/password)
@@ -47,15 +96,7 @@ async function verifyJWT(req, res, next) {
             }
             req.auth = {
                 user: {
-                    id: dbUser.id,
-                    email: dbUser.email,
-                    full_name: dbUser.fullName,
-                    avatar_url: dbUser.avatarUrl ?? null,
-                    created_at: dbUser.createdAt,
-                    role: dbUser.role,
-                    phone: dbUser.phone ?? null,
-                    isVip: dbUser.isVip === true,
-                    gender: dbUser.gender ?? null,
+                    ...(await buildAuthUser(dbUser)),
                 },
             };
             return next();
@@ -63,6 +104,12 @@ async function verifyJWT(req, res, next) {
 
         // 2) Try backend JWT (email/password login)
         const payload = jwt.verify(token, JWT_SECRET);
+        if (payload.type && payload.type !== 'access') {
+            return res.status(401).json({
+                success: false,
+                message: 'Loại token không hợp lệ',
+            });
+        }
         const userId = payload.userId || payload.sub;
         if (!userId) {
             return res.status(401).json({
@@ -81,15 +128,7 @@ async function verifyJWT(req, res, next) {
         }
         req.auth = {
             user: {
-                id: dbUser.id,
-                email: dbUser.email,
-                full_name: dbUser.fullName,
-                avatar_url: dbUser.avatarUrl ?? null,
-                created_at: dbUser.createdAt,
-                role: dbUser.role,
-                phone: dbUser.phone ?? null,
-                isVip: dbUser.isVip === true,
-                gender: dbUser.gender ?? null,
+                ...(await buildAuthUser(dbUser)),
             },
         };
         next();
@@ -104,6 +143,7 @@ async function verifyJWT(req, res, next) {
             return res.status(401).json({
                 success: false,
                 message: 'Token đã hết hạn',
+                code: 'TOKEN_EXPIRED',
             });
         }
         const isPrismaSchemaError = err.code && String(err.code).startsWith('P') ||
@@ -177,13 +217,7 @@ async function optionalJWT(req, res, next) {
             if (dbUser && dbUser.status === 'ACTIVE') {
                 req.auth = {
                     user: {
-                        id: dbUser.id,
-                        email: dbUser.email,
-                        full_name: dbUser.fullName,
-                        avatar_url: dbUser.avatarUrl ?? null,
-                        created_at: dbUser.createdAt,
-                        role: dbUser.role,
-                        phone: dbUser.phone ?? null,
+                        ...(await buildAuthUser(dbUser)),
                     },
                 };
                 return next();
@@ -192,19 +226,17 @@ async function optionalJWT(req, res, next) {
 
         // 2) Try backend JWT
         const payload = jwt.verify(token, JWT_SECRET);
+        if (payload.type && payload.type !== 'access') {
+            req.auth = null;
+            return next();
+        }
         const userId = payload.userId || payload.sub;
         if (userId) {
             const dbUser = await prisma.user.findUnique({ where: { id: userId } });
             if (dbUser && dbUser.status === 'ACTIVE') {
                 req.auth = {
                     user: {
-                        id: dbUser.id,
-                        email: dbUser.email,
-                        full_name: dbUser.fullName,
-                        avatar_url: dbUser.avatarUrl ?? null,
-                        created_at: dbUser.createdAt,
-                        role: dbUser.role,
-                        phone: dbUser.phone ?? null,
+                        ...(await buildAuthUser(dbUser)),
                     },
                 };
                 return next();

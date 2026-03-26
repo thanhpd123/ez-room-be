@@ -6,15 +6,73 @@ const {
     validateRegister,
     validateRegisterOAuth,
     validateLogin,
+    validateRefreshToken,
     validateForgotPassword,
     validateResetPassword,
 } = require('../validators/auth.validator');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'ez-room-default-secret';
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+    throw new Error('Missing required environment variable: JWT_SECRET');
+}
+const ACCESS_TOKEN_EXPIRES_IN = process.env.JWT_EXPIRES_IN || process.env.ACCESS_TOKEN_EXPIRES_IN || '15m';
+const REFRESH_TOKEN_EXPIRES_IN = process.env.REFRESH_TOKEN_EXPIRES_IN || '7d';
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5174';
 const RESET_TOKEN_EXPIRY = '1h';
 const EMAIL_VERIFY_EXPIRY = '24h';
+
+function hashToken(rawToken) {
+    return crypto.createHash('sha256').update(String(rawToken)).digest('hex');
+}
+
+function decodeExpToDate(token) {
+    const decoded = jwt.decode(token);
+    if (!decoded || typeof decoded !== 'object' || !decoded.exp) {
+        throw Object.assign(new Error('Không thể xác định hạn token'), { statusCode: 500 });
+    }
+    return new Date(Number(decoded.exp) * 1000);
+}
+
+function signAccessToken(user) {
+    return jwt.sign(
+        {
+            sub: user.id,
+            userId: user.id,
+            email: user.email,
+            role: user.role,
+            type: 'access',
+        },
+        JWT_SECRET,
+        { expiresIn: ACCESS_TOKEN_EXPIRES_IN }
+    );
+}
+
+async function issueRefreshToken(user, meta = {}) {
+    const refreshTokenId = crypto.randomUUID();
+    const refreshToken = jwt.sign(
+        {
+            sub: user.id,
+            tokenId: refreshTokenId,
+            type: 'refresh',
+        },
+        JWT_SECRET,
+        { expiresIn: REFRESH_TOKEN_EXPIRES_IN }
+    );
+
+    await prisma.refreshToken.create({
+        data: {
+            id: refreshTokenId,
+            userId: user.id,
+            tokenHash: hashToken(refreshToken),
+            isRevoked: false,
+            expiresAt: decodeExpToDate(refreshToken),
+            userAgent: meta.userAgent ? String(meta.userAgent).slice(0, 500) : null,
+            ipAddress: meta.ipAddress ? String(meta.ipAddress).slice(0, 45) : null,
+        },
+    });
+
+    return refreshToken;
+}
 
 function getTransporter() {
     const hasMail = !!(process.env.MAIL_HOST && process.env.MAIL_USER && process.env.MAIL_PASS);
@@ -243,14 +301,13 @@ async function login(body) {
         throw Object.assign(new Error('Tài khoản đã bị khóa hoặc tạm ngưng'), { statusCode: 403 });
     }
 
-    const token = jwt.sign(
-        { userId: user.id, email: user.email, role: user.role },
-        JWT_SECRET,
-        { expiresIn: JWT_EXPIRES_IN }
-    );
+    const accessToken = signAccessToken(user);
+    const refreshToken = await issueRefreshToken(user, body?.meta || {});
 
     return {
-        token,
+        token: accessToken,
+        accessToken,
+        refreshToken,
         user: {
             id: user.id,
             fullName: user.fullName,
@@ -264,6 +321,133 @@ async function login(body) {
             gender: user.gender ?? null,
         },
     };
+}
+
+async function refreshSession(body) {
+    const { valid, errors } = validateRefreshToken(body);
+    if (!valid) {
+        throw Object.assign(new Error('Dữ liệu không hợp lệ'), { statusCode: 400, errors });
+    }
+
+    const refreshTokenRaw = String(body.refreshToken);
+
+    let payload;
+    try {
+        payload = jwt.verify(refreshTokenRaw, JWT_SECRET);
+    } catch {
+        throw Object.assign(new Error('Refresh token không hợp lệ hoặc đã hết hạn'), {
+            statusCode: 401,
+            code: 'REFRESH_INVALID',
+        });
+    }
+
+    if (payload.type !== 'refresh' || !payload.sub || !payload.tokenId) {
+        throw Object.assign(new Error('Refresh token không hợp lệ'), {
+            statusCode: 401,
+            code: 'REFRESH_INVALID',
+        });
+    }
+
+    const tokenHash = hashToken(refreshTokenRaw);
+    const current = await prisma.refreshToken.findUnique({
+        where: { id: payload.tokenId },
+    });
+
+    if (
+        !current ||
+        current.userId !== payload.sub ||
+        current.isRevoked === true ||
+        current.tokenHash !== tokenHash ||
+        new Date(current.expiresAt).getTime() <= Date.now()
+    ) {
+        throw Object.assign(new Error('Phiên đăng nhập không còn hợp lệ'), {
+            statusCode: 401,
+            code: 'REFRESH_REVOKED',
+        });
+    }
+
+    const user = await prisma.user.findUnique({ where: { id: payload.sub } });
+    if (!user || user.status !== 'ACTIVE') {
+        throw Object.assign(new Error('Tài khoản không tồn tại hoặc đã bị khóa'), { statusCode: 401 });
+    }
+
+    await prisma.refreshToken.update({
+        where: { id: current.id },
+        data: {
+            isRevoked: true,
+            lastUsedAt: new Date(),
+        },
+    });
+
+    const nextRefreshToken = await issueRefreshToken(user, body?.meta || {});
+    const accessToken = signAccessToken(user);
+
+    return {
+        token: accessToken,
+        accessToken,
+        refreshToken: nextRefreshToken,
+        user: {
+            id: user.id,
+            fullName: user.fullName,
+            email: user.email,
+            phone: user.phone,
+            role: user.role,
+            status: user.status,
+            avatarUrl: user.avatarUrl,
+            createdAt: user.createdAt,
+            isVip: user.isVip === true,
+            gender: user.gender ?? null,
+        },
+    };
+}
+
+async function logoutCurrentSession(body) {
+    const { valid, errors } = validateRefreshToken(body);
+    if (!valid) {
+        throw Object.assign(new Error('Dữ liệu không hợp lệ'), { statusCode: 400, errors });
+    }
+
+    let payload;
+    try {
+        payload = jwt.verify(String(body.refreshToken), JWT_SECRET, { ignoreExpiration: true });
+    } catch {
+        return { revokedCount: 0 };
+    }
+
+    if (!payload?.tokenId || !payload?.sub) {
+        return { revokedCount: 0 };
+    }
+
+    const tokenHash = hashToken(body.refreshToken);
+    const result = await prisma.refreshToken.updateMany({
+        where: {
+            id: payload.tokenId,
+            userId: payload.sub,
+            tokenHash,
+            isRevoked: false,
+        },
+        data: {
+            isRevoked: true,
+            lastUsedAt: new Date(),
+        },
+    });
+
+    return { revokedCount: result.count };
+}
+
+async function logoutAllSessions(userId) {
+    const result = await prisma.refreshToken.updateMany({
+        where: {
+            userId,
+            isRevoked: false,
+        },
+        data: {
+            isRevoked: true,
+            lastUsedAt: new Date(),
+        },
+    });
+
+    return { revokedCount: result.count };
 }
 
 /**
@@ -600,6 +784,9 @@ module.exports = {
     register,
     registerOAuth,
     login,
+    refreshSession,
+    logoutCurrentSession,
+    logoutAllSessions,
     forgotPassword,
     resetPassword,
     updateProfile,
