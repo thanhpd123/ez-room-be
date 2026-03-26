@@ -51,7 +51,7 @@ async function getConversations(userId) {
         peerToUnread.set(peer, m.status !== 'READ' ? prev + 1 : prev);
     });
 
-    const peerIds = [...peerToLast.keys()];
+    const peerIds = [...peerToLast.keys()].filter((id) => id !== userId);
     if (peerIds.length === 0) {
         return { data: [] };
     }
