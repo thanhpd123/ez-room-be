@@ -21,7 +21,6 @@ model User {
   updated_at                                               DateTime?                @default(now()) @db.Timestamp(6)
   isVip                                                    Boolean?                 @default(false) @map("is_vip")
   gender                                                   String?                  @db.VarChar(20)
-  vip_role                                                 user_role_enum?
   vip_expires_at                                           DateTime?                @db.Timestamp(6)
   favoriteRooms                                            FavoriteRoom[]
   feedback_feedback_reviewed_byTousers                     feedback[]               @relation("feedback_reviewed_byTousers")
@@ -750,6 +749,7 @@ enum notification_type_enum {
   PAYMENT
   PREORDER
   ROOM_MATCH
+  ROOMMATE_INVITE
   FAVORITE
   ADMIN_ALERT
 }
