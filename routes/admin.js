@@ -9,8 +9,16 @@ const {
     getAllWallets,
     getWalletTransactions,
     getWalletStats,
+    getPendingWithdrawalQueue,
     approveWalletWithdrawal,
     rejectWalletWithdrawal,
+    approveWalletWithdrawalsBatch,
+    rejectWalletWithdrawalsBatch,
+    getSystemSettings,
+    updateSystemSettings,
+    getFinanceSummary,
+    getFinanceReconciliation,
+    getModeratorKpis,
 } = require('../controllers/admin.controller');
 
 const router = express.Router();
@@ -31,6 +39,106 @@ router.use(requireRole('ADMIN'));
  *         description: Thống kê tổng quan
  */
 router.get('/stats', getDashboardStats);
+
+/**
+ * @openapi
+ * /admin/settings:
+ *   get:
+ *     tags: [Admin]
+ *     summary: Lấy system settings (commission, deposit rules, ...)
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200:
+ *         description: Danh sách settings
+ */
+router.get('/settings', getSystemSettings);
+
+/**
+ * @openapi
+ * /admin/settings:
+ *   patch:
+ *     tags: [Admin]
+ *     summary: Cập nhật system settings (có audit)
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               settings:
+ *                 type: object
+ *     responses:
+ *       200:
+ *         description: Cập nhật thành công
+ */
+router.patch('/settings', updateSystemSettings);
+
+/**
+ * @openapi
+ * /admin/finance/summary:
+ *   get:
+ *     tags: [Admin]
+ *     summary: Finance KPIs (deposits/topups/fees)
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: query
+ *         name: from
+ *         schema: { type: string }
+ *       - in: query
+ *         name: to
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Finance summary
+ */
+router.get('/finance/summary', getFinanceSummary);
+
+/**
+ * @openapi
+ * /admin/finance/reconciliation:
+ *   get:
+ *     tags: [Admin]
+ *     summary: Basic mismatch detection (internal DB)
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: query
+ *         name: from
+ *         schema: { type: string }
+ *       - in: query
+ *         name: to
+ *         schema: { type: string }
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, default: 1 }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 50 }
+ *     responses:
+ *       200:
+ *         description: Reconciliation report
+ */
+router.get('/finance/reconciliation', getFinanceReconciliation);
+
+/**
+ * @openapi
+ * /admin/moderators/kpis:
+ *   get:
+ *     tags: [Admin]
+ *     summary: Moderator KPIs (queue-based)
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: query
+ *         name: from
+ *         schema: { type: string }
+ *       - in: query
+ *         name: to
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: KPI summary
+ */
+router.get('/moderators/kpis', getModeratorKpis);
 
 /**
  * @openapi
@@ -205,6 +313,47 @@ router.get('/wallets/:walletId/transactions', getWalletTransactions);
 
 /**
  * @openapi
+ * /admin/wallets/withdrawals/pending:
+ *   get:
+ *     tags: [Admin]
+ *     summary: Queue chờ duyệt rút tiền toàn hệ thống
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, default: 1 }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 20 }
+ *       - in: query
+ *         name: search
+ *         schema: { type: string }
+ *       - in: query
+ *         name: sortBy
+ *         schema: { type: string, enum: [createdAt, amount] }
+ *       - in: query
+ *         name: order
+ *         schema: { type: string, enum: [asc, desc] }
+ *       - in: query
+ *         name: minAmount
+ *         schema: { type: number }
+ *       - in: query
+ *         name: maxAmount
+ *         schema: { type: number }
+ *       - in: query
+ *         name: createdAfter
+ *         schema: { type: string }
+ *       - in: query
+ *         name: createdBefore
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Queue pending withdrawals
+ */
+router.get('/wallets/withdrawals/pending', getPendingWithdrawalQueue);
+
+/**
+ * @openapi
  * /admin/wallets/withdrawals/{transactionId}/approve:
  *   patch:
  *     tags: [Admin]
@@ -245,5 +394,53 @@ router.patch('/wallets/withdrawals/:transactionId/approve', approveWalletWithdra
  *         description: Từ chối thành công
  */
 router.patch('/wallets/withdrawals/:transactionId/reject', rejectWalletWithdrawal);
+
+/**
+ * @openapi
+ * /admin/wallets/withdrawals/batch-approve:
+ *   patch:
+ *     tags: [Admin]
+ *     summary: Duyệt hàng loạt yêu cầu rút tiền
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [transactionIds]
+ *             properties:
+ *               transactionIds:
+ *                 type: array
+ *                 items: { type: string }
+ *     responses:
+ *       200:
+ *         description: Kết quả duyệt hàng loạt
+ */
+router.patch('/wallets/withdrawals/batch-approve', approveWalletWithdrawalsBatch);
+
+/**
+ * @openapi
+ * /admin/wallets/withdrawals/batch-reject:
+ *   patch:
+ *     tags: [Admin]
+ *     summary: Từ chối hàng loạt yêu cầu rút tiền
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [transactionIds]
+ *             properties:
+ *               transactionIds:
+ *                 type: array
+ *                 items: { type: string }
+ *               reason:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Kết quả từ chối hàng loạt
+ */
+router.patch('/wallets/withdrawals/batch-reject', rejectWalletWithdrawalsBatch);
 
 module.exports = router;

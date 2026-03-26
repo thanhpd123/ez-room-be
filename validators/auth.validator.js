@@ -163,4 +163,26 @@ function validateResetPassword(body) {
     return { valid: errors.length === 0, errors };
 }
 
-module.exports = { validateRegister, validateRegisterOAuth, validateLogin, validateForgotPassword, validateResetPassword, validatePasswordStrength };
+/**
+ * Validate refresh token payload. Field: refreshToken
+ */
+function validateRefreshToken(body) {
+    const errors = [];
+    const { refreshToken } = body || {};
+
+    if (!refreshToken || typeof refreshToken !== 'string' || !refreshToken.trim()) {
+        errors.push('Refresh token là bắt buộc');
+    }
+
+    return { valid: errors.length === 0, errors };
+}
+
+module.exports = {
+    validateRegister,
+    validateRegisterOAuth,
+    validateLogin,
+    validateForgotPassword,
+    validateResetPassword,
+    validateRefreshToken,
+    validatePasswordStrength,
+};

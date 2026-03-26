@@ -27,9 +27,28 @@ const fakeRoom = {
         id: 'rental-1', title: 'Rental A', status: 'AVAILABLE', description: 'Desc',
         location: { address: '123 St', district: 'Q1', city: 'HCM' },
         images: [{ imageUrl: 'https://example.com/rental.jpg' }],
+        users: { id: 'landlord-1', role: 'LANDLORD', isVip: false },
         rooms: [],
     },
 };
+
+function buildRoom({ id, isVipLandlord }) {
+    return {
+        ...fakeRoom,
+        id,
+        room_name: `Room ${id}`,
+        rentals: {
+            ...fakeRoom.rentals,
+            id: `rental-${id}`,
+            users: {
+                id: `owner-${id}`,
+                role: 'LANDLORD',
+                isVip: isVipLandlord,
+            },
+            rooms: [],
+        },
+    };
+}
 
 /* ================================================================
    getPublicSearch
@@ -90,6 +109,85 @@ describe('Search > getPublicSearch', () => {
         const res = mockRes();
         await ctrl.getPublicSearch(req, res);
         assert.equal(res._status, 500);
+    });
+
+    it('should require VIP for advanced filters when guest', async () => {
+        const ctrl = loadController();
+        const req = mockReq({
+            query: { minArea: '20', amenities: 'am-1' },
+            auth: { user: null },
+        });
+        const res = mockRes();
+
+        await ctrl.getPublicSearch(req, res);
+
+        assert.equal(res._status, 403);
+        assert.equal(res._json.code, 'VIP_REQUIRED_FOR_ADVANCED_FILTERS');
+    });
+
+    it('should require VIP for advanced filters when authenticated but non-VIP', async () => {
+        const ctrl = loadController();
+        const req = mockReq({
+            query: { maxArea: '35' },
+            auth: {
+                user: {
+                    id: 'user-1',
+                    role: 'TENANT',
+                    isVip: false,
+                },
+            },
+        });
+        const res = mockRes();
+
+        await ctrl.getPublicSearch(req, res);
+
+        assert.equal(res._status, 403);
+        assert.equal(res._json.code, 'VIP_REQUIRED_FOR_ADVANCED_FILTERS');
+    });
+
+    it('should allow advanced filters for VIP users', async () => {
+        const ctrl = loadController();
+        const req = mockReq({
+            query: { minArea: '20', amenities: 'am-1' },
+            auth: {
+                user: {
+                    id: 'user-1',
+                    role: 'TENANT',
+                    isVip: true,
+                },
+            },
+        });
+        const res = mockRes();
+
+        await ctrl.getPublicSearch(req, res);
+
+        assert.equal(res._status, 200);
+        assert.equal(res._json.success, true);
+    });
+
+    it('should keep free-tier rooms visible on first page when many VIP rooms exist', async () => {
+        const vipRooms = Array.from({ length: 12 }, (_, idx) =>
+            buildRoom({ id: `vip-${idx + 1}`, isVipLandlord: true })
+        );
+        const freeRooms = Array.from({ length: 3 }, (_, idx) =>
+            buildRoom({ id: `free-${idx + 1}`, isVipLandlord: false })
+        );
+
+        mockPrisma.rooms.findMany = async () => [...vipRooms, ...freeRooms];
+        const ctrl = loadController();
+        const req = mockReq({
+            query: { limit: '10' },
+            auth: { user: null },
+        });
+        const res = mockRes();
+
+        await ctrl.getPublicSearch(req, res);
+
+        assert.equal(res._status, 200);
+        const freeInFirstPage = (res._json.data || []).filter((item) =>
+            String(item.id).startsWith('free-')
+        ).length;
+        assert.ok(freeInFirstPage >= 2);
     });
 });
 
