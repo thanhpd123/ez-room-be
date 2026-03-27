@@ -148,7 +148,6 @@ async function activateVipFromPaymentOrder(tx, paymentOrder) {
         where: { id: user.id },
         data: {
             isVip: true,
-            vip_role: vipPackage.target_role,
             vip_expires_at: endDate,
         },
     });
@@ -297,14 +296,13 @@ async function verifyVipPurchase(userId, orderCode) {
     if (order.status === 'SUCCESS') {
         const user = await prisma.user.findUnique({
             where: { id: userId },
-            select: { isVip: true, vip_role: true, vip_expires_at: true },
+            select: { isVip: true, vip_expires_at: true },
         });
         return {
             message: 'Giao dịch VIP đã được xác nhận trước đó',
             data: {
                 alreadyConfirmed: true,
                 isVip: user?.isVip === true,
-                vipRole: user?.vip_role || null,
                 vipExpiresAt: user?.vip_expires_at || null,
             },
         };
@@ -351,12 +349,11 @@ async function verifyVipPurchase(userId, orderCode) {
 
         const user = await tx.user.findUnique({
             where: { id: userId },
-            select: { isVip: true, vip_role: true, vip_expires_at: true },
+            select: { isVip: true, vip_expires_at: true },
         });
         activationResult = {
             activated: false,
             isVip: user?.isVip === true,
-            vipRole: user?.vip_role || null,
             vipExpiresAt: user?.vip_expires_at || null,
         };
     });
