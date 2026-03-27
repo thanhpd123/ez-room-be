@@ -29,6 +29,7 @@
   },
   "homepage": "https://github.com/thanhpd123/ez-room-be#readme",
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
     "@payos/node": "^2.0.5",
     "@prisma/client": "^6.19.2",
     "@supabase/supabase-js": "^2.95.3",

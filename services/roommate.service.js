@@ -344,15 +344,43 @@ async function getMyMatches(userId) {
             : [];
     const userMap = new Map(users.map((u) => [u.id, u]));
 
+    // Look up ROOMMATE_INVITE notifications to find roomId for each match
+    // Notifications are sent to the target user with roomId embedded in body
+    const allUserIds = [...new Set([userId, ...otherIds])];
+    const inviteNotifs = allUserIds.length > 0
+        ? await prisma.notification.findMany({
+              where: {
+                  userId: { in: allUserIds },
+                  type: 'ROOMMATE_INVITE',
+              },
+              orderBy: { createdAt: 'desc' },
+              select: { userId: true, body: true, createdAt: true },
+          })
+        : [];
+
+    // Build a map: targetUserId -> roomId (from the latest invite notification)
+    const roomIdByUser = new Map();
+    for (const n of inviteNotifs) {
+        if (!roomIdByUser.has(n.userId) && n.body) {
+            const match = n.body.match(/\|\|ROOM_ID:([a-f0-9-]+)\|\|/i);
+            if (match) {
+                roomIdByUser.set(n.userId, match[1]);
+            }
+        }
+    }
+
     const list = matches.map((m) => {
         const isRequester = m.requester_id === userId;
         const otherId = isRequester ? m.target_id : m.requester_id;
         const other = userMap.get(otherId) || null;
+        // roomId: check if the current user received an invite, or if the other user received one
+        const roomId = roomIdByUser.get(userId) || roomIdByUser.get(otherId) || null;
         return {
             id: m.id,
             status: m.status,
             createdAt: m.created_at,
             isRequester,
+            roomId,
             otherUser: other
                 ? {
                       id: other.id,
@@ -490,10 +518,170 @@ async function getPublicProfile(userId) {
     };
 }
 
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+
+/**
+ * Lấy danh sách phòng đang thuê (ACTIVE) của user
+ */
+async function getMyActiveRooms(userId) {
+    const periods = await prisma.roomRentalPeriod.findMany({
+        where: { userId, status: 'ACTIVE' },
+        include: {
+            room: {
+                include: {
+                    images: { take: 1 },
+                    rentals: {
+                        include: {
+                            location: true,
+                            images: { take: 1 },
+                        },
+                    },
+                },
+            },
+        },
+        orderBy: { startDate: 'desc' },
+    });
+
+    return {
+        data: periods.map((p) => {
+            const room = p.room;
+            const rental = room?.rentals;
+            const loc = rental?.location;
+            const address = loc
+                ? [loc.address, loc.district, loc.city].filter(Boolean).join(', ')
+                : '';
+            return {
+                rentalPeriodId: p.id,
+                roomId: room?.id,
+                roomName: room?.room_name || 'Phòng',
+                propertyName: rental?.title || 'Nhà trọ',
+                price: room?.price ? Number(room.price) : null,
+                address,
+                image: room?.images?.[0]?.imageUrl || rental?.images?.[0]?.imageUrl || null,
+                startDate: p.startDate,
+                endDate: p.endDate,
+            };
+        }),
+    };
+}
+
+/**
+ * Mời roommate đã chấp nhận kết bạn vào phòng đang thuê
+ * → Tạo notification + gửi email cho target user
+ */
+async function inviteRoommate(inviterId, targetUserId, roomId) {
+    if (inviterId === targetUserId) {
+        throw Object.assign(new Error('Không thể mời chính mình'), { statusCode: 400 });
+    }
+
+    // 1. Kiểm tra hai người đã ACCEPTED match
+    const match = await prisma.roommateMatch.findFirst({
+        where: {
+            OR: [
+                { requester_id: inviterId, target_id: targetUserId },
+                { requester_id: targetUserId, target_id: inviterId },
+            ],
+            status: 'ACCEPTED',
+        },
+    });
+    if (!match) {
+        throw Object.assign(
+            new Error('Hai bạn chưa kết bạn roommate hoặc lời mời chưa được chấp nhận'),
+            { statusCode: 400 }
+        );
+    }
+
+    // 2. Kiểm tra inviter đang thuê phòng này (ACTIVE)
+    const rentalPeriod = await prisma.roomRentalPeriod.findFirst({
+        where: { userId: inviterId, roomId, status: 'ACTIVE' },
+    });
+    if (!rentalPeriod) {
+        throw Object.assign(
+            new Error('Bạn không có hợp đồng thuê phòng này đang hoạt động'),
+            { statusCode: 400 }
+        );
+    }
+
+    // 3. Lấy thông tin phòng
+    const room = await prisma.rooms.findUnique({
+        where: { id: roomId },
+        include: {
+            images: { take: 1 },
+            rentals: {
+                include: {
+                    location: true,
+                    images: { take: 1 },
+                },
+            },
+        },
+    });
+    if (!room) {
+        throw Object.assign(new Error('Không tìm thấy phòng'), { statusCode: 404 });
+    }
+
+    // 4. Lấy thông tin cả 2 user
+    const [inviter, targetUser] = await Promise.all([
+        prisma.user.findUnique({ where: { id: inviterId }, select: { id: true, fullName: true } }),
+        prisma.user.findUnique({ where: { id: targetUserId }, select: { id: true, fullName: true, email: true, status: true } }),
+    ]);
+    if (!targetUser || targetUser.status !== 'ACTIVE') {
+        throw Object.assign(new Error('Người dùng không tồn tại hoặc không hoạt động'), { statusCode: 404 });
+    }
+
+    const rental = room.rentals;
+    const loc = rental?.location;
+    const roomTitle = room.room_name || rental?.title || 'Phòng trọ';
+    const address = loc ? [loc.address, loc.district, loc.city].filter(Boolean).join(', ') : '';
+    const price = room.price ? Number(room.price).toLocaleString('vi-VN') + ' VNĐ/tháng' : '';
+    const roomUrl = `${FRONTEND_URL.replace(/\/$/, '')}/room/${room.id}`;
+
+    // 5. Tạo notification trên hệ thống (roomId embedded in body for FE parsing)
+    const notifBody = `${inviter.fullName} mời bạn ở ghép phòng "${roomTitle}" tại ${address}. Giá: ${price}. Xem chi tiết phòng để quyết định.||ROOM_ID:${room.id}||`;
+    await prisma.notification.create({
+        data: {
+            userId: targetUserId,
+            type: 'ROOMMATE_INVITE',
+            title: `${inviter.fullName} mời bạn ở ghép`,
+            body: notifBody,
+            status: 'UNREAD',
+        },
+    });
+
+    // 6. Gửi email
+    const { sendEmail } = require('../utils/email');
+    const subject = `EZRoom – ${inviter.fullName} mời bạn ở ghép phòng "${roomTitle}"`;
+    const text = `Chào ${targetUser.fullName},\n\n${inviter.fullName} mời bạn ở ghép phòng "${roomTitle}".\n\nĐịa chỉ: ${address}\nGiá: ${price}\n\nXem chi tiết phòng: ${roomUrl}\n\n— EZRoom`;
+    const html = `
+        <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px">
+            <h2 style="color:#2d8a6e">🏠 Lời mời ở ghép từ ${inviter.fullName}</h2>
+            <p>Chào <strong>${targetUser.fullName}</strong>,</p>
+            <p><strong>${inviter.fullName}</strong> mời bạn ở ghép phòng:</p>
+            <div style="background:#f7faf9;border:1px solid #d4e8e0;border-radius:12px;padding:16px;margin:16px 0">
+                ${room.images?.[0]?.imageUrl ? `<img src="${room.images[0].imageUrl}" alt="${roomTitle}" style="width:100%;max-height:200px;object-fit:cover;border-radius:8px;margin-bottom:12px">` : ''}
+                <h3 style="margin:0 0 8px;color:#1a1a1a">${roomTitle}</h3>
+                <p style="margin:4px 0;color:#666">📍 ${address}</p>
+                <p style="margin:4px 0;color:#666">💰 ${price}</p>
+            </div>
+            <a href="${roomUrl}" style="display:inline-block;background:#2d8a6e;color:white;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:bold;margin-top:8px">Xem chi tiết phòng</a>
+            <p style="margin-top:24px;color:#999;font-size:13px">— EZRoom</p>
+        </div>
+    `;
+    await sendEmail(targetUser.email, subject, text, html).catch((err) =>
+        console.error('Send roommate invite email error:', err)
+    );
+
+    return {
+        message: `Đã gửi lời mời ở ghép đến ${targetUser.fullName}`,
+    };
+}
+
 module.exports = {
+    computeLifestyleScore,
     getSuggestions,
     sendRequest,
     getMyMatches,
     updateMatchStatus,
     getPublicProfile,
+    getMyActiveRooms,
+    inviteRoommate,
 };
