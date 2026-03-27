@@ -1,7 +1,7 @@
 const rentalService = require('../services/rental.service');
 
 function handleError(err, res, defaultMessage) {
-    const statusCode = err.statusCode || 500;
+    const statusCode = parseInt(err.statusCode) || 500;
     const message = err.message || defaultMessage;
     console.error('Rental error:', err);
     return res.status(statusCode).json({
@@ -15,7 +15,51 @@ function handleError(err, res, defaultMessage) {
 
 async function createRental(req, res) {
     try {
-        const result = await rentalService.createRental(req.auth.user.id, req.body);
+        // Extract files from multer
+        const uploadedFiles = req.files || [];
+        console.log('CREATE RENTAL - Request received:', {
+            totalUploadedFiles: uploadedFiles.length,
+            uploadedFiles: uploadedFiles.map(f => ({ 
+                fieldname: f.fieldname,
+                name: f.originalname, 
+                size: f.size, 
+                mime: f.mimetype 
+            })),
+            hasImages: !!req.body.images,
+        });
+
+        // Extract file objects
+        // ⚠️ Images can be uploaded via MultiImageUpload (Cloudinary) OR as files
+        // Documents can be PDFs or images (uploaded via MultiFileSelect for verification)
+        // All files in req.files are documents (from MultiFileSelect)
+        const documentFiles = uploadedFiles.filter(f => 
+            f.mimetype === 'application/pdf' || 
+            f.mimetype.startsWith('image/')  // Allow images as documents too
+        );
+
+        // Extract JSON image URLs from FormData
+        let imageUrls = [];
+        if (req.body.images) {
+            try {
+                const parsed = JSON.parse(req.body.images);
+                imageUrls = Array.isArray(parsed) ? parsed : [];
+            } catch (e) {
+                console.warn('Failed to parse images JSON:', e);
+            }
+        }
+
+        console.log('Extracted from FormData:', {
+            documentFiles: documentFiles.length,
+            imageUrls: imageUrls.length,
+        });
+
+        const result = await rentalService.createRental(req.auth.user.id, req.body, {
+            // Files from multipart - only documents, no separate imageFiles
+            documentFiles,
+            // URLs from FormData (JSON string)
+            imageUrls,
+        });
+        
         return res.status(201).json({
             success: true,
             message: 'Tạo bài đăng thành công. Đang chờ duyệt.',
@@ -104,7 +148,7 @@ async function getPublicRentalById(req, res) {
         return res.json({ success: true, ...result });
     } catch (err) {
         if (err.rentalId) {
-            return res.status(err.statusCode || 404).json({
+            return res.status(parseInt(err.statusCode) || 404).json({
                 success: false,
                 message: err.message,
                 rentalId: err.rentalId,
@@ -181,12 +225,42 @@ async function getLandlordDashboardStats(req, res) {
     }
 }
 
+async function getLandlordPerformanceMetrics(req, res) {
+    try {
+        const result = await rentalService.getLandlordPerformanceMetrics(req.auth.user.id);
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi lấy chỉ số hiệu suất');
+    }
+}
+
+async function getTopSearchedRooms(req, res) {
+    try {
+        const limit = parseInt(req.query.limit) || 5;
+        const result = await rentalService.getTopSearchedRooms(req.auth.user.id, limit);
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi lấy phòng được tìm kiếm nhiều');
+    }
+}
+
+async function getRentalDocumentsForModeration(req, res) {
+    try {
+        const { rentalId } = req.params;
+        const result = await rentalService.getRentalDocumentsForModeration(rentalId, req.auth.user.id);
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi lấy documents của rental');
+    }
+}
+
 module.exports = {
     createRental,
     getRentals,
     getRentalById,
     getMyRentals,
     getRentalsForModeration,
+    getRentalDocumentsForModeration,
     updateRentalStatus,
     updateRental,
     deleteRental,
@@ -196,4 +270,6 @@ module.exports = {
     getPublicRoomTypes,
     getLandlordProfile,
     getLandlordDashboardStats,
+    getLandlordPerformanceMetrics,
+    getTopSearchedRooms,
 };
