@@ -51,9 +51,12 @@ function profileToText(user, lifestyle, preference) {
     if (lifestyle.temperature_preference) parts.push(`Nhiệt độ: ${lifestyle.temperature_preference}`);
     if (lifestyle.quiet_hours_preference) parts.push(`Giờ yên tĩnh: ${lifestyle.quiet_hours_preference}`);
 
-    // Sở thích
+    // Sở thích (key factor)
     const interests = Array.isArray(lifestyle.interests) ? lifestyle.interests : [];
     if (interests.length > 0) parts.push(`Sở thích: ${interests.join(', ')}`);
+
+    // Điều không chấp nhận (key factor)
+    if (lifestyle.deal_breakers) parts.push(`Điều không chấp nhận: ${lifestyle.deal_breakers}`);
 
     // Ngôn ngữ
     const languages = Array.isArray(lifestyle.languages) ? lifestyle.languages : [];
@@ -106,18 +109,19 @@ NHIỆM VỤ:
 2. So khớp từng ứng viên với yêu cầu
 3. Cho điểm 0-100 và giải thích ngắn gọn
 
-QUY TẮC CHẤM ĐIỂM:
-- Tính cách phù hợp: +30 điểm
-- Thói quen sinh hoạt phù hợp: +30 điểm  
-- Sở thích tương đồng: +20 điểm
-- Các yếu tố khác (giới tính, khu vực): +20 điểm
-- Trừ điểm nếu có yếu tố mâu thuẫn trực tiếp
+QUY TẮC CHẤM ĐIỂM (tổng tối đa 100):
+- ★ Sở thích tương đồng: +25 điểm (QUAN TRỌNG NHẤT – sở thích chung giúp dễ sống hòa hợp)
+- ★ Điều không chấp nhận phù hợp: +25 điểm (QUAN TRỌNG – kiểm tra xem ứng viên có vi phạm điều không chấp nhận của người dùng không. Nếu vi phạm → trừ nặng. Nếu cả hai cùng không chấp nhận điều giống nhau → cộng điểm)
+- Thói quen sinh hoạt phù hợp (hút thuốc, rượu bia, lịch ngủ, sạch sẽ, chịu ồn): +25 điểm
+- Tính cách và các yếu tố khác (giới tính, khu vực): +25 điểm
+- Trừ điểm NẶNG nếu ứng viên vi phạm "Điều không chấp nhận" của người dùng
 
 TRẢ VỀ JSON array (CHỈ JSON, KHÔNG text khác):
-[{"id":1,"score":85,"reason":"Phù hợp vì tính cách hướng nội, không hút thuốc, thích bình yên"},{"id":2,"score":60,"reason":"Khá phù hợp nhưng thói quen ngủ khác nhau"}]
+[{"id":1,"score":85,"reason":"Cùng sở thích đọc sách, không hút thuốc – phù hợp yêu cầu"},{"id":2,"score":40,"reason":"Hút thuốc vi phạm điều không chấp nhận, tính cách không phù hợp"}]
 
 Lưu ý:
 - reason phải viết bằng tiếng Việt, ngắn gọn (tối đa 40 từ)
+- Giải thích rõ có sở thích chung gì, có vi phạm điều không chấp nhận gì không
 - Sắp xếp theo score giảm dần
 - Phải trả lời cho TẤT CẢ ứng viên`;
 
@@ -315,7 +319,11 @@ async function searchByPersonality(userId, queryText, limit = 10) {
                 work_from_home: s.lifestyle?.work_from_home ?? null,
                 personalityType: s.lifestyle?.personalityType ?? null,
                 social_level: s.lifestyle?.social_level ?? null,
+                cleanliness: s.lifestyle?.cleanliness ?? null,
+                noise_tolerance: s.lifestyle?.noise_tolerance ?? null,
+                guest_frequency: s.lifestyle?.guest_frequency ?? null,
                 interests: Array.isArray(s.lifestyle?.interests) ? s.lifestyle.interests : [],
+                deal_breakers: s.lifestyle?.deal_breakers ?? null,
             },
             preference: s.preference
                 ? {

@@ -4,67 +4,164 @@ const strEq = (a, b) =>
     a && b && String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
 
 /**
+ * Tokenize a text string into meaningful words for comparison.
+ * Splits on commas, spaces, and common delimiters; filters short/stop words.
+ */
+function tokenize(text) {
+    if (!text) return [];
+    return String(text)
+        .trim()
+        .toLowerCase()
+        .split(/[,，、;\s]+/)
+        .map((w) => w.trim())
+        .filter((w) => w.length > 1);
+}
+
+/**
+ * Check how many of a user's deal-breaker keywords are violated
+ * by the other user's actual lifestyle habits.
+ * Returns number of violations (0 = no conflict).
+ */
+function countDealBreakerViolations(dealBreakerText, otherLifestyle) {
+    if (!dealBreakerText || !otherLifestyle) return 0;
+    const db = String(dealBreakerText).trim().toLowerCase();
+    if (!db) return 0;
+
+    let violations = 0;
+
+    // Smoking-related deal-breakers
+    if (/hút thuốc|thuốc lá|smoking|khói thuốc/.test(db) && otherLifestyle.smoking)
+        violations++;
+
+    // Drinking-related deal-breakers
+    if (/rượu|bia|uống rượu|drinking|nhậu/.test(db) && otherLifestyle.drinking)
+        violations++;
+
+    // Cleanliness-related deal-breakers
+    if (/dơ|bẩn|không sạch|ở bẩn|mất vệ sinh/.test(db)) {
+        const low = String(otherLifestyle.cleanliness || '').trim().toLowerCase();
+        if (low === 'bình thường' || low === 'không quan tâm') violations++;
+    }
+
+    // Noise-related deal-breakers
+    if (/ồn|ồn ào|tiếng ồn|noise|gây ồn/.test(db)) {
+        const low = String(otherLifestyle.noise_tolerance || '').trim().toLowerCase();
+        if (low === 'cao') violations++;
+    }
+
+    // Pet-related deal-breakers
+    if (/thú cưng|chó|mèo|pet|nuôi/.test(db) && otherLifestyle.pets_allowed)
+        violations++;
+
+    // Guest-related deal-breakers
+    if (/khách|đưa người lạ|dẫn bạn|guest/.test(db)) {
+        const low = String(otherLifestyle.guest_frequency || '').trim().toLowerCase();
+        if (low === 'thường xuyên') violations++;
+    }
+
+    // Late night / sleep related deal-breakers
+    if (/thức khuya|về khuya|ngủ muộn|khuya/.test(db)) {
+        const low = String(otherLifestyle.sleep_schedule || '').trim().toLowerCase();
+        if (low.includes('sau 0h') || low.includes('khuya')) violations++;
+    }
+
+    return violations;
+}
+
+/**
  * Compute lifestyle + preference compatibility score (0–100)
+ *
+ * Scoring breakdown (visible UI fields only):
+ *   Thói quen       – smoking(10), drinking(8), pets_allowed(10) .............. 28 pts
+ *   Sinh hoạt        – sleep_schedule(10), cleanliness(10),
+ *                      noise_tolerance(8), guest_frequency(6) ................ 34 pts
+ *   Tính cách        – personalityType(6) ..................................... 6 pts
+ *   ★ Sở thích       – interests overlap .................................... 15 pts
+ *   ★ Điều không chấp nhận – deal_breakers similarity + cross-check ........ 15 pts
+ *   Khu vực + loại phòng ................................................... 20 pts
+ *   Gender boost (outside this function) .................................... +12
  */
 function computeLifestyleScore(myLifestyle, candidateLifestyle, myPrefs, candidatePrefs) {
     let score = 0;
     let maxPossible = 0;
 
+    // ── Core Lifestyle Matching ──
     if (myLifestyle && candidateLifestyle) {
-        const lifestylePairs = [
-            [myLifestyle.smoking, candidateLifestyle.smoking, 8],
-            [myLifestyle.drinking, candidateLifestyle.drinking, 5],
+        // Boolean habit matching
+        const boolPairs = [
+            [myLifestyle.smoking, candidateLifestyle.smoking, 10],
+            [myLifestyle.drinking, candidateLifestyle.drinking, 8],
             [myLifestyle.pets_allowed, candidateLifestyle.pets_allowed, 10],
-            [myLifestyle.work_from_home, candidateLifestyle.work_from_home, 5],
         ];
-        lifestylePairs.forEach(([a, b, pts]) => {
+        boolPairs.forEach(([a, b, pts]) => {
             maxPossible += pts;
             if (a === b) score += pts;
         });
+
+        // String-match daily-life factors
         const strPairs = [
-            [myLifestyle.sleep_schedule, candidateLifestyle.sleep_schedule, 8],
-            [myLifestyle.cleanliness, candidateLifestyle.cleanliness, 5],
-            [myLifestyle.noise_tolerance, candidateLifestyle.noise_tolerance, 5],
-            [myLifestyle.guest_frequency, candidateLifestyle.guest_frequency, 4],
-            [myLifestyle.cooking_frequency, candidateLifestyle.cooking_frequency, 4],
-            [myLifestyle.personalityType, candidateLifestyle.personalityType, 4],
-            [myLifestyle.social_level, candidateLifestyle.social_level, 4],
-            [myLifestyle.wake_time, candidateLifestyle.wake_time, 3],
-            [myLifestyle.bedtime, candidateLifestyle.bedtime, 3],
-            [myLifestyle.occupation_type, candidateLifestyle.occupation_type, 3],
-            [myLifestyle.temperature_preference, candidateLifestyle.temperature_preference, 2],
-            [myLifestyle.quiet_hours_preference, candidateLifestyle.quiet_hours_preference, 2],
+            [myLifestyle.sleep_schedule, candidateLifestyle.sleep_schedule, 10],
+            [myLifestyle.cleanliness, candidateLifestyle.cleanliness, 10],
+            [myLifestyle.noise_tolerance, candidateLifestyle.noise_tolerance, 8],
+            [myLifestyle.guest_frequency, candidateLifestyle.guest_frequency, 6],
+            [myLifestyle.personalityType, candidateLifestyle.personalityType, 6],
         ];
         strPairs.forEach(([a, b, pts]) => {
             maxPossible += pts;
             if (strEq(a, b)) score += pts;
         });
+
+        // ── ★ Interests overlap (15 pts) ──
         const myInterests = Array.isArray(myLifestyle.interests) ? myLifestyle.interests : [];
-        const candInterests = Array.isArray(candidateLifestyle.interests)
-            ? candidateLifestyle.interests
-            : [];
-        const commonInterests = myInterests.filter((i) => candInterests.includes(i)).length;
-        const interestPts = Math.min(12, commonInterests * 3);
-        maxPossible += 12;
-        score += interestPts;
-        const myLangs = Array.isArray(myLifestyle.languages) ? myLifestyle.languages : [];
-        const candLangs = Array.isArray(candidateLifestyle.languages)
-            ? candidateLifestyle.languages
-            : [];
-        const commonLangs = myLangs.filter((l) => candLangs.includes(l)).length;
-        const langPts = Math.min(5, commonLangs * 2);
-        maxPossible += 5;
-        score += langPts;
-        if (
-            myLifestyle.preferred_lease_months != null &&
-            candidateLifestyle.preferred_lease_months != null
-        ) {
-            maxPossible += 3;
-            if (myLifestyle.preferred_lease_months === candidateLifestyle.preferred_lease_months)
-                score += 3;
+        const candInterests = Array.isArray(candidateLifestyle.interests) ? candidateLifestyle.interests : [];
+        if (myInterests.length > 0 || candInterests.length > 0) {
+            maxPossible += 15;
+            if (myInterests.length > 0 && candInterests.length > 0) {
+                // Word-level overlap across all interest items
+                const myTokens = new Set(myInterests.flatMap((s) => tokenize(s)));
+                const candTokens = new Set(candInterests.flatMap((s) => tokenize(s)));
+                let overlapCount = 0;
+                for (const t of myTokens) {
+                    if (candTokens.has(t)) overlapCount++;
+                }
+                const unionSize = new Set([...myTokens, ...candTokens]).size;
+                if (unionSize > 0) {
+                    score += Math.round(15 * (overlapCount / unionSize));
+                }
+            }
+            // else: one side empty → 0 points but counted in maxPossible
+        }
+
+        // ── ★ Deal-breakers (15 pts total) ──
+        const myDB = String(myLifestyle.deal_breakers || '').trim();
+        const candDB = String(candidateLifestyle.deal_breakers || '').trim();
+        const hasAnyDB = myDB.length > 0 || candDB.length > 0;
+
+        if (hasAnyDB) {
+            // Part A (7 pts): Similarity – both users share the same deal-breakers = aligned values
+            maxPossible += 7;
+            if (myDB && candDB) {
+                const myWords = tokenize(myDB);
+                const candWords = tokenize(candDB);
+                const mySet = new Set(myWords);
+                const overlapCount = candWords.filter((w) => mySet.has(w)).length;
+                const unionSize = new Set([...myWords, ...candWords]).size;
+                if (unionSize > 0) {
+                    score += Math.round(7 * (overlapCount / unionSize));
+                }
+            }
+
+            // Part B (8 pts): Cross-check – penalize if candidate violates my deal-breakers or vice versa
+            maxPossible += 8;
+            const myViolations = countDealBreakerViolations(myDB, candidateLifestyle);
+            const candViolations = countDealBreakerViolations(candDB, myLifestyle);
+            const totalViolations = myViolations + candViolations;
+            // Each violation costs 3 pts, max penalty = 8
+            score += Math.max(0, 8 - totalViolations * 3);
         }
     }
 
+    // ── Room Preference Matching (20 pts) ──
     if (myPrefs && candidatePrefs) {
         const myDistricts = Array.isArray(myPrefs.preferred_districts)
             ? myPrefs.preferred_districts
@@ -72,63 +169,25 @@ function computeLifestyleScore(myLifestyle, candidateLifestyle, myPrefs, candida
         const candDistricts = Array.isArray(candidatePrefs.preferred_districts)
             ? candidatePrefs.preferred_districts
             : [];
-        const districtOverlap =
-            myDistricts.some((d) =>
-                candDistricts.some((c) =>
-                    String(c).toLowerCase().includes(String(d).toLowerCase())
-                )
-            ) ||
-            candDistricts.some((d) =>
-                myDistricts.some((c) =>
-                    String(c).toLowerCase().includes(String(d).toLowerCase())
-                )
-            );
-        maxPossible += 12;
-        if (districtOverlap) score += 12;
-
-        maxPossible += 8;
-        if (
-            myPrefs.room_type &&
-            candidatePrefs.room_type &&
-            myPrefs.room_type === candidatePrefs.room_type
-        )
-            score += 8;
-
-        const myAmenities = Array.isArray(myPrefs.preferred_amenities)
-            ? myPrefs.preferred_amenities
-            : [];
-        const candAmenities = Array.isArray(candidatePrefs.preferred_amenities)
-            ? candidatePrefs.preferred_amenities
-            : [];
-        const commonAmenities = myAmenities.filter((a) => candAmenities.includes(a)).length;
-        const amenityPts = Math.min(10, commonAmenities * 2);
-        maxPossible += 10;
-        score += amenityPts;
-
-        const myMust = Array.isArray(myPrefs.must_have_amenities)
-            ? myPrefs.must_have_amenities
-            : [];
-        const candMust = Array.isArray(candidatePrefs.must_have_amenities)
-            ? candidatePrefs.must_have_amenities
-            : [];
-        const mustOverlap =
-            myMust.some((m) => candMust.includes(m)) ||
-            (myMust.length === 0 && candMust.length === 0);
-        maxPossible += 8;
-        if (mustOverlap) score += 8;
-
-        if (
-            myPrefs.preferred_lease_months != null &&
-            candidatePrefs.preferred_lease_months != null
-        ) {
-            maxPossible += 5;
-            if (myPrefs.preferred_lease_months === candidatePrefs.preferred_lease_months)
-                score += 5;
+        if (myDistricts.length > 0 && candDistricts.length > 0) {
+            const districtOverlap =
+                myDistricts.some((d) =>
+                    candDistricts.some((c) =>
+                        String(c).toLowerCase().includes(String(d).toLowerCase())
+                    )
+                ) ||
+                candDistricts.some((d) =>
+                    myDistricts.some((c) =>
+                        String(c).toLowerCase().includes(String(d).toLowerCase())
+                    )
+                );
+            maxPossible += 12;
+            if (districtOverlap) score += 12;
         }
 
-        if (myPrefs.pet_friendly != null && candidatePrefs.pet_friendly != null) {
-            maxPossible += 4;
-            if (myPrefs.pet_friendly === candidatePrefs.pet_friendly) score += 4;
+        if (myPrefs.room_type && candidatePrefs.room_type) {
+            maxPossible += 8;
+            if (myPrefs.room_type === candidatePrefs.room_type) score += 8;
         }
     }
 
@@ -221,7 +280,11 @@ async function getSuggestions(userId, params) {
                       work_from_home: u.lifestyleProfile.work_from_home,
                       personalityType: u.lifestyleProfile.personalityType,
                       social_level: u.lifestyleProfile.social_level,
+                      cleanliness: u.lifestyleProfile.cleanliness,
+                      noise_tolerance: u.lifestyleProfile.noise_tolerance,
+                      guest_frequency: u.lifestyleProfile.guest_frequency,
                       interests: u.lifestyleProfile.interests || [],
+                      deal_breakers: u.lifestyleProfile.deal_breakers || null,
                   }
                 : null,
             preference: u.preference
@@ -497,6 +560,7 @@ async function getPublicProfile(userId) {
                       temperature_preference: lp.temperature_preference,
                       quiet_hours_preference: lp.quiet_hours_preference,
                       interests: lp.interests || [],
+                      deal_breakers: lp.deal_breakers || null,
                       languages: lp.languages || [],
                       preferred_lease_months: lp.preferred_lease_months,
                   }
