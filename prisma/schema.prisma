@@ -106,6 +106,7 @@ model LifestyleProfile {
   updated_at             DateTime? @updatedAt @map("updated_at") @db.Timestamp(6)
   wake_time              String?   @map("wake_time") @db.VarChar(50)
   work_from_home         Boolean?  @default(false) @map("work_from_home")
+  deal_breakers          String?   @db.VarChar(500)
   user                   User      @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@map("lifestyle_profiles")

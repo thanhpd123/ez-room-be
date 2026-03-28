@@ -154,6 +154,7 @@ function toLifestyleResponse(profile) {
         move_in_date: safeDateToISOString(profile.move_in_date),
         temperature_preference: profile.temperature_preference ?? null,
         quiet_hours_preference: profile.quiet_hours_preference ?? null,
+        deal_breakers: profile.deal_breakers ?? null,
     };
 }
 
@@ -687,6 +688,7 @@ async function upsertLifestyle(userId, body) {
         move_in_date: date(body.move_in_date),
         temperature_preference: str(body.temperature_preference, 20),
         quiet_hours_preference: str(body.quiet_hours_preference, 30),
+        deal_breakers: str(body.deal_breakers, 500),
     };
     const update = {};
     Object.keys(create).forEach((k) => {
