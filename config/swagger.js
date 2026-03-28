@@ -48,6 +48,7 @@ const options = {
       { name: 'Preorders', description: 'Đơn đặt trước' },
       { name: 'Feedback', description: 'Đánh giá phòng' },
       { name: 'Upload', description: 'Tải ảnh lên' },
+      { name: 'Blog', description: 'Bài viết và tin tức' },
     ],
   },
   apis: ['./routes/*.js', './server.js'],
