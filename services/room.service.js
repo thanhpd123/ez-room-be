@@ -252,11 +252,22 @@ async function getRoomById(roomId) {
         throw Object.assign(new Error('Không tìm thấy phòng'), { statusCode: 404 });
     }
 
-    // Increment search_count (async, don't await)
+    // Increment overall search_count (async, don't await)
     prisma.rooms.update({
         where: { id: roomId },
         data: { search_count: { increment: 1 } },
     }).catch(err => console.error('Error incrementing search_count:', err));
+
+    // Track per-user VIEW interaction (used for area-based roommate ranking)
+    if (userId) {
+        prisma.user_room_interactions.create({
+            data: {
+                user_id: userId,
+                room_id: roomId,
+                interaction_type: 'VIEW',
+            },
+        }).catch(err => console.error('Error tracking room view:', err));
+    }
 
     return {
         data: {
@@ -771,6 +782,74 @@ async function getMyBookings(userId) {
     return { data: bookings };
 }
 
+async function getRoomByIdForSearchRoomate(roomId, userId = null) {
+    const room = await prisma.rooms.findUnique({
+        where: { id: roomId },
+        include: {
+            images: true,
+            roomAmenities: { include: { amenity: true } },
+            rentals: {
+                include: {
+                    location: true,
+                    users: {
+                        select: {
+                            id: true,
+                            fullName: true,
+                            email: true,
+                            phone: true,
+                            avatarUrl: true,
+                        },
+                    },
+                },
+            },
+        },
+    });
+
+    if (!room) {
+        throw Object.assign(new Error('Không tìm thấy phòng'), { statusCode: 404 });
+    }
+
+    // Tăng search_count
+    prisma.rooms.update({
+        where: { id: roomId },
+        data: { search_count: { increment: 1 } },
+    }).catch(err => console.error('Error incrementing search_count:', err));
+
+    // Ghi nhận tương tác VIEW
+    if (userId) {
+        prisma.user_room_interactions.create({
+            data: {
+                user_id: userId,
+                room_id: roomId,
+                interaction_type: 'VIEW',
+            },
+        }).catch(err => console.error('Error tracking room view:', err));
+    }
+
+    return {
+        data: {
+            ...formatRoomResponse(room),
+            rental: room.rentals
+                ? {
+                    id: room.rentals.id,
+                    title: room.rentals.title,
+                    description: room.rentals.description,
+                    status: room.rentals.status,
+                    location: room.rentals.location
+                        ? {
+                            address: room.rentals.location.address,
+                            district: room.rentals.location.district,
+                            city: room.rentals.location.city,
+                            ward: room.rentals.location.ward,
+                        }
+                        : null,
+                    owner: room.rentals.users,
+                }
+                : null,
+        },
+    };
+}
+
 module.exports = {
     createRoom,
     getRooms,
@@ -783,4 +862,5 @@ module.exports = {
     searchTenants,
     createRentalContract,
     getMyBookings,
+    getRoomByIdForSearchRoomate,
 };

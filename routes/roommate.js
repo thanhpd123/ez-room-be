@@ -9,6 +9,7 @@ const {
     getMyActiveRooms,
     inviteRoommate,
     semanticSearch,
+    searchByArea,
 } = require('../controllers/roommate.controller');
 
 const router = express.Router();
@@ -38,6 +39,28 @@ router.use(verifyJWT);
  *         description: Cần VIP
  */
 router.get('/search', semanticSearch);
+
+/**
+ * @openapi
+ * /roommate/top-searchers-by-area:
+ *   get:
+ *     tags: [Roommate]
+ *     summary: Tìm người dùng đang tìm phòng nhiều nhất ở khu vực (dựa trên hành vi thực tế)
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: query
+ *         name: area
+ *         required: true
+ *         schema: { type: string }
+ *         description: Tên khu vực cần tìm (VD liêm, hòa lạc, quận 1)
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 10 }
+ *     responses:
+ *       200:
+ *         description: Danh sách người đang tìm phòng ở khu vực
+ */
+router.get('/top-searchers-by-area', searchByArea);
 
 
 /**

@@ -110,6 +110,20 @@ async function semanticSearch(req, res) {
     }
 }
 
+async function searchByArea(req, res) {
+    try {
+        const area = String(req.query.area || '').trim();
+        if (!area) {
+            return res.status(400).json({ success: false, message: 'Vui lòng nhập khu vực (area)' });
+        }
+        const limit = Math.min(20, Math.max(1, parseInt(req.query.limit) || 10));
+        const result = await roommateService.getTopSearchersInArea(req.auth.user.id, area, limit);
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi tìm kiếm theo khu vực');
+    }
+}
+
 module.exports = {
     getSuggestions,
     sendRequest,
@@ -119,5 +133,6 @@ module.exports = {
     getMyActiveRooms,
     inviteRoommate,
     semanticSearch,
+    searchByArea,
 };
 
