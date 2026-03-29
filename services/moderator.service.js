@@ -139,13 +139,26 @@ async function getAllUsers(params) {
                 role: true,
                 status: true,
                 createdAt: true,
+                _count: {
+                    select: { user_warnings_user_warnings_user_idTousers: true }
+                }
             },
         }),
         prisma.user.count({ where }),
     ]);
 
     return {
-        data: users,
+        data: users.map(u => ({
+            id: u.id,
+            fullName: u.fullName,
+            email: u.email,
+            phone: u.phone,
+            avatarUrl: u.avatarUrl,
+            role: u.role,
+            status: u.status,
+            createdAt: u.createdAt,
+            warningCount: u._count?.user_warnings_user_warnings_user_idTousers || 0
+        })),
         pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
     };
 }
