@@ -84,31 +84,43 @@ function countDealBreakerViolations(dealBreakerText, otherLifestyle) {
 function computeLifestyleScore(myLifestyle, candidateLifestyle, myPrefs, candidatePrefs) {
     let score = 0;
     let maxPossible = 0;
+    let totalPenalties = 0;
 
     // ── Core Lifestyle Matching ──
     if (myLifestyle && candidateLifestyle) {
         // Boolean habit matching
         const boolPairs = [
-            [myLifestyle.smoking, candidateLifestyle.smoking, 10],
-            [myLifestyle.drinking, candidateLifestyle.drinking, 8],
-            [myLifestyle.pets_allowed, candidateLifestyle.pets_allowed, 10],
+            [myLifestyle.smoking, candidateLifestyle.smoking, 10, 'smoking'],
+            [myLifestyle.drinking, candidateLifestyle.drinking, 8, 'drinking'],
+            [myLifestyle.pets_allowed, candidateLifestyle.pets_allowed, 10, 'pets'],
         ];
-        boolPairs.forEach(([a, b, pts]) => {
+        boolPairs.forEach(([a, b, pts, type]) => {
             maxPossible += pts;
-            if (a === b) score += pts;
+            if (a === b) {
+                score += pts;
+            } else if (a !== undefined && a !== null && b !== undefined && b !== null) {
+                if (type === 'smoking') totalPenalties += 10;
+                if (type === 'pets') totalPenalties += 10;
+            }
         });
 
         // String-match daily-life factors
         const strPairs = [
-            [myLifestyle.sleep_schedule, candidateLifestyle.sleep_schedule, 10],
-            [myLifestyle.cleanliness, candidateLifestyle.cleanliness, 10],
-            [myLifestyle.noise_tolerance, candidateLifestyle.noise_tolerance, 8],
-            [myLifestyle.guest_frequency, candidateLifestyle.guest_frequency, 6],
-            [myLifestyle.personalityType, candidateLifestyle.personalityType, 6],
+            [myLifestyle.sleep_schedule, candidateLifestyle.sleep_schedule, 10, 'sleep'],
+            [myLifestyle.cleanliness, candidateLifestyle.cleanliness, 10, 'cleanliness'],
+            [myLifestyle.noise_tolerance, candidateLifestyle.noise_tolerance, 8, 'noise'],
+            [myLifestyle.guest_frequency, candidateLifestyle.guest_frequency, 6, 'guest'],
+            [myLifestyle.personalityType, candidateLifestyle.personalityType, 6, 'personality'],
         ];
-        strPairs.forEach(([a, b, pts]) => {
+        strPairs.forEach(([a, b, pts, type]) => {
             maxPossible += pts;
-            if (strEq(a, b)) score += pts;
+            if (strEq(a, b)) {
+                score += pts;
+            } else if (a && b) {
+                if (type === 'sleep') totalPenalties += 10;
+                if (type === 'cleanliness') totalPenalties += 10;
+                if (type === 'guest') totalPenalties += 10;
+            }
         });
 
         // ── ★ Interests overlap (15 pts) ──
@@ -192,7 +204,8 @@ function computeLifestyleScore(myLifestyle, candidateLifestyle, myPrefs, candida
     }
 
     if (maxPossible === 0) return 0;
-    return Math.min(100, Math.max(0, Math.round((score / maxPossible) * 100)));
+    const computedPercentage = Math.round((score / maxPossible) * 100);
+    return Math.min(100, Math.max(0, computedPercentage - totalPenalties));
 }
 
 /**
@@ -239,7 +252,7 @@ async function getSuggestions(userId, params) {
         myGenderNorm !== 'không tiết lộ' &&
         myGenderNorm !== 'khong tiet lo';
 
-    const candidates = await prisma.user.findMany({
+    let candidates = await prisma.user.findMany({
         where: {
             id: { notIn: Array.from(excludeIds) },
             status: 'ACTIVE',
@@ -250,6 +263,13 @@ async function getSuggestions(userId, params) {
             preference: true,
         },
     });
+
+    if (hasUsableGender && (myGenderNorm === 'nam' || myGenderNorm === 'nữ')) {
+        candidates = candidates.filter((u) => {
+            const candNorm = genderNorm(u.gender);
+            return candNorm === myGenderNorm;
+        });
+    }
 
     const scored = candidates.map((u) => {
         const candidateGenderNorm = genderNorm(u.gender);
@@ -263,7 +283,6 @@ async function getSuggestions(userId, params) {
             me.preference,
             u.preference
         );
-        const genderBoost = isSameGender ? 12 : 0;
         return {
             user: {
                 id: u.id,
@@ -296,7 +315,7 @@ async function getSuggestions(userId, params) {
                       preferredLocation: u.preference.preferredLocation || null,
                   }
                 : null,
-            matchScore: Math.min(100, baseScore + genderBoost),
+            matchScore: Math.min(100, baseScore),
             isSameGender,
         };
     });
@@ -739,6 +758,232 @@ async function inviteRoommate(inviterId, targetUserId, roomId) {
     };
 }
 
+/**
+ * Tìm người dùng đang tìm phòng nhiều nhất ở khu vực X.
+ *
+ * Dựa trên HÀNH VI THỰC TẾ:
+ *   1. FavoriteRoom  – user đã lưu phòng ở khu vực đó
+ *   2. Preorder      – user đã đặt cọc phòng ở khu vực đó
+ *   3. RoomRentalPeriod – user đã/đang thuê phòng ở khu vực đó
+ *
+ * Mỗi hành vi = 1 điểm activity. Xếp hạng user theo tổng điểm giảm dần.
+ * Trả về kèm lifestyle + preference + matchScore so với user hiện tại.
+ */
+async function getTopSearchersInArea(currentUserId, areaQuery, limit = 10) {
+    const area = (areaQuery || '').trim();
+    if (!area || area.length < 1) {
+        throw Object.assign(new Error('Vui lòng nhập khu vực'), { statusCode: 400 });
+    }
+
+    const areaLower = area.toLowerCase();
+    const areaPattern = `%${areaLower}%`;
+
+    // 1. Tìm tất cả roomIds thuộc khu vực khớp (district, city, address, hoặc title của rental)
+    const roomsInArea = await prisma.rooms.findMany({
+        where: {
+            rentals: {
+                OR: [
+                    {
+                        location: {
+                            OR: [
+                                { district: { contains: area, mode: 'insensitive' } },
+                                { city: { contains: area, mode: 'insensitive' } },
+                                { address: { contains: area, mode: 'insensitive' } },
+                            ],
+                        },
+                    },
+                    { title: { contains: area, mode: 'insensitive' } },
+                ],
+            },
+        },
+        select: {
+            id: true,
+            rentals: {
+                select: {
+                    title: true,
+                    location: { select: { address: true, district: true, city: true } },
+                },
+            },
+        },
+    });
+
+    const roomIdsInArea = roomsInArea.map((r) => r.id);
+    if (roomIdsInArea.length === 0) {
+        return { data: [], area, totalRoomsInArea: 0 };
+    }
+
+    // 2. Đếm activity per user dựa trên HÀNH VI TÌM KIẾM THỰC SỰ:
+    //    - VIEW      ×1 : bấm vào xem chi tiết phòng (user_room_interactions)
+    //    - FAVORITE  ×3 : lưu/yêu thích phòng (FavoriteRoom)
+    //    - PREORDER  ×5 : đặt cọc phòng (Preorder)
+    //    (Bỏ RoomRentalPeriod – người đã ký hợp đồng không phải đang tìm phòng)
+    const [viewCounts, favCounts, preorderCounts] = await Promise.all([
+        // Lượt xem phòng thực sự (click vào trang chi tiết)
+        prisma.user_room_interactions.groupBy({
+            by: ['user_id'],
+            where: {
+                room_id: { in: roomIdsInArea },
+                interaction_type: 'VIEW',
+            },
+            _count: { user_id: true },
+        }),
+        // Lưu phòng yêu thích
+        prisma.favoriteRoom.groupBy({
+            by: ['userId'],
+            where: { roomId: { in: roomIdsInArea } },
+            _count: { userId: true },
+        }),
+        // Đặt cọc phòng
+        prisma.preorder.groupBy({
+            by: ['userId'],
+            where: { roomId: { in: roomIdsInArea } },
+            _count: { userId: true },
+        }),
+    ]);
+
+    // 3. Gộp activity score per user
+    const activityMap = new Map(); // userId → { views, fav, preorder, total }
+    for (const row of viewCounts) {
+        const uid = row.user_id;
+        if (!activityMap.has(uid)) activityMap.set(uid, { views: 0, fav: 0, preorder: 0, total: 0 });
+        const entry = activityMap.get(uid);
+        entry.views = row._count.user_id;
+        entry.total += row._count.user_id * 1; // VIEW ×1
+    }
+    for (const row of favCounts) {
+        const uid = row.userId;
+        if (!activityMap.has(uid)) activityMap.set(uid, { views: 0, fav: 0, preorder: 0, total: 0 });
+        const entry = activityMap.get(uid);
+        entry.fav = row._count.userId;
+        entry.total += row._count.userId * 3; // FAVORITE ×3
+    }
+    for (const row of preorderCounts) {
+        const uid = row.userId;
+        if (!activityMap.has(uid)) activityMap.set(uid, { views: 0, fav: 0, preorder: 0, total: 0 });
+        const entry = activityMap.get(uid);
+        entry.preorder = row._count.userId;
+        entry.total += row._count.userId * 5; // PREORDER ×5
+    }
+
+    // Loại bỏ chính mình
+    activityMap.delete(currentUserId);
+
+    if (activityMap.size === 0) {
+        return { data: [], area, totalRoomsInArea: roomIdsInArea.length };
+    }
+
+    // 4. Sắp xếp theo activity giảm dần, lấy top
+    const sortedUserIds = [...activityMap.entries()]
+        .sort((a, b) => b[1].total - a[1].total)
+        .slice(0, Math.min(50, limit))
+        .map(([uid]) => uid);
+
+    // 5. Load user info + lifestyle + preference
+    const [users, currentUser] = await Promise.all([
+        prisma.user.findMany({
+            where: {
+                id: { in: sortedUserIds },
+                status: 'ACTIVE',
+                role: 'TENANT',
+            },
+            include: {
+                lifestyleProfile: true,
+                preference: true,
+            },
+        }),
+        prisma.user.findUnique({
+            where: { id: currentUserId },
+            include: {
+                lifestyleProfile: true,
+                preference: true,
+            },
+        }),
+    ]);
+
+    // Map users by id for ordering
+    const userMap = new Map(users.map((u) => [u.id, u]));
+
+    // 6. Build response with matchScore
+    const genderNorm = (g) => {
+        if (!g) return null;
+        const s = String(g).trim().toLowerCase();
+        if (s === 'nam' || s === 'male') return 'nam';
+        if (s === 'nữ' || s === 'female' || s === 'nu') return 'nữ';
+        if (s === 'khác' || s === 'other') return 'khác';
+        return s;
+    };
+    const myGenderNorm = currentUser ? genderNorm(currentUser.gender) : null;
+    const hasUsableGender = !!myGenderNorm && myGenderNorm !== 'không tiết lộ';
+
+    const data = sortedUserIds
+        .map((uid) => {
+            const u = userMap.get(uid);
+            if (!u) return null;
+
+            const activity = activityMap.get(uid);
+            const candidateGenderNorm = genderNorm(u.gender);
+            const isSameGender = hasUsableGender && candidateGenderNorm === myGenderNorm;
+
+            const baseScore = currentUser
+                ? computeLifestyleScore(
+                      currentUser.lifestyleProfile,
+                      u.lifestyleProfile,
+                      currentUser.preference,
+                      u.preference
+                  )
+                : 0;
+            const genderBoost = isSameGender ? 12 : 0;
+
+            return {
+                user: {
+                    id: u.id,
+                    fullName: u.fullName,
+                    avatarUrl: u.avatarUrl,
+                    gender: u.gender,
+                },
+                lifestyle: u.lifestyleProfile
+                    ? {
+                          smoking: u.lifestyleProfile.smoking,
+                          drinking: u.lifestyleProfile.drinking,
+                          pets_allowed: u.lifestyleProfile.pets_allowed,
+                          sleep_schedule: u.lifestyleProfile.sleep_schedule,
+                          personalityType: u.lifestyleProfile.personalityType,
+                          cleanliness: u.lifestyleProfile.cleanliness,
+                          noise_tolerance: u.lifestyleProfile.noise_tolerance,
+                          guest_frequency: u.lifestyleProfile.guest_frequency,
+                          interests: u.lifestyleProfile.interests || [],
+                          deal_breakers: u.lifestyleProfile.deal_breakers || null,
+                      }
+                    : null,
+                preference: u.preference
+                    ? {
+                          preferred_districts: u.preference.preferred_districts || [],
+                          room_type: u.preference.room_type,
+                          budget_min: u.preference.budget_min ? Number(u.preference.budget_min) : null,
+                          budget_max: u.preference.budget_max ? Number(u.preference.budget_max) : null,
+                          preferredLocation: u.preference.preferredLocation || null,
+                      }
+                    : null,
+                matchScore: Math.min(100, baseScore + genderBoost),
+                isSameGender,
+                activityInArea: {
+                    views: activity.views,
+                    favorites: activity.fav,
+                    preorders: activity.preorder,
+                    totalScore: activity.total,
+                },
+            };
+        })
+        .filter(Boolean)
+        .slice(0, limit);
+
+    return {
+        data,
+        area,
+        totalRoomsInArea: roomIdsInArea.length,
+    };
+}
+
 module.exports = {
     computeLifestyleScore,
     getSuggestions,
@@ -748,4 +993,5 @@ module.exports = {
     getPublicProfile,
     getMyActiveRooms,
     inviteRoommate,
+    getTopSearchersInArea,
 };

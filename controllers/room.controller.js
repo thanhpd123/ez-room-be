@@ -49,6 +49,16 @@ async function getRoomById(req, res) {
     }
 }
 
+async function getRoomByIdForSearchRoomate(req, res) {
+    try {
+        const userId = req.auth?.user?.id ?? null;
+        const result = await roomService.getRoomByIdForSearchRoomate(req.params.roomId, userId);
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi lấy chi tiết phòng (Search Roommate)');
+    }
+}
+
 async function updateRoom(req, res) {
     try {
         const result = await roomService.updateRoom(
@@ -144,4 +154,5 @@ module.exports = {
     searchTenants,
     createRentalContract,
     getMyBookings,
+    getRoomByIdForSearchRoomate,
 };
