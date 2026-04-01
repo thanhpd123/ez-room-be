@@ -16,6 +16,13 @@ function parsePositiveAmount(raw) {
     return amount;
 }
 
+function isUuid(value) {
+    if (typeof value !== 'string') return false;
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        value.trim()
+    );
+}
+
 function generateOrderCode() {
     return Number(`${Date.now()}${Math.floor(Math.random() * 90) + 10}`);
 }
@@ -152,18 +159,9 @@ async function activateVipFromPaymentOrder(tx, paymentOrder) {
         },
     });
 
-    await tx.notification.create({
-        data: {
-            userId: user.id,
-            type: 'PAYMENT',
-            status: 'UNREAD',
-            title: 'Kích hoạt VIP thành công',
-            body: `Gói ${vipPackage.name} đã được kích hoạt đến ${endDate.toLocaleDateString('vi-VN')}.`,
-        },
-    });
-
     return {
         activated: true,
+        userId: user.id,
         packageId: vipPackage.id,
         packageName: vipPackage.name,
         vipExpiresAt: endDate,
@@ -202,6 +200,10 @@ async function createVipPurchase(authUser, body) {
 
     if (!packageId) {
         throw Object.assign(new Error('Thiếu packageId'), { statusCode: 400 });
+    }
+
+    if (!isUuid(packageId)) {
+        throw Object.assign(new Error('packageId không hợp lệ'), { statusCode: 400 });
     }
 
     if (!userRole || !['TENANT', 'LANDLORD'].includes(userRole)) {
@@ -277,8 +279,14 @@ async function verifyVipPurchase(userId, orderCode) {
         throw Object.assign(new Error('Thiếu orderCode'), { statusCode: 400 });
     }
 
+    const orderCodeText = String(orderCode).trim();
+    const orderCodeNumber = Number(orderCodeText);
+    if (!Number.isFinite(orderCodeNumber) || orderCodeNumber <= 0) {
+        throw Object.assign(new Error('orderCode không hợp lệ'), { statusCode: 400 });
+    }
+
     const order = await prisma.payment_orders.findUnique({
-        where: { vnp_txn_ref: String(orderCode) },
+        where: { vnp_txn_ref: orderCodeText },
     });
 
     if (!order) {
@@ -311,7 +319,7 @@ async function verifyVipPurchase(userId, orderCode) {
     const payos = getPayOSClient();
     let payosPayment;
     try {
-        payosPayment = await getPayOSPaymentByOrderCode(payos, Number(orderCode));
+        payosPayment = await getPayOSPaymentByOrderCode(payos, orderCodeNumber);
     } catch (err) {
         throw Object.assign(
             new Error(`Không thể xác minh giao dịch với PayOS: ${err.message}`),
@@ -357,6 +365,20 @@ async function verifyVipPurchase(userId, orderCode) {
             vipExpiresAt: user?.vip_expires_at || null,
         };
     });
+
+    if (activationResult?.activated && activationResult?.userId) {
+        prisma.notification.create({
+            data: {
+                userId: activationResult.userId,
+                type: 'PAYMENT',
+                status: 'UNREAD',
+                title: 'Kích hoạt VIP thành công',
+                body: `Gói ${activationResult.packageName} đã được kích hoạt đến ${new Date(activationResult.vipExpiresAt).toLocaleDateString('vi-VN')}.`,
+            },
+        }).catch((err) => {
+            console.error('Không thể gửi notification VIP sau khi kích hoạt:', err);
+        });
+    }
 
     return {
         message: 'Mua VIP thành công',
