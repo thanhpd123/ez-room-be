@@ -204,6 +204,27 @@ function mapWalletTxnStatus(orderStatus) {
     return 'FAILED';
 }
 
+async function getPayOSPaymentByOrderCode(payos, orderCode) {
+    if (payos?.paymentRequests?.get) {
+        return payos.paymentRequests.get(orderCode);
+    }
+
+    if (payos?.paymentRequests?.getByOrderCode) {
+        return payos.paymentRequests.getByOrderCode(orderCode);
+    }
+
+    throw new Error('SDK PayOS không hỗ trợ truy vấn theo orderCode');
+}
+
+function mapPayOSPaymentLinkStatusToOrderStatus(linkStatusRaw) {
+    const s = String(linkStatusRaw || '').toUpperCase();
+    if (s === 'PAID' || s === 'SUCCESS') return 'SUCCESS';
+    if (s === 'CANCELLED' || s === 'CANCELED') return 'CANCELLED';
+    if (s === 'EXPIRED') return 'EXPIRED';
+    if (s === 'PENDING' || s === 'PROCESSING') return 'PENDING';
+    return 'FAILED';
+}
+
 /**
  * Tenant tạo yêu cầu đặt cọc và link thanh toán PayOS
  */
@@ -355,6 +376,19 @@ async function createDepositPayment(userId, body) {
             buyerName: body?.buyerName || undefined,
             buyerEmail: body?.buyerEmail || undefined,
             buyerPhone: body?.buyerPhone || undefined,
+        });
+
+        // Persist checkoutUrl + paymentLinkId so "resume payment" can retrieve them later
+        await prisma.payment_orders.update({
+            where: { id: created.paymentOrder.id },
+            data: {
+                raw_ipn_payload: {
+                    step: 'created',
+                    checkoutUrl: paymentLink?.checkoutUrl || null,
+                    paymentLinkId: paymentLink?.paymentLinkId || null,
+                    qrCode: paymentLink?.qrCode || null,
+                },
+            },
         });
 
         return {
@@ -978,8 +1012,349 @@ async function rejectRequest(preorderId, landlordId, body) {
     return { data: updated };
 }
 
+/**
+ * Tenant resumes an unpaid PENDING preorder — fetches fresh PayOS checkout URL
+ */
+async function resumePayment(userId, preorderId) {
+    const preorder = await prisma.preorder.findUnique({
+        where: { id: preorderId },
+        include: {
+            room: {
+                select: { id: true, room_name: true, price: true, rentals: { select: { id: true, title: true } } },
+            },
+        },
+    });
+
+    if (!preorder) {
+        throw Object.assign(new Error('Yêu cầu đặt cọc không tồn tại'), { statusCode: 404 });
+    }
+    if (preorder.userId !== userId) {
+        throw Object.assign(new Error('Bạn không có quyền truy cập yêu cầu này'), { statusCode: 403 });
+    }
+    if (preorder.status !== 'PENDING' || preorder.payment_status !== 'UNPAID') {
+        throw Object.assign(
+            new Error('Chỉ có thể tiếp tục thanh toán cho yêu cầu chưa thanh toán'),
+            { statusCode: 400 }
+        );
+    }
+
+    // Find the most recent payment order for this preorder
+    const paymentOrder = await prisma.payment_orders.findFirst({
+        where: {
+            ref_id: preorderId,
+            purpose: 'PREORDER_DEPOSIT',
+            status: { in: ['PENDING', 'FAILED', 'CANCELLED', 'EXPIRED'] },
+        },
+        orderBy: { created_at: 'desc' },
+    });
+    let orderCode = paymentOrder?.vnp_txn_ref || null;
+    let checkoutUrl = null;
+
+    if (paymentOrder) {
+        // 1. Try the URL we persisted when the link was first created
+        const stored = paymentOrder.raw_ipn_payload || {};
+        checkoutUrl = stored.checkoutUrl || null;
+
+        // 2. If we have the paymentLinkId we can build the URL ourselves (PayOS format)
+        if (!checkoutUrl && stored.paymentLinkId) {
+            checkoutUrl = `https://pay.payos.vn/web/${stored.paymentLinkId}`;
+        }
+
+        // 3. Fall back to asking PayOS – response includes `id` (the payment link ID)
+        if (!checkoutUrl) {
+            const payos = getPayOSClient();
+            try {
+            const info = await getPayOSPaymentByOrderCode(payos, Number(paymentOrder.vnp_txn_ref));
+                // SDK may return data directly or nested; id / paymentLinkId both tried
+                const linkId = info?.id || info?.paymentLinkId || info?.data?.id || info?.data?.paymentLinkId;
+                if (linkId) {
+                    checkoutUrl = `https://pay.payos.vn/web/${linkId}`;
+                } else if (info?.checkoutUrl || info?.data?.checkoutUrl) {
+                    checkoutUrl = info?.checkoutUrl || info?.data?.checkoutUrl;
+                }
+            } catch {
+                // PayOS query failed – checkoutUrl stays null
+            }
+        }
+    }
+
+    // 4. If no valid link is found, generate a fresh payment order + payment link.
+    if (!checkoutUrl) {
+        const orderCodeNum = generateOrderCode();
+        orderCode = String(orderCodeNum);
+        const payos = getPayOSClient();
+
+        const createdOrder = await prisma.payment_orders.create({
+            data: {
+                user_id: userId,
+                vnp_txn_ref: orderCode,
+                amount: toNumber(preorder.deposit_amount),
+                purpose: 'PREORDER_DEPOSIT',
+                status: 'PENDING',
+                ref_type: 'PREORDER',
+                ref_id: preorder.id,
+            },
+        });
+
+        try {
+            const paymentLink = await payos.paymentRequests.create({
+                orderCode: orderCodeNum,
+                amount: toNumber(preorder.deposit_amount),
+                description: buildPayOSDescription(preorder.id),
+                returnUrl: buildPayOSRedirectUrl('return', preorder.id),
+                cancelUrl: buildPayOSRedirectUrl('cancel', preorder.id),
+            });
+
+            checkoutUrl = paymentLink?.checkoutUrl || null;
+
+            await prisma.payment_orders.update({
+                where: { id: createdOrder.id },
+                data: {
+                    raw_ipn_payload: {
+                        step: 'resume_created',
+                        checkoutUrl: paymentLink?.checkoutUrl || null,
+                        paymentLinkId: paymentLink?.paymentLinkId || null,
+                        qrCode: paymentLink?.qrCode || null,
+                    },
+                },
+            });
+        } catch (err) {
+            await prisma.payment_orders.update({
+                where: { id: createdOrder.id },
+                data: {
+                    status: 'FAILED',
+                    raw_ipn_payload: {
+                        step: 'resume_create_payment_link',
+                        error: err?.message || 'Unknown error',
+                    },
+                },
+            });
+            throw Object.assign(
+                new Error('Không thể tạo lại link thanh toán, vui lòng thử lại sau'),
+                { statusCode: 502 }
+            );
+        }
+    }
+
+    return {
+        data: {
+            preorderId: preorder.id,
+            roomId: preorder.roomId,
+            depositAmount: toNumber(preorder.deposit_amount),
+            room: preorder.room ? {
+                id: preorder.room.id,
+                room_name: preorder.room.room_name,
+                price: toNumber(preorder.room.price),
+            } : null,
+            payment: {
+                provider: 'PAYOS',
+                orderCode,
+                checkoutUrl,
+                status: 'PENDING',
+            },
+        },
+    };
+}
+
+/**
+ * Tenant hủy preorder chưa thanh toán
+ */
+async function cancelUnpaidPreorder(userId, preorderId, body = {}) {
+    const preorder = await prisma.preorder.findUnique({
+        where: { id: preorderId },
+    });
+
+    if (!preorder) {
+        throw Object.assign(new Error('Yêu cầu đặt cọc không tồn tại'), { statusCode: 404 });
+    }
+    if (preorder.userId !== userId) {
+        throw Object.assign(new Error('Bạn không có quyền hủy yêu cầu này'), { statusCode: 403 });
+    }
+    if (preorder.status !== 'PENDING' || preorder.payment_status !== 'UNPAID') {
+        throw Object.assign(
+            new Error('Chỉ có thể hủy yêu cầu đang chờ và chưa thanh toán'),
+            { statusCode: 400 }
+        );
+    }
+
+    const normalizedReason = typeof body.reason === 'string' ? body.reason.trim() : '';
+    const cancelReason = normalizedReason || 'TENANT_CANCELLED_UNPAID';
+
+    const updated = await prisma.$transaction(async (tx) => {
+        const cancelled = await tx.preorder.update({
+            where: { id: preorderId },
+            data: {
+                status: 'CANCELLED',
+                payment_status: 'UNPAID',
+                refund_status: 'NOT_APPLICABLE',
+                cancel_reason: cancelReason,
+            },
+        });
+
+        await tx.payment_orders.updateMany({
+            where: {
+                ref_type: 'PREORDER',
+                ref_id: preorderId,
+                purpose: 'PREORDER_DEPOSIT',
+                status: 'PENDING',
+            },
+            data: {
+                status: 'CANCELLED',
+            },
+        });
+
+        return cancelled;
+    });
+
+    return { data: mapPreorderItem(updated) };
+}
+
+/**
+ * Tenant chủ động verify trạng thái thanh toán preorder (fallback khi webhook không về)
+ */
+async function verifyPreorderPayment(userId, preorderId, orderCodeRaw) {
+    const VERIFY_COOLDOWN_SECONDS = Math.max(
+        10,
+        Number(process.env.PREORDER_VERIFY_COOLDOWN_SECONDS || 20)
+    );
+    const cooldownMs = VERIFY_COOLDOWN_SECONDS * 1000;
+    const preorder = await prisma.preorder.findUnique({
+        where: { id: preorderId },
+        select: { id: true, userId: true },
+    });
+
+    if (!preorder) {
+        throw Object.assign(new Error('Yêu cầu đặt cọc không tồn tại'), { statusCode: 404 });
+    }
+    if (preorder.userId !== userId) {
+        throw Object.assign(new Error('Bạn không có quyền truy cập yêu cầu này'), { statusCode: 403 });
+    }
+
+    const orderCode = String(orderCodeRaw || '').trim();
+    if (!orderCode) {
+        throw Object.assign(new Error('Thiếu orderCode để xác minh thanh toán'), { statusCode: 400 });
+    }
+
+    const paymentOrder = await prisma.payment_orders.findFirst({
+        where: {
+            vnp_txn_ref: orderCode,
+            purpose: 'PREORDER_DEPOSIT',
+            ref_type: 'PREORDER',
+            ref_id: preorderId,
+            user_id: userId,
+        },
+        orderBy: { created_at: 'desc' },
+    });
+    if (!paymentOrder) {
+        throw Object.assign(new Error('Không tìm thấy đơn thanh toán tương ứng'), { statusCode: 404 });
+    }
+
+    const lastCheckedAtRaw = paymentOrder?.raw_ipn_payload?._verify?.lastCheckedAt;
+    const lastCheckedAtMs = lastCheckedAtRaw ? new Date(lastCheckedAtRaw).getTime() : NaN;
+    const withinCooldown = Number.isFinite(lastCheckedAtMs) && (Date.now() - lastCheckedAtMs) < cooldownMs;
+    if (withinCooldown) {
+        return {
+            data: {
+                preorder: null,
+                payment: {
+                    orderCode,
+                    status: String(paymentOrder.status || 'PENDING'),
+                    payosStatus: paymentOrder?.raw_ipn_payload?._verify?.lastPayosStatus || null,
+                    skippedExternal: true,
+                    cooldownSeconds: VERIFY_COOLDOWN_SECONDS,
+                },
+            },
+        };
+    }
+
+    const payos = getPayOSClient();
+    let info;
+    try {
+        info = await getPayOSPaymentByOrderCode(payos, Number(orderCode));
+    } catch (err) {
+        throw Object.assign(
+            new Error(`Không thể xác minh trạng thái thanh toán: ${err?.message || 'PayOS error'}`),
+            { statusCode: 502 }
+        );
+    }
+
+    const linkStatus = info?.status || info?.data?.status;
+    const nextStatus = mapPayOSPaymentLinkStatusToOrderStatus(linkStatus);
+
+    await prisma.$transaction(async (tx) => {
+        const latestOrder = await tx.payment_orders.findUnique({ where: { id: paymentOrder.id } });
+        if (!latestOrder) return;
+
+        const finalOrderStatus = latestOrder.status === 'SUCCESS' ? 'SUCCESS' : nextStatus;
+
+        await tx.payment_orders.update({
+            where: { id: latestOrder.id },
+            data: {
+                status: finalOrderStatus,
+                raw_ipn_payload: {
+                    ...(latestOrder.raw_ipn_payload || {}),
+                    _verify: {
+                        lastCheckedAt: new Date().toISOString(),
+                        lastPayosStatus: linkStatus || null,
+                    },
+                    payosInfo: info || null,
+                },
+            },
+        });
+
+        if (finalOrderStatus === 'SUCCESS') {
+            await tx.preorder.update({
+                where: { id: preorderId },
+                data: {
+                    payment_status: 'PAID',
+                    status: 'PENDING',
+                },
+            });
+        } else if (finalOrderStatus !== 'PENDING') {
+            await tx.preorder.update({
+                where: { id: preorderId },
+                data: {
+                    payment_status: 'UNPAID',
+                    status: 'CANCELLED',
+                    cancel_reason: `PAYOS_${finalOrderStatus}`,
+                },
+            });
+        }
+    });
+
+    const updated = await prisma.preorder.findUnique({
+        where: { id: preorderId },
+        include: {
+            room: {
+                select: {
+                    id: true,
+                    room_name: true,
+                    price: true,
+                    rentals: { select: { id: true, title: true } },
+                },
+            },
+        },
+    });
+
+    return {
+        data: {
+            preorder: updated ? mapPreorderItem(updated) : null,
+            payment: {
+                orderCode,
+                status: nextStatus,
+                payosStatus: linkStatus || null,
+                skippedExternal: false,
+                cooldownSeconds: VERIFY_COOLDOWN_SECONDS,
+            },
+        },
+    };
+}
+
 module.exports = {
     createDepositPayment,
+    resumePayment,
+    cancelUnpaidPreorder,
+    verifyPreorderPayment,
     getMyPreorders,
     handlePayOSWebhook,
     getLandlordRequests,

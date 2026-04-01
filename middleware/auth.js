@@ -79,29 +79,30 @@ async function verifyJWT(req, res, next) {
     }
 
     try {
-        // 1) Try Supabase JWT (Google OAuth) – require matching Prisma user
-        const { data: { user: supaUser }, error } = await supabase.auth.getUser(token);
-        if (!error && supaUser) {
-            const email = (supaUser.email || '').toLowerCase();
-            const dbUser = await prisma.user.findUnique({
-                where: { email },
-            });
-            if (!dbUser || dbUser.status !== 'ACTIVE') {
-                return res.status(404).json({
-                    success: false,
-                    code: 'NEED_REGISTER',
-                    message: 'Tài khoản chưa đăng ký. Vui lòng đăng ký trước.',
-                    email: supaUser.email ?? null,
-                    full_name: supaUser.user_metadata?.full_name ?? supaUser.user_metadata?.name ?? null,
-                    avatar_url: supaUser.user_metadata?.avatar_url ?? null,
-                });
+        // 1) Try Supabase JWT (Google OAuth) – only when client is configured; isolated try so
+        //    any Supabase SDK error (bad key, network, 401) never kills the backend-JWT path.
+        if (supabase) {
+            try {
+                const { data: { user: supaUser }, error } = await supabase.auth.getUser(token);
+                if (!error && supaUser) {
+                    const email = (supaUser.email || '').toLowerCase();
+                    const dbUser = await prisma.user.findUnique({ where: { email } });
+                    if (!dbUser || dbUser.status !== 'ACTIVE') {
+                        return res.status(404).json({
+                            success: false,
+                            code: 'NEED_REGISTER',
+                            message: 'Tài khoản chưa đăng ký. Vui lòng đăng ký trước.',
+                            email: supaUser.email ?? null,
+                            full_name: supaUser.user_metadata?.full_name ?? supaUser.user_metadata?.name ?? null,
+                            avatar_url: supaUser.user_metadata?.avatar_url ?? null,
+                        });
+                    }
+                    req.auth = { user: { ...(await buildAuthUser(dbUser)) } };
+                    return next();
+                }
+            } catch {
+                // Supabase SDK error (invalid key, network issue) – fall through to backend JWT
             }
-            req.auth = {
-                user: {
-                    ...(await buildAuthUser(dbUser)),
-                },
-            };
-            return next();
         }
 
         // 2) Try backend JWT (email/password login)
@@ -209,17 +210,20 @@ async function optionalJWT(req, res, next) {
     }
 
     try {
-        const { data: { user: supaUser }, error } = await supabase.auth.getUser(token);
-        if (!error && supaUser) {
-            const email = (supaUser.email || '').toLowerCase();
-            const dbUser = await prisma.user.findUnique({ where: { email } });
-            if (dbUser && dbUser.status === 'ACTIVE') {
-                req.auth = {
-                    user: {
-                        ...(await buildAuthUser(dbUser)),
-                    },
-                };
-                return next();
+        // Same isolation pattern: Supabase SDK errors must never block backend-JWT fallback
+        if (supabase) {
+            try {
+                const { data: { user: supaUser }, error } = await supabase.auth.getUser(token);
+                if (!error && supaUser) {
+                    const email = (supaUser.email || '').toLowerCase();
+                    const dbUser = await prisma.user.findUnique({ where: { email } });
+                    if (dbUser && dbUser.status === 'ACTIVE') {
+                        req.auth = { user: { ...(await buildAuthUser(dbUser)) } };
+                        return next();
+                    }
+                }
+            } catch {
+                // Supabase SDK error – fall through to backend JWT
             }
         }
 

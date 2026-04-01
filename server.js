@@ -1,6 +1,9 @@
+const http = require('http');
 const express = require('express');
 const cors = require('cors');
 const swaggerUi = require('swagger-ui-express');
+const { Server: SocketServer } = require('socket.io');
+const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
 const swaggerSpec = require('./config/swagger');
@@ -30,10 +33,13 @@ const interactionRoutes = require('./routes/interactions');
 const documentRoutes = require('./routes/document');
 const vipRoutes = require('./routes/vip');
 const notificationRoutes = require('./routes/notification');
+const translateRoutes = require('./routes/translate');
 const { startPreorderPayoutReconciliationJob } = require('./services/preorder-reconciliation.service');
 const { startStaleCron } = require('./cron/release-stale-tasks');
+const { setIo, markOnline, markOffline, emitToUser, getOnlineUserIds, isOnline } = require('./utils/socket-manager');
 
 const app = express();
+const httpServer = http.createServer(app);
 const PORT = process.env.PORT || 3000;
 
 // Middleware – allow frontend origin for auth (Bearer token)
@@ -53,6 +59,59 @@ app.use(cors({
     },
     credentials: true,
 }));
+
+// ── Socket.io setup ──────────────────────────────────────────────────────────
+const io = new SocketServer(httpServer, {
+    cors: { origin: corsOrigin, credentials: true },
+    transports: ['websocket', 'polling'],
+});
+setIo(io);
+
+// Auth middleware: accepts the same backend JWT used for REST calls
+io.use((socket, next) => {
+    const token = socket.handshake.auth?.token;
+    if (!token) return next(new Error('Unauthorized'));
+    try {
+        const secret = process.env.JWT_SECRET;
+        if (!secret) return next(new Error('Server misconfigured'));
+        const decoded = jwt.verify(token, secret);
+        // Backend JWT has userId or sub
+        socket.userId = decoded.userId || decoded.sub;
+        if (!socket.userId) return next(new Error('Unauthorized'));
+        next();
+    } catch {
+        // Supabase tokens aren't verifiable synchronously here — they are still
+        // handled by the REST middleware. For sockets we only support backend JWT.
+        return next(new Error('Unauthorized'));
+    }
+});
+
+io.on('connection', (socket) => {
+    const userId = socket.userId;
+    markOnline(userId, socket.id);
+
+    // Tell this socket which users are currently online
+    socket.emit('online_users', getOnlineUserIds());
+
+    // Tell everyone else this user came online
+    socket.broadcast.emit('presence', { userId, online: true });
+
+    // Typing indicators
+    socket.on('typing', ({ toUserId }) => {
+        emitToUser(toUserId, 'typing', { fromUserId: userId });
+    });
+    socket.on('stop_typing', ({ toUserId }) => {
+        emitToUser(toUserId, 'stop_typing', { fromUserId: userId });
+    });
+
+    socket.on('disconnect', () => {
+        markOffline(userId, socket.id);
+        if (!isOnline(userId)) {
+            socket.broadcast.emit('presence', { userId, online: false });
+        }
+    });
+});
+// ─────────────────────────────────────────────────────────────────────────────
 
 // Routes - Rental routes MUST come BEFORE global JSON parser to allow multer to handle multipart
 app.use('/rentals', rentalRoutes);
@@ -94,6 +153,7 @@ app.use('/interactions', interactionRoutes);
 app.use('/documents', documentRoutes);
 app.use('/vip', vipRoutes);
 app.use('/notifications', notificationRoutes);
+app.use('/translate', translateRoutes);
 
 // Test route
 app.get('/', (req, res) => {
@@ -163,7 +223,7 @@ app.use((err, req, res, next) => {
     });
 });
 
-app.listen(PORT, () => {
+httpServer.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
     startPreorderPayoutReconciliationJob();
     startStaleCron();

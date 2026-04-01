@@ -340,7 +340,7 @@ async function getPublicSearch(params, userId) {
         const rentalBaseWhere =
             rentalBaseAnd.length === 1 ? rentalBaseAnd[0] : { AND: rentalBaseAnd };
         roomWhere = {
-            status: 'AVAILABLE',
+            status: { in: ['AVAILABLE', 'RENTED'] },
             AND: [
                 { rentals: rentalBaseWhere },
                 {
@@ -365,7 +365,7 @@ async function getPublicSearch(params, userId) {
     } else {
         const rentalWhere =
             rentalBaseAnd.length === 1 ? rentalBaseAnd[0] : { AND: rentalBaseAnd };
-        roomWhere = { status: 'AVAILABLE', rentals: rentalWhere };
+        roomWhere = { status: { in: ['AVAILABLE', 'RENTED'] }, rentals: rentalWhere };
     }
     if (
         (searchParams.minPrice != null && !Number.isNaN(searchParams.minPrice)) ||

@@ -71,6 +71,33 @@ const WEIGHTS_HYBRID_WITH_LOCATION = {
     nearbyPOIScore: 12,
 };
 
+const VI_STOPWORDS = new Set([
+    'co', 'có', 'la', 'là', 'va', 'và', 'hay', 'hoac', 'hoặc', 'toi', 'tôi',
+    'can', 'cần', 'tim', 'tìm', 'muon', 'muốn', 'phong', 'phòng',
+]);
+
+function buildQueryTerms(rawQuery = '', analysis = {}) {
+    const terms = new Set();
+    const addTerm = (value) => {
+        const t = String(value || '').toLowerCase().trim();
+        if (t.length < 2 || VI_STOPWORDS.has(t)) return;
+        terms.add(t);
+    };
+
+    const qTerms = String(rawQuery || '')
+        .toLowerCase()
+        .split(/[\s,.;:!?/\\\-_|()[\]{}]+/g)
+        .map((s) => s.trim())
+        .filter(Boolean);
+    qTerms.forEach(addTerm);
+
+    (analysis.keywords || []).forEach(addTerm);
+    (analysis.amenityHints || []).forEach(addTerm);
+    (analysis.locationHints || []).forEach(addTerm);
+
+    return Array.from(terms).slice(0, 12);
+}
+
 // ───────────────────── Score helpers ─────────────────────
 
 function computeTextMatchScore(room, analysis, rawQuery = '') {
@@ -282,6 +309,7 @@ async function getAdvancedSearch(req, res) {
                 // keep regex-only analysis
             }
         }
+        const queryTerms = buildQueryTerms(q, analysis);
 
         // Apply LLM-extracted price to filters when not provided by query
         let minPriceFilter = minPrice;
@@ -299,11 +327,11 @@ async function getAdvancedSearch(req, res) {
                 if (queryEmbedding) {
                     const vecStr = `[${queryEmbedding.join(',')}]`;
                     const similarRows = await prisma.$queryRawUnsafe(`
-                        SELECT room_id, 1 - (embedding <=> $1::vector) as similarity
+                        SELECT room_id, 1 - (embedding <=> '${vecStr}'::vector) as similarity
                         FROM room_text_embeddings
-                        ORDER BY embedding <=> $1::vector
+                        ORDER BY embedding <=> '${vecStr}'::vector
                         LIMIT 200
-                    `, vecStr);
+                    `);
                     for (const row of similarRows) {
                         const rid = row.room_id != null ? String(row.room_id) : '';
                         if (rid) embeddingSimilarityMap[rid] = Number(row.similarity) * 100;
@@ -345,6 +373,15 @@ async function getAdvancedSearch(req, res) {
                 { location: { is: { city: { contains: q, mode: 'insensitive' } } } },
                 { location: { is: { address: { contains: q, mode: 'insensitive' } } } },
             ];
+            for (const term of queryTerms) {
+                textOr.push(
+                    { title: { contains: term, mode: 'insensitive' } },
+                    { description: { contains: term, mode: 'insensitive' } },
+                    { location: { is: { district: { contains: term, mode: 'insensitive' } } } },
+                    { location: { is: { city: { contains: term, mode: 'insensitive' } } } },
+                    { location: { is: { address: { contains: term, mode: 'insensitive' } } } },
+                );
+            }
             const { cities: qCities, districts: qDistricts } = extractLocationTermsFromQuery(q);
             if (qCities.length > 0) textOr.push({ location: { is: { OR: qCities.map((c) => ({ city: { equals: c, mode: 'insensitive' } })) } } });
             if (qDistricts.length > 0) textOr.push({ location: { is: { OR: qDistricts.map((d) => ({ district: { equals: d, mode: 'insensitive' } })) } } });
@@ -354,7 +391,7 @@ async function getAdvancedSearch(req, res) {
         if (q.length > 0) {
             const rentalBaseWhere = rentalBaseAnd.length === 1 ? rentalBaseAnd[0] : { AND: rentalBaseAnd };
             roomWhere = {
-                status: 'AVAILABLE',
+                status: { in: ['AVAILABLE', 'RENTED'] },
                 AND: [
                     { rentals: rentalBaseWhere },
                     {
@@ -362,13 +399,15 @@ async function getAdvancedSearch(req, res) {
                             { rentals: { OR: textOr } },
                             { room_name: { contains: q, mode: 'insensitive' } },
                             { description: { contains: q, mode: 'insensitive' } },
+                            ...queryTerms.map((term) => ({ room_name: { contains: term, mode: 'insensitive' } })),
+                            ...queryTerms.map((term) => ({ description: { contains: term, mode: 'insensitive' } })),
                         ],
                     },
                 ],
             };
         } else {
             const rentalWhere = rentalBaseAnd.length === 1 ? rentalBaseAnd[0] : { AND: rentalBaseAnd };
-            roomWhere = { rentals: rentalWhere, status: 'AVAILABLE' };
+            roomWhere = { rentals: rentalWhere, status: { in: ['AVAILABLE', 'RENTED'] } };
         }
         if ((minPriceFilter != null && !Number.isNaN(minPriceFilter)) || (maxPriceFilter != null && !Number.isNaN(maxPriceFilter))) {
             roomWhere.price = {};
@@ -576,24 +615,42 @@ async function searchByImage(req, res) {
         }
 
         // 1. Generate CLIP embedding for uploaded image
-        const clipEmbedding = await getClipImageEmbedding(req.file.buffer);
-        if (!clipEmbedding || clipEmbedding.length === 0) {
+        const imageEmbedding = await getClipImageEmbedding(req.file.buffer);
+        if (!imageEmbedding || imageEmbedding.length === 0) {
             return res.status(500).json({ success: false, message: 'Không thể phân tích ảnh' });
         }
 
+        // Blend image embedding with optional text hint (CLIP multimodal: same embedding space)
+        // text_hint guides visual search toward specific attributes without overriding the image signal.
+        let clipEmbedding = imageEmbedding;
+        const textHint = (req.body?.text_hint || '').trim();
+        if (textHint) {
+            const textEmbedding = await getClipTextEmbedding(textHint);
+            if (textEmbedding && textEmbedding.length === imageEmbedding.length) {
+                // Image-dominant blend: 70% image + 30% text, then re-normalize
+                const alpha = 0.7;
+                const blended = imageEmbedding.map((v, i) => alpha * v + (1 - alpha) * textEmbedding[i]);
+                const norm = Math.sqrt(blended.reduce((s, v) => s + v * v, 0));
+                clipEmbedding = norm > 0 ? blended.map((v) => v / norm) : blended;
+            }
+        }
+
         // 2. CLIP image-to-image similarity (pgvector cosine distance)
+        // NOTE: the vector literal is embedded directly in the SQL string (not a $1 param) because
+        // Prisma's $queryRawUnsafe keeps $N params as text, breaking the pgvector <=> operator.
+        // This is safe: clipEmbedding is always a float[] we generated, never user input.
         let clipSimilarityMap = {};
         let vectorSearchError = null;
         try {
             const vecStr = `[${clipEmbedding.join(',')}]`;
             const clipRows = await prisma.$queryRawUnsafe(`
                 SELECT cv.room_image_id, ri.room_id,
-                       1 - (cv.embedding <=> $1::vector) as similarity
+                       1 - (cv.embedding <=> '${vecStr}'::vector) as similarity
                 FROM clip_vectors cv
                 JOIN room_images ri ON ri.id = cv.room_image_id
-                ORDER BY cv.embedding <=> $1::vector
+                ORDER BY cv.embedding <=> '${vecStr}'::vector
                 LIMIT 100
-            `, vecStr);
+            `);
             for (const row of clipRows) {
                 const roomId = row.room_id;
                 const sim = Number(row.similarity);
@@ -686,7 +743,10 @@ async function searchByImage(req, res) {
 
             const finalScore = clipSim * 0.50 + prefScore * 0.30 + ratingScoreVal * 0.20;
 
-            return formatRoom(room, Math.round(finalScore * 10) / 10, ratingByRoom);
+            const formatted = formatRoom(room, Math.round(finalScore * 10) / 10, ratingByRoom);
+            // Expose raw CLIP cosine similarity (0–100) so the UI can show "Visual match: X%"
+            formatted.clipSimilarity = Math.round((clipSimilarityMap[room.id] || 0) * 10000) / 100;
+            return formatted;
         });
 
         scored.sort((a, b) => b.matchScore - a.matchScore);
@@ -697,11 +757,12 @@ async function searchByImage(req, res) {
         return res.json({
             success: true,
             data: scored.slice(0, 50),
-            searchMode: 'clip_visual',
+            searchMode: textHint ? 'clip_multimodal' : 'clip_visual',
             meta: {
                 /** Raw CLIP cosine similarity (0–1) of best-matching stored image vs your upload */
                 topClipCosineSimilarity: topClipCosine,
                 roomsWithClipHits: candidateIds.length,
+                textHintUsed: textHint ? true : false,
                 effectivenessHint:
                     topClipCosine == null
                         ? null
@@ -948,12 +1009,12 @@ async function searchByText(req, res) {
             const vecStr = `[${textEmbedding.join(',')}]`;
             const clipRows = await prisma.$queryRawUnsafe(`
                 SELECT cv.room_image_id, ri.room_id,
-                       1 - (cv.embedding <=> $1::vector) as similarity
+                       1 - (cv.embedding <=> '${vecStr}'::vector) as similarity
                 FROM clip_vectors cv
                 JOIN room_images ri ON ri.id = cv.room_image_id
-                ORDER BY cv.embedding <=> $1::vector
+                ORDER BY cv.embedding <=> '${vecStr}'::vector
                 LIMIT 100
-            `, vecStr);
+            `);
             for (const row of clipRows) {
                 const roomId = row.room_id;
                 const sim = Number(row.similarity);
@@ -1045,7 +1106,8 @@ async function searchByText(req, res) {
  */
 async function getClipDiagnostics(req, res) {
     try {
-        const report = await runClipDiagnostics(prisma);
+        const skipDb = req.query?.skipDb === 'true' || req.query?.skipDb === '1';
+        const report = await runClipDiagnostics(prisma, { skipDb });
         return res.json({
             success: true,
             ...report,

@@ -3,14 +3,16 @@
  * No Python, no separate service needed.
  * On corrupt cache (e.g. Protobuf parsing failed), cache is cleared and load retried once.
  *
- * Model: Xenova/clip-vit-base-patch32 (ONNX, ~350MB, downloaded on first use)
- * Output: 512-dim normalized embedding vector
+ * Default: Xenova/clip-vit-base-patch16 (quantized ONNX) — sharper than ViT-B/32, still 512-d projection.
+ * Override: CLIP_MODEL (e.g. Xenova/clip-vit-base-patch32 for max throughput on weak CPUs).
+ * If you change CLIP_MODEL, re-run scripts/generate-clip-embeddings.js (vectors are not comparable across models).
  */
 
 const path = require('path');
 const fs = require('fs');
 
-const CLIP_MODEL = 'Xenova/clip-vit-base-patch32';
+const CLIP_MODEL = (process.env.CLIP_MODEL || 'Xenova/clip-vit-base-patch16').trim();
+/** Projection size for OpenAI CLIP ViT-B/16 and ViT-B/32 (Xenova ONNX). ViT-L/14 uses 768 — different model id + DB migration. */
 const CLIP_DIMS = 512;
 
 let processor = null;
@@ -21,7 +23,8 @@ let loadingPromise = null;
 let textLoadingPromise = null;
 
 function getClipCachePath() {
-    return path.join(__dirname, '..', 'node_modules', '@huggingface', 'transformers', '.cache', 'Xenova', 'clip-vit-base-patch32');
+    const parts = CLIP_MODEL.split('/').filter(Boolean);
+    return path.join(__dirname, '..', 'node_modules', '@huggingface', 'transformers', '.cache', ...parts);
 }
 
 function clearClipCache() {
@@ -47,7 +50,7 @@ async function loadCLIP() {
 
     loadingPromise = (async () => {
         const { AutoProcessor, CLIPVisionModelWithProjection, RawImage } = await import('@huggingface/transformers');
-        console.log('[CLIP] Loading vision model (first run downloads ~350MB)...');
+        console.log(`[CLIP] Loading vision model ${CLIP_MODEL} (first run may download hundreds of MB)...`);
         try {
             processor = await AutoProcessor.from_pretrained(CLIP_MODEL);
             model = await CLIPVisionModelWithProjection.from_pretrained(CLIP_MODEL);
@@ -110,8 +113,12 @@ async function getClipImageEmbedding(imageBuffer) {
         const inputs = await processor(image);
         const output = await model(inputs);
 
-        // output.image_embeds is a Tensor of shape [1, 512]
         const embedding = Array.from(output.image_embeds.data);
+        if (embedding.length !== CLIP_DIMS) {
+            console.warn(
+                `[CLIP] Image embedding dim ${embedding.length} !== CLIP_DIMS ${CLIP_DIMS} — wrong CLIP_MODEL or set CLIP_DIMS in code for ViT-L/14`
+            );
+        }
 
         // L2 normalize
         const norm = Math.sqrt(embedding.reduce((s, v) => s + v * v, 0));
@@ -165,12 +172,20 @@ function isClipAvailable() {
  */
 async function preloadCLIP() {
     try {
-        await loadCLIP();
+        await Promise.all([loadCLIP(), loadCLIPText()]);
         return true;
     } catch (err) {
         console.error('[CLIP] Preload failed:', err.message);
         return false;
     }
+}
+
+/** Short label for DB / logs (e.g. ViT-B/16). */
+function getClipModelLabel() {
+    if (CLIP_MODEL.includes('large') && CLIP_MODEL.includes('patch14')) return 'ViT-L/14';
+    if (CLIP_MODEL.includes('patch16')) return 'ViT-B/16';
+    if (CLIP_MODEL.includes('patch32')) return 'ViT-B/32';
+    return CLIP_MODEL.slice(0, 50);
 }
 
 module.exports = {
@@ -179,4 +194,6 @@ module.exports = {
     isClipAvailable,
     preloadCLIP,
     CLIP_DIMS,
+    CLIP_MODEL,
+    getClipModelLabel,
 };

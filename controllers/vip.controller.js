@@ -43,8 +43,18 @@ async function verifyVipPurchase(req, res) {
     }
 }
 
+async function getMyVipStatus(req, res) {
+    try {
+        const result = await vipService.getMyVipStatus(req.auth?.user?.id);
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi tải trạng thái VIP');
+    }
+}
+
 module.exports = {
     getVipPackages,
     createVipPurchase,
     verifyVipPurchase,
+    getMyVipStatus,
 };

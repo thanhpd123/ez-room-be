@@ -5,7 +5,11 @@
 
 const PRICE_LOW_KEYWORDS = ['rẻ', 'giá rẻ', 'giá tốt', 'tiết kiệm', 'bình dân', 'giá mềm', 'phải chăng'];
 const PRICE_HIGH_KEYWORDS = ['cao cấp', 'sang trọng', 'luxury', 'premium', 'đắt'];
-const PRICE_REGEX = /(\d[\d.,]*)\s*(tr|triệu|trieu|k|nghìn|nghin|đ|dong|đồng|vnd)/gi;
+const PRICE_REGEX = /(\d[\d.,]*)\s*(tr|triệu|trieu|củ|cu|k|nghìn|nghin|đ|dong|đồng|vnd)?/gi;
+const PRICE_UPPER_BOUND_REGEX = /(?:duoi|dưới|toi da|tối đa|khong qua|không quá|nho hon|nhỏ hơn|<=?)\s*(\d[\d.,]*)\s*(tr|triệu|trieu|củ|cu|k|nghìn|nghin|đ|dong|đồng|vnd)?/i;
+const PRICE_LOWER_BOUND_REGEX = /(?:tren|trên|tu|từ|toi thieu|tối thiểu|it nhat|ít nhất|lon hon|lớn hơn|>=?)\s*(\d[\d.,]*)\s*(tr|triệu|trieu|củ|cu|k|nghìn|nghin|đ|dong|đồng|vnd)?/i;
+const PRICE_RANGE_REGEX = /(?:tu|từ)?\s*(\d[\d.,]*)\s*(tr|triệu|trieu|củ|cu|k|nghìn|nghin|đ|dong|đồng|vnd)?\s*(?:-|den|đến|toi|tới)\s*(\d[\d.,]*)\s*(tr|triệu|trieu|củ|cu|k|nghìn|nghin|đ|dong|đồng|vnd)?/i;
+const PRICE_APPROX_REGEX = /(?:tam|tầm|khoang|khoảng|gan|gần|around|about)\s*(\d[\d.,]*)\s*(tr|triệu|trieu|củ|cu|k|nghìn|nghin|đ|dong|đồng|vnd)?/i;
 
 const AMENITY_MAP = {
     'wifi': 'wifi',
@@ -18,24 +22,41 @@ const AMENITY_MAP = {
     'may lanh': 'điều hòa',
     'máy giặt': 'máy giặt',
     'may giat': 'máy giặt',
+    'wc riêng': 'wc riêng',
+    'nhà vệ sinh riêng': 'wc riêng',
+    've sinh rieng': 'wc riêng',
+    'nội thất': 'nội thất',
+    'day du noi that': 'nội thất',
+    'full nội thất': 'nội thất',
+    'full nội that': 'nội thất',
+    'full furniture': 'nội thất',
     'bếp': 'bếp',
     'nấu ăn': 'bếp',
     'ban công': 'ban công',
     'ban cong': 'ban công',
+    'cửa sổ': 'cửa sổ',
+    'cua so': 'cửa sổ',
     'bảo vệ': 'bảo vệ 24/7',
     'an ninh': 'bảo vệ 24/7',
     'thang máy': 'thang máy',
     'elevator': 'thang máy',
+    'camera': 'camera an ninh',
+    'pccc': 'pccc',
     'hồ bơi': 'hồ bơi',
     'bể bơi': 'hồ bơi',
     'pool': 'hồ bơi',
     'nóng lạnh': 'nóng lạnh',
     'bình nóng lạnh': 'nóng lạnh',
     'tủ lạnh': 'tủ lạnh',
+    'máy sấy': 'máy sấy',
+    'may say': 'máy sấy',
+    'giường': 'giường',
+    'giuong': 'giường',
     'parking': 'chỗ để xe',
     'để xe': 'chỗ để xe',
     'gửi xe': 'chỗ để xe',
     'giữ xe': 'chỗ để xe',
+    'free xe': 'chỗ để xe',
 };
 
 const ROOM_TYPE_MAP = {
@@ -43,8 +64,12 @@ const ROOM_TYPE_MAP = {
     'phòng đơn': 'PRIVATE',
     'phòng riêng': 'PRIVATE',
     'phòng trọ': 'PRIVATE',
+    'phòng': 'PRIVATE',
+    'tro': 'PRIVATE',
+    'trọ': 'PRIVATE',
     'phòng ở ghép': 'SHARED',
     'ở ghép': 'SHARED',
+    'o ghep': 'SHARED',
     'share': 'SHARED',
     'shared': 'SHARED',
     'căn hộ': 'APARTMENT',
@@ -66,7 +91,13 @@ const LIFESTYLE_KEYWORDS = {
     nosmoking: ['không hút thuốc', 'cấm thuốc', 'no smoking'],
 };
 
-const LOCATION_REGEX = /(?:quận|quan|q\.?)\s*(\d{1,2}|[a-zàáảãạăắằẳẵặâấầẩẫậ\s]+)|(?:phường|phuong|p\.?)\s*(\d{1,2}|[a-zàáảãạăắằẳẵặâấầẩẫậ\s]+)|(?:tp\.?|thành phố)\s*([a-zàáảãạăắằẳẵặâấầẩẫậ\s]+)/gi;
+const LOCATION_REGEXES = [
+    /\b(?:quận|quan)\s*(\d{1,2}|[a-zàáảãạăắằẳẵặâấầẩẫậ\s]{2,30})/gi,
+    /\bq\.?\s*(\d{1,2})\b/gi,
+    /\b(?:phường|phuong)\s*(\d{1,2}|[a-zàáảãạăắằẳẵặâấầẩẫậ\s]{2,30})/gi,
+    /\bp\.?\s*(\d{1,2})\b/gi,
+    /\b(?:tp\.?|thành phố)\s*([a-zàáảãạăắằẳẵặâấầẩẫậ\s]{2,40})/gi,
+];
 
 /**
  * Analyze free-text query and extract structured search intent.
@@ -86,35 +117,97 @@ function analyzeQuery(text) {
     if (!text || typeof text !== 'string') return result;
 
     const lower = text.toLowerCase().trim();
-    let remaining = lower;
+    const normalized = lower
+        .replace(/[“”"']/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    let remaining = normalized;
 
     // Extract price hints
-    if (PRICE_LOW_KEYWORDS.some((kw) => lower.includes(kw))) {
+    if (PRICE_LOW_KEYWORDS.some((kw) => normalized.includes(kw))) {
         result.priceHint = 'low';
     }
-    if (PRICE_HIGH_KEYWORDS.some((kw) => lower.includes(kw))) {
+    if (PRICE_HIGH_KEYWORDS.some((kw) => normalized.includes(kw))) {
         result.priceHint = 'high';
     }
 
-    const priceMatches = [...lower.matchAll(PRICE_REGEX)];
-    if (priceMatches.length > 0) {
-        const values = priceMatches.map((m) => {
-            let num = parseFloat(m[1].replace(/[.,]/g, ''));
-            const unit = m[2].toLowerCase();
-            if (unit.startsWith('tr') || unit === 'triệu' || unit === 'trieu') num *= 1_000_000;
-            else if (unit === 'k' || unit.startsWith('ngh')) num *= 1_000;
-            return num;
-        }).sort((a, b) => a - b);
+    const hasPriceCue = /\b(gia|giá|budget|ngan sach|ngân sách|trieu|triệu|tr|cu|củ|k|vnd|dong|đồng|duoi|dưới|tren|trên|toi da|tối đa|toi thieu|tối thiểu|khoang|khoảng|tam|tầm)\b/i.test(normalized);
 
-        result.extractedPrice = {
-            min: values[0],
-            max: values.length > 1 ? values[values.length - 1] : null,
-        };
+    const parseMoney = (numRaw, unitRaw = '') => {
+        if (!numRaw) return null;
+        let num = parseFloat(String(numRaw).replace(/[.,]/g, ''));
+        if (Number.isNaN(num)) return null;
+        const unit = String(unitRaw || '').toLowerCase();
+        if (!unit) {
+            if (!hasPriceCue) return null;
+            // Assume "million" for casual VN pricing language like "5 củ" fallback / plain numbers.
+            // Keep small values practical for room-rental context.
+            if (num <= 200) num *= 1_000_000;
+            return num;
+        }
+        if (unit.startsWith('tr') || unit === 'triệu' || unit === 'trieu' || unit === 'củ' || unit === 'cu') {
+            num *= 1_000_000;
+        } else if (unit === 'k' || unit.startsWith('ngh')) {
+            num *= 1_000;
+        }
+        return num;
+    };
+
+    const rangeMatch = normalized.match(PRICE_RANGE_REGEX);
+    const approxMatch = normalized.match(PRICE_APPROX_REGEX);
+    const upperBoundMatch = normalized.match(PRICE_UPPER_BOUND_REGEX);
+    const lowerBoundMatch = normalized.match(PRICE_LOWER_BOUND_REGEX);
+    if (rangeMatch) {
+        const left = parseMoney(rangeMatch[1], rangeMatch[2]);
+        const right = parseMoney(rangeMatch[3], rangeMatch[4] || rangeMatch[2]);
+        if (left != null && right != null) {
+            result.extractedPrice = {
+                min: Math.min(left, right),
+                max: Math.max(left, right),
+            };
+        }
+    } else if (approxMatch) {
+        const center = parseMoney(approxMatch[1], approxMatch[2]);
+        if (center != null) {
+            result.extractedPrice = {
+                min: Math.round(center * 0.8),
+                max: Math.round(center * 1.2),
+            };
+        }
+    } else {
+        const max = upperBoundMatch ? parseMoney(upperBoundMatch[1], upperBoundMatch[2]) : null;
+        const min = lowerBoundMatch ? parseMoney(lowerBoundMatch[1], lowerBoundMatch[2]) : null;
+        if (min != null || max != null) {
+            result.extractedPrice = { min: min != null ? min : null, max: max != null ? max : null };
+        }
+    }
+
+    const priceValues = [];
+    for (const m of normalized.matchAll(PRICE_REGEX)) {
+        const numRaw = m[1];
+        const unitRaw = m[2];
+        const matchIndex = m.index != null ? m.index : -1;
+        if (!unitRaw && matchIndex >= 0) {
+            const leftCtx = normalized.slice(Math.max(0, matchIndex - 12), matchIndex);
+            if (/\b(?:q|quận|quan|p|phường|phuong)\s*$/i.test(leftCtx)) continue;
+        }
+        const val = parseMoney(numRaw, unitRaw);
+        if (val != null) priceValues.push(val);
+    }
+    if (priceValues.length > 0) {
+        const values = priceValues.sort((a, b) => a - b);
+
+        if (!result.extractedPrice && values.length > 0) {
+            result.extractedPrice = {
+                min: values[0],
+                max: values.length > 1 ? values[values.length - 1] : null,
+            };
+        }
     }
 
     // Extract amenities
     for (const [keyword, canonical] of Object.entries(AMENITY_MAP)) {
-        if (lower.includes(keyword) && !result.amenityHints.includes(canonical)) {
+        if (normalized.includes(keyword) && !result.amenityHints.includes(canonical)) {
             result.amenityHints.push(canonical);
             remaining = remaining.replace(keyword, ' ');
         }
@@ -122,7 +215,7 @@ function analyzeQuery(text) {
 
     // Extract room type
     for (const [keyword, dbType] of Object.entries(ROOM_TYPE_MAP)) {
-        if (lower.includes(keyword)) {
+        if (normalized.includes(keyword)) {
             result.roomTypeHint = dbType;
             remaining = remaining.replace(keyword, ' ');
             break;
@@ -131,17 +224,20 @@ function analyzeQuery(text) {
 
     // Extract lifestyle hints
     for (const [category, keywords] of Object.entries(LIFESTYLE_KEYWORDS)) {
-        if (keywords.some((kw) => lower.includes(kw))) {
+        if (keywords.some((kw) => normalized.includes(kw))) {
             result.lifestyleHints.push(category);
         }
     }
 
     // Extract location hints
-    const locMatches = [...lower.matchAll(LOCATION_REGEX)];
-    for (const m of locMatches) {
-        const val = (m[1] || m[2] || m[3] || '').trim();
-        if (val) result.locationHints.push(val);
+    for (const regex of LOCATION_REGEXES) {
+        const locMatches = [...normalized.matchAll(regex)];
+        for (const m of locMatches) {
+            const val = (m[1] || '').trim();
+            if (val) result.locationHints.push(val);
+        }
     }
+    result.locationHints = [...new Set(result.locationHints)];
 
     // Remaining keywords (after removing recognized entities)
     result.cleanedQuery = remaining.replace(/\s+/g, ' ').trim();

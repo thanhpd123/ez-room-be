@@ -196,8 +196,7 @@ async function register(body) {
 
     const { fullName, email, phone, password, role: roleInput } = body;
     const normalizedEmail = email.trim().toLowerCase();
-    const role =
-        roleInput && String(roleInput).toUpperCase() === 'LANDLORD' ? 'LANDLORD' : 'TENANT';
+    const role = String(roleInput).trim().toUpperCase();
 
     const existingUser = await prisma.user.findUnique({
         where: { email: normalizedEmail },
@@ -564,7 +563,7 @@ async function registerOAuth(body) {
 
     const { email, fullName, phone, role: roleInput } = body;
     const normalizedEmail = String(email).trim().toLowerCase();
-    const role = String(roleInput).toUpperCase() === 'LANDLORD' ? 'LANDLORD' : 'TENANT';
+    const role = String(roleInput).trim().toUpperCase();
 
     const existing = await prisma.user.findUnique({ where: { email: normalizedEmail } });
     if (existing) {

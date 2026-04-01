@@ -3,7 +3,7 @@
  * See GET /search/clip-diagnostics and scripts/diagnose-clip.js
  */
 
-const { getClipImageEmbedding, preloadCLIP, CLIP_DIMS } = require('./clip');
+const { getClipImageEmbedding, preloadCLIP, CLIP_DIMS, CLIP_MODEL, getClipModelLabel } = require('./clip');
 
 /** Minimal valid PNG (1×1 px) — exercises ONNX vision path without a user upload */
 const MINI_PNG = Buffer.from(
@@ -14,8 +14,10 @@ const MINI_PNG = Buffer.from(
 /**
  * Run all checks. Safe to call from API (authenticated) or CLI.
  * @param {import('@prisma/client').PrismaClient} prisma
+ * @param {{ skipDb?: boolean }} options
  */
-async function runClipDiagnostics(prisma) {
+async function runClipDiagnostics(prisma, options = {}) {
+    const skipDb = !!options.skipDb;
     const interpret = [];
 
     const onnxClipVision = {
@@ -41,7 +43,7 @@ async function runClipDiagnostics(prisma) {
                 interpret.push('Embedding L2 norm should be ~1 after normalize; unexpected if far off.');
             }
             if (emb.length !== CLIP_DIMS) {
-                interpret.push(`Expected ${CLIP_DIMS} dimensions (CLIP ViT-B/32), got ${emb.length}.`);
+                interpret.push(`Expected ${CLIP_DIMS} dimensions (${getClipModelLabel()}), got ${emb.length}.`);
             }
         } else {
             onnxClipVision.error = 'getClipImageEmbedding returned null';
@@ -55,39 +57,43 @@ async function runClipDiagnostics(prisma) {
         interpret.push(`CLIP vision error: ${e.message}`);
     }
 
-    const pgvector = { extensionInstalled: false, error: null };
-    try {
-        const rows = await prisma.$queryRawUnsafe(`
-            SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'vector') AS e
-        `);
-        pgvector.extensionInstalled = !!rows[0]?.e;
-        if (!pgvector.extensionInstalled) {
-            interpret.push("PostgreSQL extension 'vector' not installed — run: CREATE EXTENSION vector;");
+    const pgvector = { extensionInstalled: null, error: null, skipped: skipDb };
+    if (!skipDb) {
+        try {
+            const rows = await prisma.$queryRawUnsafe(`
+                SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'vector') AS e
+            `);
+            pgvector.extensionInstalled = !!rows[0]?.e;
+            if (!pgvector.extensionInstalled) {
+                interpret.push("PostgreSQL extension 'vector' not installed — run: CREATE EXTENSION vector;");
+            }
+        } catch (e) {
+            pgvector.error = e.message;
+            interpret.push(`Could not check pgvector: ${e.message}`);
         }
-    } catch (e) {
-        pgvector.error = e.message;
-        interpret.push(`Could not check pgvector: ${e.message}`);
+    } else {
+        interpret.push('DB/pgvector checks skipped (clip-only diagnostics mode).');
     }
 
-    const clipVectorsTable = { rowCount: 0, roomImageCount: 0, error: null };
-    try {
-        const [cv, ri] = await Promise.all([
-            prisma.$queryRawUnsafe(`SELECT COUNT(*)::bigint AS c FROM clip_vectors`),
-            prisma.$queryRawUnsafe(`SELECT COUNT(*)::bigint AS c FROM room_images`),
-        ]);
-        clipVectorsTable.rowCount = Number(cv[0]?.c ?? 0);
-        clipVectorsTable.roomImageCount = Number(ri[0]?.c ?? 0);
-        if (clipVectorsTable.rowCount === 0 && clipVectorsTable.roomImageCount > 0) {
-            interpret.push(
-                'room_images exist but clip_vectors is empty — run: node scripts/generate-clip-embeddings.js'
-            );
+    const clipVectorsTable = { rowCount: null, roomImageCount: null, error: null, skipped: skipDb };
+    if (!skipDb) {
+        try {
+            const [cv, ri] = await Promise.all([
+                prisma.$queryRawUnsafe(`SELECT COUNT(*)::bigint AS c FROM clip_vectors`),
+                prisma.$queryRawUnsafe(`SELECT COUNT(*)::bigint AS c FROM room_images`),
+            ]);
+            clipVectorsTable.rowCount = Number(cv[0]?.c ?? 0);
+            clipVectorsTable.roomImageCount = Number(ri[0]?.c ?? 0);
+            if (clipVectorsTable.rowCount === 0 && clipVectorsTable.roomImageCount > 0) {
+                interpret.push('room_images exist but clip_vectors is empty — run: node scripts/generate-clip-embeddings.js');
+            }
+            if (clipVectorsTable.roomImageCount === 0) {
+                interpret.push('No rows in room_images — add room photos first, then generate CLIP vectors.');
+            }
+        } catch (e) {
+            clipVectorsTable.error = e.message;
+            interpret.push(`clip_vectors / room_images count failed: ${e.message}`);
         }
-        if (clipVectorsTable.roomImageCount === 0) {
-            interpret.push('No rows in room_images — add room photos first, then generate CLIP vectors.');
-        }
-    } catch (e) {
-        clipVectorsTable.error = e.message;
-        interpret.push(`clip_vectors / room_images count failed: ${e.message}`);
     }
 
     const vectorQuery = {
@@ -96,21 +102,21 @@ async function runClipDiagnostics(prisma) {
         /** Best cosine similarity (0–1) from DB for the tiny test PNG vs stored vectors */
         topSimilarity: null,
         sampleRoomIds: [],
+        skipped: skipDb,
     };
 
-    if (emb && emb.length && clipVectorsTable.rowCount > 0) {
+    if (!skipDb && emb && emb.length && clipVectorsTable.rowCount > 0) {
         try {
             const vecStr = `[${emb.join(',')}]`;
             const clipRows = await prisma.$queryRawUnsafe(
                 `
                 SELECT ri.room_id::text AS room_id,
-                       1 - (cv.embedding <=> $1::vector) AS similarity
+                       1 - (cv.embedding <=> '${vecStr}'::vector) AS similarity
                 FROM clip_vectors cv
                 JOIN room_images ri ON ri.id = cv.room_image_id
-                ORDER BY cv.embedding <=> $1::vector
+                ORDER BY cv.embedding <=> '${vecStr}'::vector
                 LIMIT 5
-            `,
-                vecStr
+            `
             );
             vectorQuery.ok = true;
             if (clipRows.length) {
@@ -142,15 +148,15 @@ async function runClipDiagnostics(prisma) {
         note: 'CLIP is semantic/visual — not pixel matching. Effectiveness = quality of room photos + coverage in clip_vectors.',
     };
 
-    const healthy =
-        onnxClipVision.ok &&
-        pgvector.extensionInstalled &&
-        clipVectorsTable.rowCount > 0 &&
-        vectorQuery.ok;
+    const healthy = skipDb
+        ? onnxClipVision.ok
+        : onnxClipVision.ok && pgvector.extensionInstalled && clipVectorsTable.rowCount > 0 && vectorQuery.ok;
 
     return {
         healthy,
-        model: 'Xenova/clip-vit-base-patch32 (ONNX via @huggingface/transformers)',
+        dbChecksSkipped: skipDb,
+        model: `${CLIP_MODEL} (ONNX via @huggingface/transformers)`,
+        modelLabel: getClipModelLabel(),
         expectedEmbeddingDimensions: CLIP_DIMS,
         onnxClipVision,
         pgvector,

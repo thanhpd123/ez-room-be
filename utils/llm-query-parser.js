@@ -56,7 +56,7 @@ Query: "${query.trim().slice(0, 500)}"
 Output schema (use null for missing):
 {
   "price_min": number or null (VND),
-  "price_max": number or null (VND). E.g. "3 triệu" -> 3000000, "5 tr" -> 5000000,
+  "price_max": number or null (VND). E.g. "3 triệu" -> 3000000, "5 tr"/"5 củ" -> 5000000, "dưới 2 triệu" => price_max=2000000, "trên 2 triệu" => price_min=2000000,
   "district": string or null (e.g. "Quận 1", "Q1"),
   "city": string or null (e.g. "TP Hồ Chí Minh", "Hà Nội"),
   "amenities": array of strings (canonical: wifi, điều hòa, máy giặt, bếp, ban công, thang máy, hồ bơi, nóng lạnh, tủ lạnh, chỗ để xe),

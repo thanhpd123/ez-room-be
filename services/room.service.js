@@ -173,7 +173,17 @@ async function createRoom(userId, body, authUser = null) {
 }
 
 async function getRooms(params) {
-    const { rentalId, rental_id, roomType, minPrice, maxPrice, page = 1, limit = 20 } = params;
+    const {
+        rentalId,
+        rental_id,
+        roomType,
+        minPrice,
+        maxPrice,
+        status,
+        includeAllStatuses,
+        page = 1,
+        limit = 20,
+    } = params;
     const pageNum = Math.max(1, parseInt(page));
     const pageSize = Math.min(100, Math.max(1, parseInt(limit)));
     const skip = (pageNum - 1) * pageSize;
@@ -182,6 +192,15 @@ async function getRooms(params) {
     const filterRentalId = rentalId || rental_id;
     if (filterRentalId) where.rental_id = filterRentalId;
     if (roomType) where.room_type = mapFeToDb(roomType);
+    const includeAll = String(includeAllStatuses || '').toLowerCase() === 'true';
+    if (status) {
+        const normalized = String(status).toUpperCase();
+        if (['PENDING', 'AVAILABLE', 'RENTED', 'MAINTENANCE'].includes(normalized)) {
+            where.status = normalized;
+        }
+    } else if (!includeAll) {
+        where.status = { in: ['AVAILABLE', 'RENTED'] };
+    }
     if (minPrice || maxPrice) {
         where.price = {};
         if (minPrice) where.price.gte = parseFloat(minPrice);

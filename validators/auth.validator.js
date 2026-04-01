@@ -29,7 +29,7 @@ function validatePasswordStrength(password) {
  */
 function validateRegister(body) {
     const errors = [];
-    const { fullName, email, phone, password, confirmPassword } = body || {};
+    const { fullName, email, phone, password, confirmPassword, role } = body || {};
 
     // fullName: required, 2–100 chars
     if (!fullName || typeof fullName !== 'string' || fullName.trim().length < 2) {
@@ -68,6 +68,14 @@ function validateRegister(body) {
         errors.push('Xác nhận mật khẩu không khớp');
     }
 
+    // role: required, TENANT|LANDLORD
+    const normalizedRole = typeof role === 'string' ? role.trim().toUpperCase() : '';
+    if (!normalizedRole) {
+        errors.push('Vai trò là bắt buộc');
+    } else if (!['TENANT', 'LANDLORD'].includes(normalizedRole)) {
+        errors.push('Vai trò không hợp lệ');
+    }
+
     return { valid: errors.length === 0, errors };
 }
 
@@ -77,7 +85,7 @@ function validateRegister(body) {
  */
 function validateRegisterOAuth(body) {
     const errors = [];
-    const { email, fullName, phone } = body || {};
+    const { email, fullName, phone, role } = body || {};
     if (!email || typeof email !== 'string' || !email.trim()) {
         errors.push('Email là bắt buộc');
     } else {
@@ -92,6 +100,12 @@ function validateRegisterOAuth(body) {
     if (phone !== undefined && phone !== null && phone !== '') {
         const phoneRegex = /^[0-9]{10,20}$/;
         if (!phoneRegex.test(String(phone).trim())) errors.push('Số điện thoại phải từ 10 đến 20 chữ số');
+    }
+    const normalizedRole = typeof role === 'string' ? role.trim().toUpperCase() : '';
+    if (!normalizedRole) {
+        errors.push('Vai trò là bắt buộc');
+    } else if (!['TENANT', 'LANDLORD'].includes(normalizedRole)) {
+        errors.push('Vai trò không hợp lệ');
     }
     return { valid: errors.length === 0, errors };
 }

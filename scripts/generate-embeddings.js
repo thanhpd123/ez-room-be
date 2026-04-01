@@ -4,12 +4,14 @@
  *
  * Usage: node scripts/generate-embeddings.js
  *
- * First run downloads the model (~90MB), subsequent runs use cache.
+ * First run downloads the model; size depends on TEXT_EMBEDDING_MODEL.
+ * If you change TEXT_EMBEDDING_MODEL or TEXT_EMBEDDING_DIMS, clear room_text_embeddings and re-run.
  */
 
 require('dotenv').config();
 const prisma = require('../config/prisma');
-const { getPassageEmbedding, buildRoomTextForEmbedding, getEmbeddingDims, preloadEmbedding } = require('../utils/embedding');
+const { getPassageEmbedding, buildRoomTextForEmbedding, getEmbeddingDims, preloadEmbedding, LOCAL_MODEL } = require('../utils/embedding');
+const EMBEDDING_MODEL_ENUM_VALUE = 'CUSTOM';
 
 async function main() {
     const dims = getEmbeddingDims();
@@ -21,7 +23,7 @@ async function main() {
         console.error('Failed to load embedding model');
         process.exit(1);
     }
-    console.log(`Model ready (dim=${dims})\n`);
+    console.log(`Model ready: ${LOCAL_MODEL} (dim=${dims})\n`);
 
     // Ensure pgvector extension
     try {
@@ -37,7 +39,7 @@ async function main() {
             CREATE TABLE IF NOT EXISTS room_text_embeddings (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 room_id UUID UNIQUE NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
-                model TEXT DEFAULT 'LOCAL',
+                model TEXT DEFAULT 'CUSTOM',
                 embedding vector,
                 content TEXT NOT NULL,
                 created_at TIMESTAMPTZ DEFAULT now(),
@@ -100,9 +102,9 @@ async function main() {
             const vecStr = `[${embedding.join(',')}]`;
             await prisma.$executeRawUnsafe(`
                 INSERT INTO room_text_embeddings (room_id, model, embedding, content)
-                VALUES ($1::uuid, 'LOCAL', $2::vector, $3)
+                VALUES ($1::uuid, '${EMBEDDING_MODEL_ENUM_VALUE}', $2::vector, $3)
                 ON CONFLICT (room_id)
-                DO UPDATE SET embedding = $2::vector, content = $3, model = 'LOCAL', updated_at = now()
+                DO UPDATE SET embedding = $2::vector, content = $3, model = '${EMBEDDING_MODEL_ENUM_VALUE}', updated_at = now()
             `, room.id, vecStr, text);
 
             success++;

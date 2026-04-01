@@ -1,23 +1,25 @@
 /**
  * Text embedding utility — runs locally via Transformers.js.
- * No API keys needed. Model downloads on first use (~90MB, cached after).
+ * No API keys needed. Model downloads on first use (cached after).
  * On corrupt cache (e.g. Protobuf parsing failed), cache is cleared and load retried once.
  *
- * Model: Xenova/multilingual-e5-small (multilingual, supports Vietnamese)
- * Output: 384-dim normalized embedding vector
+ * Default: Xenova/multilingual-e5-base (quantized ONNX, multilingual incl. Vietnamese) — stronger than e5-small.
+ * Override: TEXT_EMBEDDING_MODEL, TEXT_EMBEDDING_DIMS (must match model output, e.g. small=384, base=768).
+ * After changing model/dimensions, truncate or delete room_text_embeddings and re-run scripts/generate-embeddings.js.
  */
 
 const path = require('path');
 const fs = require('fs');
 
-const LOCAL_MODEL = 'Xenova/multilingual-e5-small';
-const LOCAL_DIMS = 384;
+const LOCAL_MODEL = (process.env.TEXT_EMBEDDING_MODEL || 'Xenova/multilingual-e5-base').trim();
+const LOCAL_DIMS = Math.max(1, parseInt(process.env.TEXT_EMBEDDING_DIMS || '768', 10) || 768);
 
 let extractor = null;
 let loadingPromise = null;
 
 function getEmbeddingCachePath() {
-    return path.join(__dirname, '..', 'node_modules', '@huggingface', 'transformers', '.cache', 'Xenova', 'multilingual-e5-small');
+    const parts = LOCAL_MODEL.split('/').filter(Boolean);
+    return path.join(__dirname, '..', 'node_modules', '@huggingface', 'transformers', '.cache', ...parts);
 }
 
 function clearEmbeddingCache() {
@@ -43,7 +45,7 @@ async function loadModel() {
 
     loadingPromise = (async () => {
         const { pipeline } = await import('@huggingface/transformers');
-        console.log(`[Embedding] Loading model ${LOCAL_MODEL} (first run downloads ~90MB)...`);
+        console.log(`[Embedding] Loading model ${LOCAL_MODEL} (first run may download ~100–500MB depending on model)...`);
         try {
             extractor = await pipeline('feature-extraction', LOCAL_MODEL);
             console.log(`[Embedding] Model loaded (dim=${LOCAL_DIMS})`);
@@ -91,7 +93,13 @@ async function getTextEmbedding(text) {
         const input = `query: ${clean.slice(0, 5000)}`;
         const output = await extractor(input, { pooling: 'mean', normalize: true });
 
-        return Array.from(output.data);
+        const arr = Array.from(output.data);
+        if (arr.length !== LOCAL_DIMS) {
+            console.warn(
+                `[Embedding] Got ${arr.length} dims, expected ${LOCAL_DIMS} — fix TEXT_EMBEDDING_DIMS for ${LOCAL_MODEL}`
+            );
+        }
+        return arr;
     } catch (err) {
         console.error('[Embedding] Error:', err.message);
         return null;
@@ -110,7 +118,13 @@ async function getPassageEmbedding(text) {
         await loadModel();
         const input = `passage: ${clean.slice(0, 5000)}`;
         const output = await extractor(input, { pooling: 'mean', normalize: true });
-        return Array.from(output.data);
+        const arr = Array.from(output.data);
+        if (arr.length !== LOCAL_DIMS) {
+            console.warn(
+                `[Embedding] Got ${arr.length} dims, expected ${LOCAL_DIMS} — fix TEXT_EMBEDDING_DIMS for ${LOCAL_MODEL}`
+            );
+        }
+        return arr;
     } catch (err) {
         console.error('[Embedding] Passage error:', err.message);
         return null;
@@ -165,4 +179,5 @@ module.exports = {
     getEmbeddingDims,
     getProvider,
     preloadEmbedding,
+    LOCAL_MODEL,
 };

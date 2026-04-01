@@ -3,9 +3,6 @@ const { verifyJWT } = require('../middleware/auth');
 const {
     register,
     registerOAuth,
-    getCitizenCard,
-    upsertCitizenCard,
-    registerLandlord,
     login,
     refreshToken,
     logout,
@@ -47,13 +44,14 @@ router.get('/suggest-password', suggestPassword);
  *         application/json:
  *           schema:
  *             type: object
- *             required: [fullName, email, password, confirmPassword]
+ *             required: [fullName, email, password, confirmPassword, role]
  *             properties:
  *               fullName: { type: string }
  *               email: { type: string, format: email }
  *               phone: { type: string }
  *               password: { type: string }
  *               confirmPassword: { type: string }
+ *               role: { type: string, enum: [TENANT, LANDLORD] }
  *     responses:
  *       201:
  *         description: Đăng ký thành công
@@ -192,23 +190,6 @@ router.post('/reset-password', resetPassword);
  *         description: Đăng ký thành công
  */
 router.post('/register-oauth', registerOAuth);
-
-/**
- * GET /auth/citizen-card
- */
-router.get('/citizen-card', verifyJWT, getCitizenCard);
-
-/**
- * PUT /auth/citizen-card
- * Body: { citizenCardNumber, citizenCardFrontImageUrl, citizenCardBackImageUrl }
- */
-router.put('/citizen-card', verifyJWT, upsertCitizenCard);
-
-/**
- * POST /auth/register-landlord
- * Requires CCCD verification status = VERIFIED
- */
-router.post('/register-landlord', verifyJWT, registerLandlord);
 
 /**
  * PATCH /auth/change-password

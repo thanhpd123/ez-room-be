@@ -4,13 +4,14 @@
  *
  * Usage: node scripts/generate-clip-embeddings.js
  *
- * First run downloads the CLIP model (~350MB), subsequent runs use cached model.
+ * First run downloads the CLIP weights (size depends on CLIP_MODEL), then cached.
+ * If you change CLIP_MODEL, delete old clip_vectors rows and re-run (vectors are not comparable across models).
  */
 
 require('dotenv').config();
 const prisma = require('../config/prisma');
 const axios = require('axios');
-const { getClipImageEmbedding, preloadCLIP, CLIP_DIMS } = require('../utils/clip');
+const { getClipImageEmbedding, preloadCLIP, CLIP_DIMS, getClipModelLabel } = require('../utils/clip');
 
 async function main() {
     // Pre-load the model once
@@ -20,7 +21,7 @@ async function main() {
         console.error('Failed to load CLIP model');
         process.exit(1);
     }
-    console.log(`CLIP model ready (dim=${CLIP_DIMS})`);
+    console.log(`CLIP model ready: ${getClipModelLabel()} (dim=${CLIP_DIMS})`);
 
     // Ensure pgvector extension
     try {
@@ -75,11 +76,12 @@ async function main() {
 
             // Insert into clip_vectors using raw SQL (pgvector)
             const vecStr = `[${embedding.join(',')}]`;
+            const version = getClipModelLabel();
             await prisma.$executeRawUnsafe(`
-                INSERT INTO clip_vectors (id, room_image_id, model, embedding, created_at)
-                VALUES (gen_random_uuid(), $1::uuid, 'CLIP', $2::vector, NOW())
+                INSERT INTO clip_vectors (id, room_image_id, model, embedding, created_at, model_version, dimensions)
+                VALUES (gen_random_uuid(), $1::uuid, 'CLIP', $2::vector, NOW(), $3::varchar, $4::int)
                 ON CONFLICT DO NOTHING
-            `, img.id, vecStr);
+            `, img.id, vecStr, version, embedding.length);
 
             success++;
             console.log(`${pct} OK: image ${img.id} (room ${img.roomId}) | dim=${embedding.length}`);
