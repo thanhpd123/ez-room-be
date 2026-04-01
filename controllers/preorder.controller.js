@@ -97,9 +97,59 @@ async function rejectRequest(req, res) {
     }
 }
 
+async function resumePayment(req, res) {
+    try {
+        const result = await preorderService.resumePayment(
+            req.auth.user.id,
+            req.params.preorderId
+        );
+        console.log('[resumePayment] checkoutUrl:', result?.data?.payment?.checkoutUrl);
+        return res.status(200).json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi lấy lại link thanh toán');
+    }
+}
+
+async function cancelUnpaidPreorder(req, res) {
+    try {
+        const result = await preorderService.cancelUnpaidPreorder(
+            req.auth.user.id,
+            req.params.preorderId,
+            req.body
+        );
+        return res.status(200).json({
+            success: true,
+            message: 'Đã hủy yêu cầu đặt cọc',
+            ...result,
+        });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi hủy yêu cầu đặt cọc');
+    }
+}
+
+async function verifyPreorderPayment(req, res) {
+    try {
+        const result = await preorderService.verifyPreorderPayment(
+            req.auth.user.id,
+            req.params.preorderId,
+            req.query.orderCode
+        );
+        return res.status(200).json({
+            success: true,
+            message: 'Đã xác minh trạng thái thanh toán',
+            ...result,
+        });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi xác minh thanh toán');
+    }
+}
+
 module.exports = {
     getMyPreorders,
     createDepositPayment,
+    resumePayment,
+    cancelUnpaidPreorder,
+    verifyPreorderPayment,
     handlePayOSWebhook,
     getLandlordRequests,
     confirmRequest,

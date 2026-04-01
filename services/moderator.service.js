@@ -1,6 +1,7 @@
 const prisma = require('../config/prisma');
 const { validateUpdateRentalStatus } = require('../validators/rental.validator');
 const { mapFeToDb, mapDbToFe } = require('../utils/room-type-mapper');
+const { publishPendingRoomsWhenRentalAvailable } = require('./sync-rental-rooms-on-approve');
 
 // ═══════════════════ Constants ═══════════════════
 
@@ -427,6 +428,9 @@ async function updateRentalStatus(rentalId, body, moderatorId) {
                     },
                 },
             });
+        }
+        if (status === 'AVAILABLE') {
+            await publishPendingRoomsWhenRentalAvailable(rentalId, tx);
         }
         return rental;
     });

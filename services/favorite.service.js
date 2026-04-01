@@ -1,5 +1,6 @@
 const prisma = require('../config/prisma');
 const { mapDbToFe } = require('../utils/room-type-mapper');
+const { recordInteraction } = require('./interaction.service');
 
 const placeholderImage = 'https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?w=800';
 
@@ -49,6 +50,11 @@ async function addFavorite(userId, roomId) {
         update: {},
     });
 
+    try {
+        await recordInteraction(userId, roomId, 'favorite');
+    } catch (_) {
+        // non-blocking
+    }
     return { roomId };
 }
 
@@ -104,10 +110,118 @@ async function getFavoriteIds(userId) {
     return { data: rows.map((r) => r.roomId) };
 }
 
+/**
+ * Landlord xem danh sách người wishlist theo thứ tự ưu tiên:
+ * - Người có preorder hoạt động được ưu tiên trước
+ * - Trong từng nhóm, first-come-first-serve theo thời gian tạo
+ */
+async function getRoomWishersForLandlord(landlordId, roomId) {
+    const room = await prisma.rooms.findUnique({
+        where: { id: roomId },
+        select: {
+            id: true,
+            room_name: true,
+            status: true,
+            rentals: {
+                select: {
+                    owner_id: true,
+                },
+            },
+        },
+    });
+
+    if (!room) {
+        throw Object.assign(new Error('Không tìm thấy phòng'), { statusCode: 404 });
+    }
+    if (room.rentals?.owner_id !== landlordId) {
+        throw Object.assign(new Error('Bạn không có quyền xem wishlist của phòng này'), {
+            statusCode: 403,
+        });
+    }
+
+    const rows = await prisma.favoriteRoom.findMany({
+        where: { roomId },
+        include: {
+            user: {
+                select: {
+                    id: true,
+                    fullName: true,
+                    email: true,
+                    phone: true,
+                    avatarUrl: true,
+                },
+            },
+            room: {
+                select: {
+                    preorders: {
+                        where: {
+                            roomId,
+                            status: { in: ['PENDING', 'CONFIRMED'] },
+                            payment_status: { in: ['UNPAID', 'PAID'] },
+                        },
+                        select: {
+                            id: true,
+                            userId: true,
+                            status: true,
+                            payment_status: true,
+                            createdAt: true,
+                            deposit_amount: true,
+                        },
+                    },
+                },
+            },
+        },
+    });
+
+    const data = rows
+        .map((row) => {
+            const preorder = (row.room?.preorders || []).find((p) => p.userId === row.userId) || null;
+            return {
+                userId: row.userId,
+                roomId: row.roomId,
+                favoritedAt: row.createdAt,
+                user: row.user,
+                hasPriorityPreorder: Boolean(preorder),
+                preorder: preorder
+                    ? {
+                        id: preorder.id,
+                        status: preorder.status,
+                        paymentStatus: preorder.payment_status,
+                        createdAt: preorder.createdAt,
+                        depositAmount: Number(preorder.deposit_amount || 0),
+                    }
+                    : null,
+            };
+        })
+        .sort((a, b) => {
+            if (a.hasPriorityPreorder !== b.hasPriorityPreorder) {
+                return a.hasPriorityPreorder ? -1 : 1;
+            }
+            if (a.hasPriorityPreorder && b.hasPriorityPreorder) {
+                const aTime = a.preorder?.createdAt ? new Date(a.preorder.createdAt).getTime() : Number.MAX_SAFE_INTEGER;
+                const bTime = b.preorder?.createdAt ? new Date(b.preorder.createdAt).getTime() : Number.MAX_SAFE_INTEGER;
+                if (aTime !== bTime) return aTime - bTime;
+            }
+            const aFav = a.favoritedAt ? new Date(a.favoritedAt).getTime() : Number.MAX_SAFE_INTEGER;
+            const bFav = b.favoritedAt ? new Date(b.favoritedAt).getTime() : Number.MAX_SAFE_INTEGER;
+            return aFav - bFav;
+        });
+
+    return {
+        room: {
+            id: room.id,
+            roomName: room.room_name,
+            status: room.status,
+        },
+        data,
+    };
+}
+
 module.exports = {
     addFavorite,
     removeFavorite,
     getMyFavorites,
     getFavoriteIds,
+    getRoomWishersForLandlord,
     formatRoomForFavorite,
 };

@@ -4,6 +4,7 @@ const {
     getVipPackages,
     createVipPurchase,
     verifyVipPurchase,
+    getMyVipStatus,
 } = require('../controllers/vip.controller');
 
 const router = express.Router();
@@ -62,5 +63,18 @@ router.post('/purchase', verifyJWT, requireRole('TENANT', 'LANDLORD'), createVip
  *         description: Kết quả xác minh giao dịch VIP
  */
 router.get('/verify', verifyJWT, requireRole('TENANT', 'LANDLORD'), verifyVipPurchase);
+
+/**
+ * @openapi
+ * /vip/my-status:
+ *   get:
+ *     tags: [VIP]
+ *     summary: Trạng thái VIP và lịch sử mua của người dùng hiện tại
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200:
+ *         description: VIP status and purchase history
+ */
+router.get('/my-status', verifyJWT, getMyVipStatus);
 
 module.exports = router;

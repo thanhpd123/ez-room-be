@@ -1,10 +1,11 @@
 const express = require('express');
-const { verifyJWT } = require('../middleware/auth');
+const { verifyJWT, requireRole } = require('../middleware/auth');
 const {
     addFavorite,
     removeFavorite,
     getMyFavorites,
     getFavoriteIds,
+    getRoomWishersForLandlord,
 } = require('../controllers/favorite.controller');
 
 const router = express.Router();
@@ -37,6 +38,7 @@ router.get('/', getMyFavorites);
  *         description: Mảng room IDs
  */
 router.get('/ids', getFavoriteIds);
+router.get('/room/:roomId/wishers', requireRole('LANDLORD'), getRoomWishersForLandlord);
 
 /**
  * @openapi
