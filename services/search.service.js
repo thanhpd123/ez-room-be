@@ -9,6 +9,62 @@ const { getPopularityScoresForRooms } = require('./interaction.service');
 const { resolveAmenityIds } = require('../utils/resolve-amenity-ids');
 
 const placeholderImage = 'https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?w=800';
+const VIP_LANDLORD_SEARCH_BOOST = Number(process.env.VIP_LANDLORD_SEARCH_BOOST || 8);
+const SEARCH_FREE_TIER_MIN_RATIO = Number(process.env.SEARCH_FREE_TIER_MIN_RATIO || 0.2);
+const SEARCH_FREE_TIER_MIN_TOP_SLOTS = Number(process.env.SEARCH_FREE_TIER_MIN_TOP_SLOTS || 2);
+
+function applyFairnessGuard(scored) {
+    if (!Array.isArray(scored) || scored.length === 0) return scored;
+
+    const topWindow = Math.min(10, scored.length);
+    const safeRatio = Math.max(0, Math.min(1, SEARCH_FREE_TIER_MIN_RATIO));
+    const minTopSlots = Math.max(0, SEARCH_FREE_TIER_MIN_TOP_SLOTS);
+    const requiredFreeInTop = Math.max(minTopSlots, Math.ceil(topWindow * safeRatio));
+
+    const freePool = scored.filter((item) => !item.isVipLandlord);
+    if (freePool.length === 0) return scored;
+
+    const actualRequiredFree = Math.min(requiredFreeInTop, freePool.length, topWindow);
+    if (actualRequiredFree <= 0) return scored;
+
+    const topSlice = scored.slice(0, topWindow);
+    const topFreeCount = topSlice.filter((item) => !item.isVipLandlord).length;
+    if (topFreeCount >= actualRequiredFree) return scored;
+
+    const selectedTopIds = new Set(topSlice.map((item) => item.id));
+    const candidateFreeOutsideTop = scored
+        .slice(topWindow)
+        .filter((item) => !item.isVipLandlord)
+        .sort((a, b) => b.matchScore - a.matchScore);
+
+    const adjustedTop = [...topSlice];
+    let missing = actualRequiredFree - topFreeCount;
+
+    for (const freeCandidate of candidateFreeOutsideTop) {
+        if (missing <= 0) break;
+
+        let replaceIndex = -1;
+        let replaceScore = Number.POSITIVE_INFINITY;
+        for (let i = 0; i < adjustedTop.length; i += 1) {
+            const item = adjustedTop[i];
+            if (!item.isVipLandlord) continue;
+            if (item.matchScore < replaceScore) {
+                replaceScore = item.matchScore;
+                replaceIndex = i;
+            }
+        }
+
+        if (replaceIndex < 0) break;
+        adjustedTop[replaceIndex] = freeCandidate;
+        selectedTopIds.add(freeCandidate.id);
+        missing -= 1;
+    }
+
+    adjustedTop.sort((a, b) => b.matchScore - a.matchScore);
+
+    const remainder = scored.filter((item) => !selectedTopIds.has(item.id));
+    return [...adjustedTop, ...remainder];
+}
 
 /**
  * Compute match score (0–100) for a room.
@@ -176,11 +232,11 @@ async function getPublicSearch(params, userId) {
         amenityIds: Array.isArray(amenityIds)
             ? amenityIds
             : typeof amenityIds === 'string'
-              ? amenityIds
+                ? amenityIds
                     .split(',')
                     .map((s) => s.trim())
                     .filter(Boolean)
-              : [],
+                : [],
     };
 
     let preference = null;
@@ -203,10 +259,10 @@ async function getPublicSearch(params, userId) {
                 terms.length === 1
                     ? { district: { equals: terms[0], mode: 'insensitive' } }
                     : {
-                          OR: terms.map((t) => ({
-                              district: { equals: t, mode: 'insensitive' },
-                          })),
-                      }
+                        OR: terms.map((t) => ({
+                            district: { equals: t, mode: 'insensitive' },
+                        })),
+                    }
             );
         }
         if (searchParams.city) {
@@ -215,10 +271,10 @@ async function getPublicSearch(params, userId) {
                 terms.length === 1
                     ? { city: { equals: terms[0], mode: 'insensitive' } }
                     : {
-                          OR: terms.map((t) => ({
-                              city: { equals: t, mode: 'insensitive' },
-                          })),
-                      }
+                        OR: terms.map((t) => ({
+                            city: { equals: t, mode: 'insensitive' },
+                        })),
+                    }
             );
         }
         if (searchParams.address)
@@ -342,6 +398,9 @@ async function getPublicSearch(params, userId) {
                 include: {
                     location: true,
                     images: true,
+                    users: {
+                        select: { id: true, role: true, isVip: true },
+                    },
                     rooms: {
                         include: {
                             roomAmenities: { include: { amenity: true } },
@@ -395,6 +454,12 @@ async function getPublicSearch(params, userId) {
         const amenityNames = (room.roomAmenities || [])
             .map((ra) => ra.amenity?.name)
             .filter(Boolean);
+        const owner = rental?.users || null;
+        const isVipLandlord = owner?.role === 'LANDLORD' && owner?.isVip === true;
+
+        const boostedScore = isVipLandlord
+            ? Math.min(100, score + VIP_LANDLORD_SEARCH_BOOST)
+            : score;
 
         const otherRooms = allRooms
             .filter((r) => r.id !== room.id)
@@ -423,19 +488,21 @@ async function getPublicSearch(params, userId) {
             location: loc
                 ? { district: loc.district, city: loc.city, address: loc.address }
                 : null,
-            matchScore: Math.round(score * 10) / 10,
+            matchScore: Math.round(boostedScore * 10) / 10,
             rating: avgRating != null ? Math.round(avgRating * 10) / 10 : null,
             otherRoomsInRental: otherRooms,
+            isVipLandlord,
         };
     });
 
     scored.sort((a, b) => b.matchScore - a.matchScore);
+    const ranked = applyFairnessGuard(scored);
 
-    const total = scored.length;
-    const paginated = scored.slice(
+    const total = ranked.length;
+    const paginated = ranked.slice(
         (pageNum - 1) * limitNum,
         pageNum * limitNum
-    );
+    ).map(({ isVipLandlord, ...item }) => item);
 
     return {
         data: paginated,
@@ -479,6 +546,9 @@ async function getRecommend(userId) {
                 include: {
                     location: true,
                     images: true,
+                    users: {
+                        select: { id: true, role: true, isVip: true },
+                    },
                 },
             },
             roomAmenities: { include: { amenity: true } },
@@ -593,4 +663,5 @@ async function getRecommend(userId) {
 module.exports = {
     getPublicSearch,
     getRecommend,
+    applyFairnessGuard,
 };

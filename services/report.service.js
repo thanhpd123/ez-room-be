@@ -125,7 +125,7 @@ async function getReports(params) {
  * Xử lý báo cáo (duyệt / từ chối / bỏ qua)
  */
 async function handleReport(id, moderatorId, body) {
-    const { status, moderatorNote } = body;
+    const { status, actionTaken, moderatorNote } = body;
 
     if (!status || !REPORT_STATUSES_HANDLE.includes(status)) {
         throw Object.assign(
@@ -142,22 +142,91 @@ async function handleReport(id, moderatorId, body) {
         throw Object.assign(new Error('Báo cáo này đã được xử lý trước đó'), { statusCode: 400 });
     }
 
-    const updated = await prisma.report.update({
-        where: { id },
-        data: {
-            status,
-            reviewedBy: moderatorId,
-            moderatorNote: moderatorNote || null,
-            reviewedAt: new Date(),
-        },
-        include: {
-            reporter: {
-                select: { id: true, fullName: true },
+    const updated = await prisma.$transaction(async (tx) => {
+        const report = await tx.report.update({
+            where: { id },
+            data: {
+                status,
+                reviewedBy: moderatorId,
+                moderatorNote: moderatorNote || null,
+                reviewedAt: new Date(),
             },
-            moderator: {
-                select: { id: true, fullName: true },
+            include: {
+                reporter: {
+                    select: { id: true, fullName: true },
+                },
+                moderator: {
+                    select: { id: true, fullName: true },
+                },
             },
-        },
+        });
+
+        if (status === 'APPROVED' && actionTaken === 'warning') {
+            let targetUserId = existing.targetId;
+            let relatedType = 'USER';
+
+            // Determine correct user to warn and relatedType
+            if (existing.targetType === 'ROOM') {
+                const room = await tx.rooms.findUnique({
+                    where: { id: existing.targetId },
+                    include: { rentals: true }
+                });
+                if (room && room.rentals) {
+                    targetUserId = room.rentals.owner_id;
+                    relatedType = 'ROOM';
+                }
+            } else if (existing.targetType === 'BOOKING') {
+                const rental = await tx.rental.findUnique({ where: { id: existing.targetId } });
+                if (rental) {
+                    targetUserId = rental.owner_id;
+                    relatedType = 'RENTAL';
+                }
+            } else if (existing.targetType === 'REVIEW') {
+                const review = await tx.feedback.findUnique({ where: { id: existing.targetId } });
+                if (review) {
+                    targetUserId = review.user_id;
+                    relatedType = 'FEEDBACK';
+                }
+            }
+
+            // Create warning
+            await tx.user_warnings.create({
+                data: {
+                    user_id: targetUserId,
+                    issued_by: moderatorId,
+                    level: 'WARNING',
+                    reason: `Vi phạm theo báo cáo [${existing.reason}]: ${moderatorNote || 'Không có ghi chú thêm'}`,
+                    related_type: relatedType,
+                    related_id: existing.targetId,
+                    expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) // 30 days
+                }
+            });
+
+            // Ghi log (tuỳ chọn)
+            await tx.moderator_logs.create({
+                data: {
+                    moderator_id: moderatorId,
+                    target_type: 'REPORT',
+                    target_id: id,
+                    action: 'WARN',
+                    new_status: 'APPROVED',
+                    note: `Cảnh cáo người dùng (target_id: ${targetUserId}) thông qua xử lý báo cáo.`,
+                }
+            });
+        }
+
+        // Đóng ticket moderation_queue nếu báo cáo được tạo ra queue
+        const queues = await tx.moderation_queue.findMany({
+            where: { target_type: 'REPORT', target_id: id, status: { in: ['OPEN', 'IN_PROGRESS'] } }
+        });
+        if (queues.length > 0) {
+            await tx.moderation_queue.updateMany({
+                where: { target_type: 'REPORT', target_id: id, status: { in: ['OPEN', 'IN_PROGRESS'] } },
+                data: { status: 'RESOLVED', resolved_at: new Date() }
+            });
+        }
+
+        return report;
     });
 
     return { message: 'Đã xử lý báo cáo thành công', data: updated };

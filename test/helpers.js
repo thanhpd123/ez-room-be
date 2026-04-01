@@ -4,12 +4,21 @@
  * Node.js 22+ built-in test runner (node:test + node:assert).
  */
 
+// Provide safe defaults so service modules that validate env at import time do not crash tests.
+process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-jwt-secret';
+process.env.PAYOS_CLIENT_ID = process.env.PAYOS_CLIENT_ID || 'test-client-id';
+process.env.PAYOS_API_KEY = process.env.PAYOS_API_KEY || 'test-api-key';
+process.env.PAYOS_CHECKSUM_KEY = process.env.PAYOS_CHECKSUM_KEY || 'test-checksum-key';
+
 /**
  * Create a mock Express request object.
  */
 function mockReq(overrides = {}) {
     return {
         auth: { user: { id: 'user-1', email: 'test@test.com', full_name: 'Test User', role: 'TENANT', gender: 'Nam' } },
+        headers: {},
+        ip: '127.0.0.1',
+        socket: { remoteAddress: '127.0.0.1' },
         params: {},
         query: {},
         body: {},
@@ -25,6 +34,7 @@ function mockRes() {
         _status: 200,
         _json: null,
         _headers: {},
+        _cookies: {},
         status(code) {
             res._status = code;
             return res;
@@ -35,6 +45,14 @@ function mockRes() {
         },
         setHeader(key, value) {
             res._headers[key] = value;
+            return res;
+        },
+        cookie(name, value, options) {
+            res._cookies[name] = { value, options: options || {} };
+            return res;
+        },
+        clearCookie(name) {
+            delete res._cookies[name];
             return res;
         },
     };
@@ -70,6 +88,8 @@ function createMockPrisma() {
         user: modelMock(),
         wallet: modelMock(),
         walletTransaction: modelMock(),
+        payment_orders: modelMock(),
+        refreshToken: modelMock(),
         favoriteRoom: modelMock(),
         rooms: modelMock(),
         message: modelMock(),
@@ -81,10 +101,13 @@ function createMockPrisma() {
         rental: modelMock(),
         roomImage: modelMock(),
         roomAmenity: modelMock(),
+        moderation_queue: modelMock(),
         userPreference: modelMock(),
         lifestyleProfile: modelMock(),
         preorder: modelMock(),
         userRoomInteraction: modelMock(),
+        user_room_interactions: modelMock(),
+        $executeRaw: async () => 1,
     };
     /** Pass same client as `tx` so services using $transaction see the same mocks. */
     mock.$transaction = async (fn) => fn(mock);

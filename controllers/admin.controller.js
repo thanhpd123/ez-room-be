@@ -50,6 +50,68 @@ async function getWalletStats(req, res) {
     }
 }
 
+async function getPendingWithdrawalQueue(req, res) {
+    try {
+        const result = await adminService.getPendingWithdrawalQueue({
+            page: parseInt(req.query.page) || 1,
+            limit: parseInt(req.query.limit) || 20,
+            search: req.query.search,
+            sortBy: req.query.sortBy,
+            order: req.query.order,
+            minAmount: req.query.minAmount,
+            maxAmount: req.query.maxAmount,
+            createdAfter: req.query.createdAfter,
+            createdBefore: req.query.createdBefore,
+        });
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi lấy queue chờ duyệt rút tiền');
+    }
+}
+
+async function approveWalletWithdrawal(req, res) {
+    try {
+        const result = await adminService.approveWalletWithdrawal(
+            req.params.transactionId,
+            req.auth.user.id
+        );
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi duyệt yêu cầu rút tiền');
+    }
+}
+
+async function rejectWalletWithdrawal(req, res) {
+    try {
+        const result = await adminService.rejectWalletWithdrawal(
+            req.params.transactionId,
+            req.auth.user.id,
+            req.body
+        );
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi từ chối yêu cầu rút tiền');
+    }
+}
+
+async function approveWalletWithdrawalsBatch(req, res) {
+    try {
+        const result = await adminService.approveWalletWithdrawalsBatch(req.body, req.auth.user.id);
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi duyệt hàng loạt yêu cầu rút tiền');
+    }
+}
+
+async function rejectWalletWithdrawalsBatch(req, res) {
+    try {
+        const result = await adminService.rejectWalletWithdrawalsBatch(req.body, req.auth.user.id);
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi từ chối hàng loạt yêu cầu rút tiền');
+    }
+}
+
 async function getAllUsers(req, res) {
     try {
         const result = await adminService.getAllUsers({
@@ -109,6 +171,62 @@ async function getDashboardStats(req, res) {
     }
 }
 
+async function getSystemSettings(req, res) {
+    try {
+        const result = await adminService.getSystemSettings();
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi lấy system settings');
+    }
+}
+
+async function updateSystemSettings(req, res) {
+    try {
+        const result = await adminService.updateSystemSettings(req.body, req.auth.user.id);
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi cập nhật system settings');
+    }
+}
+
+async function getFinanceSummary(req, res) {
+    try {
+        const result = await adminService.getFinanceSummary({
+            from: req.query.from,
+            to: req.query.to,
+        });
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi lấy finance summary');
+    }
+}
+
+async function getFinanceReconciliation(req, res) {
+    try {
+        const result = await adminService.getFinanceReconciliation({
+            from: req.query.from,
+            to: req.query.to,
+            page: parseInt(req.query.page) || 1,
+            limit: parseInt(req.query.limit) || 50,
+        });
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi lấy reconciliation report');
+    }
+}
+
+async function getModeratorKpis(req, res) {
+    try {
+        const result = await adminService.getModeratorKpis({
+            from: req.query.from,
+            to: req.query.to,
+        });
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi lấy moderator KPIs');
+    }
+}
+
 module.exports = {
     getAllUsers,
     getUserById,
@@ -118,4 +236,14 @@ module.exports = {
     getAllWallets,
     getWalletTransactions,
     getWalletStats,
+    getPendingWithdrawalQueue,
+    approveWalletWithdrawal,
+    rejectWalletWithdrawal,
+    approveWalletWithdrawalsBatch,
+    rejectWalletWithdrawalsBatch,
+    getSystemSettings,
+    updateSystemSettings,
+    getFinanceSummary,
+    getFinanceReconciliation,
+    getModeratorKpis,
 };

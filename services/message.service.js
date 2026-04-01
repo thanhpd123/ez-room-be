@@ -51,7 +51,7 @@ async function getConversations(userId) {
         peerToUnread.set(peer, m.status !== 'READ' ? prev + 1 : prev);
     });
 
-    const peerIds = [...peerToLast.keys()];
+    const peerIds = [...peerToLast.keys()].filter((id) => id !== userId);
     if (peerIds.length === 0) {
         return { data: [] };
     }
@@ -84,6 +84,12 @@ async function getConversations(userId) {
  */
 async function getThread(userId, otherId, params) {
     const { limit = 50, before } = params;
+    
+    // Validate IDs are proper UUIDs or strings
+    if (!userId || !otherId) {
+        throw Object.assign(new Error('userId và otherId không được để trống'), { statusCode: 400 });
+    }
+
     const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 50));
 
     if (otherId === userId) {

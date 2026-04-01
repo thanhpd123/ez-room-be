@@ -22,6 +22,12 @@ const options = {
           bearerFormat: 'JWT',
           description: 'Nhập JWT token sau khi đăng nhập',
         },
+        cookieAuth: {
+          type: 'apiKey',
+          in: 'cookie',
+          name: process.env.REFRESH_TOKEN_COOKIE_NAME || 'ezroom_refresh_token',
+          description: 'Refresh token HttpOnly cookie dùng cho endpoint /auth/refresh',
+        },
       },
     },
     tags: [
@@ -42,6 +48,7 @@ const options = {
       { name: 'Preorders', description: 'Đơn đặt trước' },
       { name: 'Feedback', description: 'Đánh giá phòng' },
       { name: 'Upload', description: 'Tải ảnh lên' },
+      { name: 'Blog', description: 'Bài viết và tin tức' },
     ],
   },
   apis: ['./routes/*.js', './server.js'],

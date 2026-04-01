@@ -7,6 +7,8 @@ function handleError(err, res, defaultMessage) {
     return res.status(statusCode).json({
         success: false,
         message,
+        ...(err.code && { code: err.code }),
+        ...(err.upgradePath && { upgradePath: err.upgradePath }),
         ...(err.errors && { errors: err.errors }),
         ...(statusCode === 500 && { error: err.message }),
     });
@@ -14,7 +16,7 @@ function handleError(err, res, defaultMessage) {
 
 async function createRoom(req, res) {
     try {
-        const result = await roomService.createRoom(req.auth.user.id, req.body);
+        const result = await roomService.createRoom(req.auth.user.id, req.body, req.auth.user);
         return res.status(201).json({ success: true, ...result });
     } catch (err) {
         return handleError(err, res, 'Lỗi khi tạo phòng');
@@ -44,6 +46,16 @@ async function getRoomById(req, res) {
         return res.json({ success: true, ...result });
     } catch (err) {
         return handleError(err, res, 'Lỗi khi lấy chi tiết phòng');
+    }
+}
+
+async function getRoomByIdForSearchRoomate(req, res) {
+    try {
+        const userId = req.auth?.user?.id ?? null;
+        const result = await roomService.getRoomByIdForSearchRoomate(req.params.roomId, userId);
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi lấy chi tiết phòng (Search Roommate)');
     }
 }
 
@@ -142,4 +154,5 @@ module.exports = {
     searchTenants,
     createRentalContract,
     getMyBookings,
+    getRoomByIdForSearchRoomate,
 };

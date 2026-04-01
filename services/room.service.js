@@ -6,6 +6,15 @@ const { sendEmail } = require('../utils/email');
 
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5174';
 const AMENITIES_CACHE_KEY = 'rooms:amenities';
+const FREE_TIER_LANDLORD_MAX_ROOMS = Math.max(
+    1,
+    Number(process.env.FREE_TIER_LANDLORD_MAX_ROOMS || 5)
+);
+
+function isActiveVipLandlord(authUser) {
+    if (!authUser) return false;
+    return authUser.role === 'LANDLORD' && authUser.isVip === true;
+}
 
 function formatRoomResponse(room) {
     return {
@@ -74,7 +83,7 @@ function mapRentalPeriodStatus(s) {
     return m[s] || 'active';
 }
 
-async function createRoom(userId, body) {
+async function createRoom(userId, body, authUser = null) {
     const rentalId = body.rentalId || body.rental_id;
     const roomName = body.roomName || body.title;
     const description = body.description;
@@ -105,6 +114,27 @@ async function createRoom(userId, body) {
         throw Object.assign(new Error('Bạn không có quyền thêm phòng cho bất động sản này'), { statusCode: 403 });
     }
 
+    const vipLandlord = isActiveVipLandlord(authUser);
+    if (!vipLandlord) {
+        const ownedRoomsCount = await prisma.rooms.count({
+            where: {
+                rentals: {
+                    owner_id: userId,
+                },
+            },
+        });
+
+        if (ownedRoomsCount >= FREE_TIER_LANDLORD_MAX_ROOMS) {
+            const err = new Error(
+                `Tài khoản thường chỉ có thể đăng tối đa ${FREE_TIER_LANDLORD_MAX_ROOMS} phòng. Vui lòng nâng cấp VIP để mở rộng quota.`
+            );
+            err.statusCode = 403;
+            err.code = 'FREE_TIER_ROOM_LIMIT_REACHED';
+            err.upgradePath = '/vip-plans';
+            throw err;
+        }
+    }
+
     const room = await prisma.$transaction(async (tx) => {
         const created = await tx.rooms.create({
             data: {
@@ -131,7 +161,7 @@ async function createRoom(userId, body) {
             data: {
                 target_type: 'ROOM',
                 target_id: created.id,
-                priority: 'NORMAL',
+                priority: vipLandlord ? 'HIGH' : 'NORMAL',
                 category: 'NEW_LISTING',
                 source: 'SYSTEM',
             },
@@ -178,17 +208,17 @@ async function getRooms(params) {
             ...formatRoomResponse(room),
             rental: room.rentals
                 ? {
-                      id: room.rentals.id,
-                      title: room.rentals.title,
-                      status: room.rentals.status,
-                      location: room.rentals.location
-                          ? {
-                                address: room.rentals.location.address,
-                                district: room.rentals.location.district,
-                                city: room.rentals.location.city,
-                            }
-                          : null,
-                  }
+                    id: room.rentals.id,
+                    title: room.rentals.title,
+                    status: room.rentals.status,
+                    location: room.rentals.location
+                        ? {
+                            address: room.rentals.location.address,
+                            district: room.rentals.location.district,
+                            city: room.rentals.location.city,
+                        }
+                        : null,
+                }
                 : null,
         })),
         pagination: { page: pageNum, limit: pageSize, total, pages: Math.ceil(total / pageSize) },
@@ -222,32 +252,49 @@ async function getRoomById(roomId) {
         throw Object.assign(new Error('Không tìm thấy phòng'), { statusCode: 404 });
     }
 
+    // Increment overall search_count (async, don't await)
+    prisma.rooms.update({
+        where: { id: roomId },
+        data: { search_count: { increment: 1 } },
+    }).catch(err => console.error('Error incrementing search_count:', err));
+
+    // Track per-user VIEW interaction (used for area-based roommate ranking)
+    if (userId) {
+        prisma.user_room_interactions.create({
+            data: {
+                user_id: userId,
+                room_id: roomId,
+                interaction_type: 'VIEW',
+            },
+        }).catch(err => console.error('Error tracking room view:', err));
+    }
+
     return {
         data: {
             ...formatRoomResponse(room),
             rental: room.rentals
                 ? {
-                      id: room.rentals.id,
-                      title: room.rentals.title,
-                      description: room.rentals.description,
-                      status: room.rentals.status,
-                      location: room.rentals.location
-                          ? {
-                                address: room.rentals.location.address,
-                                district: room.rentals.location.district,
-                                city: room.rentals.location.city,
-                            }
-                          : null,
-                      owner: room.rentals.users
-                          ? {
-                                id: room.rentals.users.id,
-                                fullName: room.rentals.users.fullName,
-                                email: room.rentals.users.email,
-                                phone: room.rentals.users.phone,
-                                avatarUrl: room.rentals.users.avatarUrl,
-                            }
-                          : null,
-                  }
+                    id: room.rentals.id,
+                    title: room.rentals.title,
+                    description: room.rentals.description,
+                    status: room.rentals.status,
+                    location: room.rentals.location
+                        ? {
+                            address: room.rentals.location.address,
+                            district: room.rentals.location.district,
+                            city: room.rentals.location.city,
+                        }
+                        : null,
+                    owner: room.rentals.users
+                        ? {
+                            id: room.rentals.users.id,
+                            fullName: room.rentals.users.fullName,
+                            email: room.rentals.users.email,
+                            phone: room.rentals.users.phone,
+                            avatarUrl: room.rentals.users.avatarUrl,
+                        }
+                        : null,
+                }
                 : null,
         },
     };
@@ -267,37 +314,84 @@ async function updateRoom(roomId, userId, body) {
         throw Object.assign(new Error('Bạn không có quyền sửa phòng này'), { statusCode: 403 });
     }
 
+    // Khi resubmit: cho phép chỉnh sửa phòng bị từ chối (MAINTENANCE) và gửi lại để duyệt
+    const isResubmit = body.resubmit === true && existingRoom.status === 'MAINTENANCE';
+
+    // Khi edit phòng đã duyệt (AVAILABLE): auto chuyển PENDING để moderator duyệt lại
+    const isEditApproved = existingRoom.status === 'AVAILABLE';
+
+    // Chặn edit khi đang chờ duyệt (PENDING)
+    if (!isResubmit && existingRoom.status === 'PENDING') {
+        throw Object.assign(
+            new Error('Phòng đang chờ duyệt. Vui lòng đợi moderator xử lý trước khi chỉnh sửa.'),
+            { statusCode: 403 }
+        );
+    }
+
+    const needsModeration = isResubmit || isEditApproved;
+
     const updateData = {};
     const roomName = body.roomName || body.title;
     if (roomName !== undefined) updateData.room_name = roomName?.trim() || null;
+    if (body.description !== undefined) updateData.description = body.description?.trim() || null;
     if (body.roomType !== undefined) updateData.room_type = mapFeToDb(body.roomType);
     if (body.price !== undefined) updateData.price = parseFloat(body.price);
     const sizeM2 = body.sizeM2 || body.area;
     if (sizeM2 !== undefined) updateData.size_m2 = parseFloat(sizeM2);
     const maxPeople = body.maxPeople || body.max_occupants;
     if (maxPeople !== undefined) updateData.max_people = parseInt(maxPeople);
-    const newStatus = body.status;
-    const statusUpper = typeof newStatus === 'string' ? newStatus.toUpperCase() : null;
-    if (statusUpper && ['PENDING', 'AVAILABLE', 'RENTED', 'MAINTENANCE'].includes(statusUpper)) {
-        updateData.status = statusUpper;
+
+    if (needsModeration) {
+        // Resubmit hoặc edit bài đã duyệt: đổi status về PENDING
+        updateData.status = 'PENDING';
+    } else {
+        const newStatus = body.status;
+        const statusUpper = typeof newStatus === 'string' ? newStatus.toUpperCase() : null;
+        if (statusUpper && ['PENDING', 'AVAILABLE', 'RENTED', 'MAINTENANCE'].includes(statusUpper)) {
+            updateData.status = statusUpper;
+        }
     }
 
     const previousStatus = existingRoom.status;
-    const room = await prisma.rooms.update({
-        where: { id: roomId },
-        data: updateData,
-        include: {
-            images: true,
-            roomAmenities: { include: { amenity: true } },
-            rentals: { include: { location: true } },
-        },
+
+    const room = await prisma.$transaction(async (tx) => {
+        const updated = await tx.rooms.update({
+            where: { id: roomId },
+            data: updateData,
+            include: {
+                images: true,
+                roomAmenities: { include: { amenity: true } },
+                rentals: { include: { location: true } },
+            },
+        });
+
+        // Resubmit hoặc edit bài đã duyệt: tạo mục mới trong moderation queue
+        if (needsModeration) {
+            await tx.moderation_queue.create({
+                data: {
+                    target_type: 'ROOM',
+                    target_id: roomId,
+                    priority: 'NORMAL',
+                    category: 'NEW_LISTING',
+                    source: 'SYSTEM',
+                },
+            });
+        }
+
+        return updated;
     });
 
     if (previousStatus === 'RENTED' && room.status === 'AVAILABLE') {
         notifyFavoritersRoomAvailable(room).catch((err) => console.error('Notify favoriters error:', err));
     }
 
-    return { message: 'Cập nhật phòng thành công', data: formatRoomResponse(room) };
+    const message = isResubmit
+        ? 'Đã gửi lại phòng để duyệt'
+        : needsModeration
+            ? 'Đã cập nhật và gửi phòng để duyệt lại'
+            : 'Cập nhật phòng thành công';
+
+    return { message, data: formatRoomResponse(room) };
 }
 
 async function deleteRoom(roomId, userId) {
@@ -688,6 +782,74 @@ async function getMyBookings(userId) {
     return { data: bookings };
 }
 
+async function getRoomByIdForSearchRoomate(roomId, userId = null) {
+    const room = await prisma.rooms.findUnique({
+        where: { id: roomId },
+        include: {
+            images: true,
+            roomAmenities: { include: { amenity: true } },
+            rentals: {
+                include: {
+                    location: true,
+                    users: {
+                        select: {
+                            id: true,
+                            fullName: true,
+                            email: true,
+                            phone: true,
+                            avatarUrl: true,
+                        },
+                    },
+                },
+            },
+        },
+    });
+
+    if (!room) {
+        throw Object.assign(new Error('Không tìm thấy phòng'), { statusCode: 404 });
+    }
+
+    // Tăng search_count
+    prisma.rooms.update({
+        where: { id: roomId },
+        data: { search_count: { increment: 1 } },
+    }).catch(err => console.error('Error incrementing search_count:', err));
+
+    // Ghi nhận tương tác VIEW
+    if (userId) {
+        prisma.user_room_interactions.create({
+            data: {
+                user_id: userId,
+                room_id: roomId,
+                interaction_type: 'VIEW',
+            },
+        }).catch(err => console.error('Error tracking room view:', err));
+    }
+
+    return {
+        data: {
+            ...formatRoomResponse(room),
+            rental: room.rentals
+                ? {
+                    id: room.rentals.id,
+                    title: room.rentals.title,
+                    description: room.rentals.description,
+                    status: room.rentals.status,
+                    location: room.rentals.location
+                        ? {
+                            address: room.rentals.location.address,
+                            district: room.rentals.location.district,
+                            city: room.rentals.location.city,
+                            ward: room.rentals.location.ward,
+                        }
+                        : null,
+                    owner: room.rentals.users,
+                }
+                : null,
+        },
+    };
+}
+
 module.exports = {
     createRoom,
     getRooms,
@@ -700,4 +862,5 @@ module.exports = {
     searchTenants,
     createRentalContract,
     getMyBookings,
+    getRoomByIdForSearchRoomate,
 };

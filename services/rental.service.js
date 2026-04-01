@@ -1,4 +1,5 @@
 const prisma = require('../config/prisma');
+const supabase = require('../config/supabase');
 const cache = require('../utils/simple-cache');
 const { getLabelForDb, ROOM_TYPE_LABELS } = require('../utils/room-type-mapper');
 const { validateCreateRental, validateUpdateRentalStatus } = require('../validators/rental.validator');
@@ -18,13 +19,19 @@ function getPublicRentalsOrderBy(sortParam) {
     return map[sortParam] || { createdAt: 'desc' };
 }
 
-async function createRental(ownerId, body) {
+async function createRental(ownerId, body, files = {}) {
+    console.log('CREATE RENTAL - Files received:', {
+        imageFiles: files.imageFiles?.length || 0,
+        documentFiles: files.documentFiles?.length || 0,
+        imageUrls: files.imageUrls?.length || 0,
+    });
+
     const { valid, errors } = validateCreateRental(body);
     if (!valid) {
         throw Object.assign(new Error('Dữ liệu không hợp lệ'), { statusCode: 400, errors });
     }
 
-    const { title, description, city, district, address, images, documents } = body;
+    const { title, description, city, district, address } = body;
 
     let location = await prisma.location.findFirst({
         where: {
@@ -44,63 +51,155 @@ async function createRental(ownerId, body) {
         });
     }
 
-    const rental = await prisma.$transaction(async (tx) => {
-        const created = await tx.rental.create({
-            data: {
-                owner_id: ownerId,
-                locationId: location.id,
-                title: title.trim(),
-                description: description ? description.trim() : null,
-                status: 'PENDING',
-                ...(images && images.length > 0
-                    ? { images: { create: images.map((url) => ({ imageUrl: url })) } }
-                    : {}),
-                ...(documents && documents.length > 0
-                    ? {
-                          rental_documents: {
-                              create: documents.map((doc) => ({
-                                  document_type: doc.documentType,
-                                  image_url: doc.imageUrl,
-                                  status: 'PENDING',
-                              })),
-                          },
-                      }
-                    : {}),
-            },
-            include: {
-                location: true,
-                images: true,
-                rental_documents: true,
-            },
-        });
-        await tx.moderation_queue.create({
-            data: {
-                target_type: 'RENTAL',
-                target_id: created.id,
-                priority: 'NORMAL',
-                category: 'NEW_LISTING',
-                source: 'SYSTEM',
-            },
-        });
-        return created;
+    // UPLOAD FILES FIRST (outside transaction) to avoid timeout
+    const uploadedDocuments = [];
+
+    // Upload document files to Supabase (private bucket)
+    // Documents can be PDFs or images (scans of: CCCD, Sổ đỏ, Giấy phép kinh doanh)
+    if (files.documentFiles && files.documentFiles.length > 0) {
+        console.log(`📤 Uploading ${files.documentFiles.length} document file(s)`);
+        for (const docFile of files.documentFiles) {
+            try {
+                // Sanitize filename: remove special characters, keep only alphanumeric + . - _
+                const sanitizedName = docFile.originalname
+                    .replace(/[^\w.-]/g, '')  // Remove non-word chars except . - _
+                    .substring(0, 200);  // Limit length
+                
+                const fileName = `temp/documents/${Date.now()}_${sanitizedName}`;
+                console.log('📝 Document upload START:', { 
+                    originalName: docFile.originalname,
+                    sanitizedName,
+                    size: docFile.size, 
+                    mime: docFile.mimetype 
+                });
+                
+                const { data, error: uploadError } = await supabase.storage
+                    .from('rental-documents')
+                    .upload(fileName, docFile.buffer, {
+                        contentType: docFile.mimetype,
+                        cacheControl: '0',  // No caching for documents
+                    });
+
+                if (uploadError) {
+                    console.error('❌ Document upload ERROR:', {
+                        fileName,
+                        error: uploadError.message,
+                        status: uploadError.status,
+                    });
+                    throw uploadError;  // Fail fast on upload errors
+                } else if (data) {
+                    console.log('✅ Document upload SUCCESS:', { fileName, path: data.path });
+                    uploadedDocuments.push({
+                        path: data.path,
+                        name: docFile.originalname,  // Keep original name for reference
+                    });
+                }
+            } catch (err) {
+                console.error('❌ Document upload EXCEPTION:', {
+                    originalFileName: docFile.originalname,
+                    error: err.message,
+                    stack: err.stack,
+                });
+                throw err;  // Fail fast
+            }
+        }
+        console.log(`✅ All ${uploadedDocuments.length} documents uploaded successfully`);
+    } else {
+        console.log('⚠️  No documents to upload');
+    }
+
+    // NOW CREATE RENTAL AND SAVE METADATA (short transaction)
+    const rental = await prisma.$transaction(
+        async (tx) => {
+            const created = await tx.rental.create({
+                data: {
+                    owner_id: ownerId,
+                    locationId: location.id,
+                    title: title.trim(),
+                    description: description ? description.trim() : null,
+                    status: 'PENDING',
+                },
+                include: {
+                    location: true,
+                    images: true,
+                },
+            });
+
+            // Save image URLs from Cloudinary (from form.imageUrls)
+            // ✅ Only store Cloudinary URLs - images must use public CDN service
+            if (files.imageUrls && files.imageUrls.length > 0) {
+                console.log(`Saving ${files.imageUrls.length} image URLs for rental ${created.id}`);
+                for (const imageUrl of files.imageUrls) {
+                    if (imageUrl && imageUrl.trim()) {
+                        await tx.RentalImage.create({
+                            data: {
+                                rentalId: created.id,
+                                imageUrl: imageUrl.trim(),
+                            },
+                        });
+                    }
+                }
+            }
+
+            // Save uploaded document paths to rental_documents table
+            for (const doc of uploadedDocuments) {
+                // Create document record first to get its ID
+                await tx.rental_documents.create({
+                    data: {
+                        rental_id: created.id,
+                        document_type: 'OTHER',
+                        image_url: doc.path,
+                        status: 'PENDING',
+                    },
+                });
+                // Note: Access logging will be done separately when moderator views documents
+            }
+
+            // Add to moderation queue
+            await tx.moderation_queue.create({
+                data: {
+                    target_type: 'RENTAL',
+                    target_id: created.id,
+                    priority: 'NORMAL',
+                    category: 'NEW_LISTING',
+                    source: 'SYSTEM',
+                },
+            });
+
+            return created;
+        },
+        {
+            timeout: 10000, // 10 second timeout (increased from default 5s)
+        }
+    );
+
+    // Fetch complete rental with images and documents
+    const completeRental = await prisma.rental.findUnique({
+        where: { id: rental.id },
+        include: {
+            location: true,
+            images: true,
+            rental_documents: true,
+        },
     });
 
     return {
         data: {
-            id: rental.id,
-            title: rental.title,
-            description: rental.description,
-            status: rental.status,
-            createdAt: rental.createdAt,
-            location: rental.location
+            id: completeRental.id,
+            title: completeRental.title,
+            description: completeRental.description,
+            status: completeRental.status,
+            createdAt: completeRental.createdAt,
+            location: completeRental.location
                 ? {
-                      id: rental.location.id,
-                      address: rental.location.address,
-                      district: rental.location.district,
-                      city: rental.location.city,
+                      id: completeRental.location.id,
+                      address: completeRental.location.address,
+                      district: completeRental.location.district,
+                      city: completeRental.location.city,
                   }
                 : null,
-            images: (rental.images || []).map((img) => img.imageUrl),
+            images: (completeRental.images || []).map((img) => img.image_url),
+            documentsCount: (completeRental.rental_documents || []).length,
         },
     };
 }
@@ -804,7 +903,7 @@ async function getLandlordProfile(userId) {
 }
 
 async function updateRental(rentalId, userId, body) {
-    const { title, description, address, district, city, images, status } = body;
+    const { title, description, address, district, city, images, status, resubmit } = body;
 
     const allowedStatuses = ['AVAILABLE', 'UNAVAILABLE', 'HIDDEN'];
     if (status && !allowedStatuses.includes(status)) {
@@ -824,10 +923,17 @@ async function updateRental(rentalId, userId, body) {
         throw Object.assign(new Error('Bạn không có quyền chỉnh sửa bài đăng này'), { statusCode: 403 });
     }
 
-    const moderatorOnlyStatuses = ['PENDING', 'SUSPEND', 'VIOLATE'];
-    if (status && moderatorOnlyStatuses.includes(rental.status)) {
+    // Khi resubmit: cho phép chỉnh sửa bài đăng bị từ chối (HIDDEN) và gửi lại để duyệt
+    const isResubmit = resubmit === true && rental.status === 'HIDDEN';
+
+    // Khi edit bài đăng đã duyệt (AVAILABLE/UNAVAILABLE): auto chuyển PENDING để moderator duyệt lại
+    const isEditApproved = ['AVAILABLE', 'UNAVAILABLE'].includes(rental.status);
+
+    // Chặn edit khi đang chờ duyệt (PENDING) hoặc bị tạm ngưng/vi phạm
+    const blockedStatuses = ['PENDING', 'SUSPEND', 'VIOLATE'];
+    if (!isResubmit && blockedStatuses.includes(rental.status)) {
         throw Object.assign(
-            new Error('Bài đăng đang chờ duyệt hoặc bị tạm ngưng, bạn không thể thay đổi trạng thái'),
+            new Error('Bài đăng đang chờ duyệt hoặc bị tạm ngưng. Vui lòng đợi moderator xử lý trước khi chỉnh sửa.'),
             { statusCode: 403 }
         );
     }
@@ -856,32 +962,57 @@ async function updateRental(rentalId, userId, body) {
         }
     }
 
-    await prisma.rental.update({
-        where: { id: rentalId },
-        data: {
-            ...(title ? { title: title.trim() } : {}),
-            ...(description !== undefined ? { description: description?.trim() || null } : {}),
-            ...(locationId !== rental.locationId ? { locationId } : {}),
-            ...(status ? { status } : {}),
-        },
-    });
+    // Xác định status mới: resubmit hoặc edit bài đã duyệt → PENDING
+    const needsModeration = isResubmit || isEditApproved;
+    const newStatus = needsModeration ? 'PENDING' : status;
 
-    if (images && Array.isArray(images)) {
-        await prisma.rentalImage.deleteMany({ where: { rentalId } });
-        if (images.length > 0) {
-            await prisma.rentalImage.createMany({
-                data: images.map((url) => ({ rentalId, imageUrl: url })),
+    const result = await prisma.$transaction(async (tx) => {
+        await tx.rental.update({
+            where: { id: rentalId },
+            data: {
+                ...(title ? { title: title.trim() } : {}),
+                ...(description !== undefined ? { description: description?.trim() || null } : {}),
+                ...(locationId !== rental.locationId ? { locationId } : {}),
+                ...(newStatus ? { status: newStatus } : {}),
+            },
+        });
+
+        if (images && Array.isArray(images)) {
+            await tx.rentalImage.deleteMany({ where: { rentalId } });
+            if (images.length > 0) {
+                await tx.rentalImage.createMany({
+                    data: images.map((url) => ({ rentalId, imageUrl: url })),
+                });
+            }
+        }
+
+        // Resubmit hoặc edit bài đã duyệt: tạo mục mới trong moderation queue
+        if (needsModeration) {
+            await tx.moderation_queue.create({
+                data: {
+                    target_type: 'RENTAL',
+                    target_id: rentalId,
+                    priority: 'NORMAL',
+                    category: 'NEW_LISTING',
+                    source: 'SYSTEM',
+                },
             });
         }
-    }
 
-    const result = await prisma.rental.findUnique({
-        where: { id: rentalId },
-        include: { location: true, images: true },
+        return tx.rental.findUnique({
+            where: { id: rentalId },
+            include: { location: true, images: true },
+        });
     });
 
+    const message = isResubmit
+        ? 'Đã gửi lại bài đăng để duyệt'
+        : needsModeration
+          ? 'Đã cập nhật và gửi bài đăng để duyệt lại'
+          : 'Cập nhật bài đăng thành công';
+
     return {
-        message: 'Cập nhật bài đăng thành công',
+        message,
         data: {
             id: result.id,
             title: result.title,
@@ -904,7 +1035,12 @@ async function updateRental(rentalId, userId, body) {
 async function deleteRental(rentalId, userId) {
     const rental = await prisma.rental.findUnique({
         where: { id: rentalId },
-        select: { id: true, owner_id: true, title: true },
+        select: { 
+            id: true, 
+            owner_id: true, 
+            title: true,
+            rental_documents: { select: { image_url: true } },
+        },
     });
 
     if (!rental) {
@@ -929,11 +1065,391 @@ async function deleteRental(rentalId, userId) {
         );
     }
 
+    // ✅ Clean up documents from Supabase Storage before deleting from DB
+    if (rental.rental_documents && rental.rental_documents.length > 0) {
+        console.log(`Deleting ${rental.rental_documents.length} documents from Supabase for rental ${rentalId}`);
+        for (const doc of rental.rental_documents) {
+            try {
+                const { error } = await supabase.storage
+                    .from('rental-documents')
+                    .remove([doc.image_url]); // image_url contains the full path
+
+                if (error) {
+                    console.error(`Failed to delete ${doc.image_url}:`, error);
+                } else {
+                    console.log(`✅ Deleted: ${doc.image_url}`);
+                }
+            } catch (err) {
+                console.error(`Exception deleting ${doc.image_url}:`, err);
+            }
+        }
+    }
+
     await prisma.rental.delete({ where: { id: rentalId } });
 
     return {
         message: 'Xóa bài đăng thành công',
         data: { id: rentalId, title: rental.title },
+    };
+}
+
+/**
+ * Get landlord dashboard statistics
+ */
+async function getLandlordDashboardStats(landlordId) {
+    const [
+        totalRentals,
+        totalRooms,
+        rentalsByStatus,
+        wallet,
+        totalFeedback,
+        feedbackStats,
+        totalPreorders,
+        preorderStats,
+    ] = await Promise.all([
+        // Tổng số nhà trọ
+        prisma.rental.count({ where: { owner_id: landlordId } }),
+        
+        // Tổng số phòng trọ
+        prisma.rooms.count({
+            where: { rentals: { owner_id: landlordId } },
+        }),
+        
+        // Trạng thái nhà trọ
+        prisma.rental.groupBy({
+            by: ['status'],
+            where: { owner_id: landlordId },
+            _count: { id: true },
+        }),
+        
+        // Ví của landlord
+        prisma.wallet.findUnique({
+            where: { userId: landlordId },
+            select: { balance: true },
+        }),
+        
+        // Tổng feedback nhận được
+        prisma.feedback.count({
+            where: {
+                target_type: 'ROOM',
+                status: 'APPROVED',
+                room_rental_periods: { room: { rentals: { owner_id: landlordId } } },
+            },
+        }),
+        
+        // Thống kê feedback (rating trung bình, etc)
+        prisma.feedback.aggregate({
+            where: {
+                target_type: 'ROOM',
+                status: 'APPROVED',
+                rating: { not: null },
+                room_rental_periods: { room: { rentals: { owner_id: landlordId } } },
+            },
+            _avg: { rating: true },
+            _count: { id: true },
+        }),
+        
+        // Tổng đặt cọc
+        prisma.preorder.count({
+            where: {
+                room: { rentals: { owner_id: landlordId } },
+            },
+        }),
+        
+        // Thống kê đặt cọc theo trạng thái
+        prisma.preorder.groupBy({
+            by: ['status'],
+            where: {
+                room: { rentals: { owner_id: landlordId } },
+            },
+            _count: { id: true },
+        }),
+    ]);
+
+    // Format rental status data
+    const rentalStatusMap = {
+        AVAILABLE: 0,
+        UNAVAILABLE: 0,
+        HIDDEN: 0,
+        PENDING: 0,
+        SUSPEND: 0,
+        VIOLATE: 0,
+    };
+    
+    rentalsByStatus.forEach((item) => {
+        if (rentalStatusMap.hasOwnProperty(item.status)) {
+            rentalStatusMap[item.status] = item._count.id;
+        }
+    });
+
+    // Format preorder status data
+    const preorderStatusMap = {
+        PENDING: 0,
+        CONFIRMED: 0,
+        CANCELLED: 0,
+        EXPIRED: 0,
+    };
+    
+    preorderStats.forEach((item) => {
+        if (preorderStatusMap.hasOwnProperty(item.status)) {
+            preorderStatusMap[item.status] = item._count.id;
+        }
+    });
+
+    return {
+        data: {
+            rentals: {
+                total: totalRentals,
+                byStatus: rentalStatusMap,
+            },
+            rooms: {
+                total: totalRooms,
+            },
+            wallet: {
+                balance: wallet ? Number(wallet.balance) : 0,
+            },
+            feedback: {
+                total: totalFeedback,
+                averageRating: feedbackStats._avg.rating ? Number(feedbackStats._avg.rating) : 0,
+            },
+            preorders: {
+                total: totalPreorders,
+                byStatus: preorderStatusMap,
+            },
+        },
+    };
+}
+
+async function getLandlordPerformanceMetrics(landlordId) {
+    const now = new Date();
+    const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const thisMonthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    
+    const [
+        totalRooms,
+        activeRentals,
+        thisMonthRevenue,
+        totalRevenue,
+        cancelledPeriods,
+        totalPeriods,
+        confirmedPreorders,
+        totalPreorders,
+    ] = await Promise.all([
+        // Tổng số phòng
+        prisma.rooms.count({
+            where: { rentals: { owner_id: landlordId } },
+        }),
+        
+        // Số phòng đang thuê (ACTIVE periods)
+        prisma.RoomRentalPeriod.count({
+            where: {
+                room: { rentals: { owner_id: landlordId } },
+                status: 'ACTIVE',
+            },
+        }),
+        
+        // Doanh thu tháng này
+        prisma.RoomRentalPeriod.aggregate({
+            where: {
+                room: { rentals: { owner_id: landlordId } },
+                createdAt: { gte: thisMonthStart, lte: thisMonthEnd },
+            },
+            _sum: { actualPrice: true },
+        }),
+        
+        // Tổng doanh thu
+        prisma.RoomRentalPeriod.aggregate({
+            where: {
+                room: { rentals: { owner_id: landlordId } },
+            },
+            _sum: { actualPrice: true },
+        }),
+        
+        // Số đơn hủy
+        prisma.RoomRentalPeriod.count({
+            where: {
+                room: { rentals: { owner_id: landlordId } },
+                status: 'CANCELLED',
+            },
+        }),
+        
+        // Tổng đơn kết thúc (COMPLETED hoặc CANCELLED)
+        prisma.RoomRentalPeriod.count({
+            where: {
+                room: { rentals: { owner_id: landlordId } },
+                OR: [
+                    { status: 'COMPLETED' },
+                    { status: 'CANCELLED' },
+                ],
+            },
+        }),
+        
+        // Đơn đã xác nhận
+        prisma.Preorder.count({
+            where: {
+                room: { rentals: { owner_id: landlordId } },
+                status: 'CONFIRMED',
+            },
+        }),
+        
+        // Tổng đơn đặt cọc
+        prisma.Preorder.count({
+            where: {
+                room: { rentals: { owner_id: landlordId } },
+                NOT: { status: 'PENDING' },
+            },
+        }),
+    ]);
+
+    // Tính toán metrics
+    const occupancyRate = totalRooms > 0 ? (activeRentals / totalRooms) * 100 : 0;
+    const cancellationRate = totalPeriods > 0 ? (cancelledPeriods / totalPeriods) * 100 : 0;
+    const conversionRate = totalPreorders > 0 ? (confirmedPreorders / totalPreorders) * 100 : 0;
+
+    return {
+        data: {
+            occupancyRate: parseFloat(occupancyRate.toFixed(2)),
+            revenue: {
+                thisMonth: Number(thisMonthRevenue._sum.actualPrice ?? 0),
+                total: Number(totalRevenue._sum.actualPrice ?? 0),
+            },
+            cancellationRate: parseFloat(cancellationRate.toFixed(2)),
+            conversionRate: parseFloat(conversionRate.toFixed(2)),
+            bookingStats: {
+                active: activeRentals,
+                cancelled: cancelledPeriods,
+                total: totalPeriods,
+            },
+        },
+    };
+}
+
+async function getTopSearchedRooms(landlordId, limit = 5) {
+    const topRooms = await prisma.rooms.findMany({
+        where: {
+            rentals: { owner_id: landlordId },
+        },
+        select: {
+            id: true,
+            room_name: true,
+            price: true,
+            search_count: true,
+            images: {
+                take: 1,
+                select: { imageUrl: true },
+            },
+            rentals: {
+                select: {
+                    title: true,
+                    location: {
+                        select: { address: true, district: true, city: true },
+                    },
+                },
+            },
+        },
+        orderBy: { search_count: 'desc' },
+        take: limit,
+    });
+
+    return {
+        data: {
+            rooms: topRooms.map(room => ({
+                id: room.id,
+                name: room.room_name,
+                price: room.price,
+                searchCount: room.search_count || 0,
+                image: room.images?.[0]?.imageUrl || null,
+                rentalTitle: room.rentals?.title,
+                location: room.rentals?.location,
+            })),
+        },
+    };
+}
+
+async function getRentalDocumentsForModeration(rentalId, moderatorId) {
+    // Check if moderator has access (only MODERATOR/ADMIN)
+    const rental = await prisma.rental.findUnique({
+        where: { id: rentalId },
+        include: {
+            rental_documents: true,
+            images: true,
+            users: {
+                select: {
+                    id: true,
+                    fullName: true,
+                    email: true,
+                    phone: true,
+                },
+            },
+        },
+    });
+
+    if (!rental) {
+        throw Object.assign(new Error('Rental không tìm thấy'), { statusCode: 404 });
+    }
+
+    // Generate signed URLs for documents (expires in 1 hour)
+    const docsWithUrls = await Promise.all(
+        (rental.rental_documents || []).map(async (doc) => {
+            try {
+                const { data, error } = await supabase.storage
+                    .from('rental-documents')
+                    .createSignedUrl(doc.image_url, 3600);
+
+                return {
+                    id: doc.id,
+                    documentType: doc.document_type,
+                    status: doc.status,
+                    signedUrl: error ? null : data?.signedUrl,
+                    uploadedAt: doc.created_at,
+                };
+            } catch (err) {
+                console.error('Error generating signed URL:', err);
+                return {
+                    id: doc.id,
+                    documentType: doc.document_type,
+                    status: doc.status,
+                    signedUrl: null,
+                    uploadedAt: doc.created_at,
+                };
+            }
+        })
+    );
+
+    // Generate signed URLs for images
+    const imagesWithUrls = await Promise.all(
+        (rental.images || []).map(async (img) => {
+            try {
+                const { data, error } = await supabase.storage
+                    .from('rental-documents')
+                    .createSignedUrl(img.image_url, 3600);
+
+                return {
+                    id: img.id,
+                    signedUrl: error ? null : data?.signedUrl,
+                    uploadedAt: img.created_at,
+                };
+            } catch (err) {
+                console.error('Error generating signed URL for image:', err);
+                return {
+                    id: img.id,
+                    signedUrl: null,
+                    uploadedAt: img.created_at,
+                };
+            }
+        })
+    );
+
+    return {
+        data: {
+            id: rental.id,
+            title: rental.title,
+            description: rental.description,
+            status: rental.status,
+            owner: rental.users,
+            documents: docsWithUrls,
+            images: imagesWithUrls,
+        },
     };
 }
 
@@ -943,6 +1459,7 @@ module.exports = {
     getRentalById,
     getMyRentals,
     getRentalsForModeration,
+    getRentalDocumentsForModeration,
     updateRentalStatus,
     updateRental,
     deleteRental,
@@ -951,4 +1468,7 @@ module.exports = {
     getPublicRentalById,
     getPublicRoomTypes,
     getLandlordProfile,
+    getLandlordDashboardStats,
+    getLandlordPerformanceMetrics,
+    getTopSearchedRooms,
 };

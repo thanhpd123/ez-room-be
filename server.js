@@ -15,6 +15,7 @@ const locationsRoutes = require('./routes/locations');
 const rentalRoutes = require('./routes/rental');
 const roomRoutes = require('./routes/room');
 const publicRoutes = require('./routes/public');
+const blogRoutes = require('./routes/blog');
 const searchRoutes = require('./routes/search');
 const favoriteRoutes = require('./routes/favorite');
 const roommateRoutes = require('./routes/roommate');
@@ -26,6 +27,11 @@ const reportRoutes = require('./routes/report');
 const preorderRoutes = require('./routes/preorder');
 const feedbackRoutes = require('./routes/feedback');
 const interactionRoutes = require('./routes/interactions');
+const documentRoutes = require('./routes/document');
+const vipRoutes = require('./routes/vip');
+const notificationRoutes = require('./routes/notification');
+const { startPreorderPayoutReconciliationJob } = require('./services/preorder-reconciliation.service');
+const { startStaleCron } = require('./cron/release-stale-tasks');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -47,7 +53,13 @@ app.use(cors({
     },
     credentials: true,
 }));
-app.use(express.json());
+
+// Routes - Rental routes MUST come BEFORE global JSON parser to allow multer to handle multipart
+app.use('/rentals', rentalRoutes);
+
+// Increase body size limit for file uploads in FormData
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Swagger API Documentation
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
@@ -59,15 +71,15 @@ app.get('/api-docs.json', (req, res) => {
     res.send(swaggerSpec);
 });
 
-// Routes
+// Routes - All other routes after JSON parser
 app.use('/auth', authRoutes);
 app.use('/admin', adminRoutes);
 app.use('/upload', uploadRoutes);
 app.use('/amenities', amenitiesRoutes);
 app.use('/locations', locationsRoutes);
-app.use('/rentals', rentalRoutes);
 app.use('/rooms', roomRoutes);
 app.use('/public', publicRoutes);
+app.use('/blogs', blogRoutes);
 app.use('/search', searchRoutes);
 app.use('/favorites', favoriteRoutes);
 app.use('/roommate', roommateRoutes);
@@ -79,6 +91,9 @@ app.use('/reports', reportRoutes);
 app.use('/preorders', preorderRoutes);
 app.use('/feedback', feedbackRoutes);
 app.use('/interactions', interactionRoutes);
+app.use('/documents', documentRoutes);
+app.use('/vip', vipRoutes);
+app.use('/notifications', notificationRoutes);
 
 // Test route
 app.get('/', (req, res) => {
@@ -150,6 +165,8 @@ app.use((err, req, res, next) => {
 
 app.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
+    startPreorderPayoutReconciliationJob();
+    startStaleCron();
 
     // Pre-load AI models in background (non-blocking)
     const { preloadEmbedding } = require('./utils/embedding');

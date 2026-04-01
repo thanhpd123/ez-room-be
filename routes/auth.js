@@ -1,6 +1,25 @@
 const express = require('express');
 const { verifyJWT } = require('../middleware/auth');
-const { register, registerOAuth, getCitizenCard, upsertCitizenCard, registerLandlord, login, forgotPassword, resetPassword, changePassword, updateProfile, getLifestyle, upsertLifestyle, getPreference, upsertPreference, suggestPassword } = require('../controllers/auth.controller');
+const {
+    register,
+    registerOAuth,
+    getCitizenCard,
+    upsertCitizenCard,
+    registerLandlord,
+    login,
+    refreshToken,
+    logout,
+    logoutAll,
+    forgotPassword,
+    resetPassword,
+    changePassword,
+    updateProfile,
+    getLifestyle,
+    upsertLifestyle,
+    getPreference,
+    upsertPreference,
+    suggestPassword,
+} = require('../controllers/auth.controller');
 
 const router = express.Router();
 
@@ -61,11 +80,53 @@ router.post('/register', register);
  *               password: { type: string }
  *     responses:
  *       200:
- *         description: Đăng nhập thành công, trả về JWT token
+ *         description: Đăng nhập thành công, trả về access token và set refresh token cookie
  *       401:
  *         description: Sai email hoặc mật khẩu
  */
 router.post('/login', login);
+
+/**
+ * @openapi
+ * /auth/refresh:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Làm mới access token từ refresh token cookie
+ *     responses:
+ *       200:
+ *         description: Làm mới token thành công
+ *       401:
+ *         description: Refresh token không hợp lệ hoặc đã bị thu hồi
+ */
+router.post('/refresh', refreshToken);
+
+/**
+ * @openapi
+ * /auth/logout:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Đăng xuất phiên hiện tại (thu hồi refresh token hiện tại)
+ *     responses:
+ *       200:
+ *         description: Đăng xuất thành công
+ */
+router.post('/logout', logout);
+
+/**
+ * @openapi
+ * /auth/logout-all:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Đăng xuất tất cả thiết bị của user hiện tại
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Đăng xuất tất cả thiết bị thành công
+ *       401:
+ *         description: Chưa xác thực
+ */
+router.post('/logout-all', verifyJWT, logoutAll);
 
 /**
  * @openapi

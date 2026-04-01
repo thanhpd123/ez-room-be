@@ -64,9 +64,75 @@ async function updateMatchStatus(req, res) {
     }
 }
 
+async function getProfile(req, res) {
+    try {
+        const result = await roommateService.getPublicProfile(req.params.userId);
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi tải hồ sơ');
+    }
+}
+
+async function getMyActiveRooms(req, res) {
+    try {
+        const result = await roommateService.getMyActiveRooms(req.auth.user.id);
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi tải danh sách phòng đang thuê');
+    }
+}
+
+async function inviteRoommate(req, res) {
+    try {
+        const result = await roommateService.inviteRoommate(
+            req.auth.user.id,
+            req.params.targetUserId,
+            req.body.roomId
+        );
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi gửi lời mời ở ghép');
+    }
+}
+
+async function semanticSearch(req, res) {
+    try {
+        const roommateRagService = require('../services/roommate-rag.service');
+        const query = String(req.query.q || '').trim();
+        if (!query || query.length < 3) {
+            return res.status(400).json({ success: false, message: 'Vui lòng nhập mô tả ít nhất 3 ký tự' });
+        }
+        const limit = Math.min(20, Math.max(1, parseInt(req.query.limit) || 10));
+        const result = await roommateRagService.searchByPersonality(req.auth.user.id, query, limit);
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi tìm kiếm AI');
+    }
+}
+
+async function searchByArea(req, res) {
+    try {
+        const area = String(req.query.area || '').trim();
+        if (!area) {
+            return res.status(400).json({ success: false, message: 'Vui lòng nhập khu vực (area)' });
+        }
+        const limit = Math.min(20, Math.max(1, parseInt(req.query.limit) || 10));
+        const result = await roommateService.getTopSearchersInArea(req.auth.user.id, area, limit);
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi tìm kiếm theo khu vực');
+    }
+}
+
 module.exports = {
     getSuggestions,
     sendRequest,
     getMyMatches,
     updateMatchStatus,
+    getProfile,
+    getMyActiveRooms,
+    inviteRoommate,
+    semanticSearch,
+    searchByArea,
 };
+

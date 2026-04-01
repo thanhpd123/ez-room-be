@@ -42,7 +42,64 @@ async function getFeedbackByRentalPeriod(req, res) {
     }
 }
 
+/**
+ * Get landlord reviews
+ */
+async function getLandlordReviews(req, res) {
+    try {
+        const status = req.query.status || 'APPROVED';
+        const page = Math.max(1, parseInt(req.query.page || 1, 10));
+        const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || 10, 10)));
+        const sortBy = req.query.sortBy || 'recent';
+
+        const result = await feedbackService.getLandlordReviews(req.auth.user.id, {
+            status,
+            page,
+            limit,
+            sortBy,
+        });
+
+        return res.json({ success: true, data: result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi lấy đánh giá');
+    }
+}
+
+/** * Get reviews for a specific room (public endpoint for tenants)
+ */
+async function getRoomReviews(req, res) {
+    try {
+        const { roomId } = req.params;
+        const { page = 1, limit = 5 } = req.query;
+
+        const result = await feedbackService.getRoomReviews(roomId, {
+            page: parseInt(page),
+            limit: parseInt(limit),
+        });
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi lấy danh sách đánh giá');
+    }
+}
+
+/** * Reply to a review
+ */
+async function replyToReview(req, res) {
+    try {
+        const { reviewId } = req.params;
+        const { content } = req.body;
+
+        const result = await feedbackService.replyToReview(req.auth.user.id, reviewId, content);
+        return res.json(result);
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi phản hồi đánh giá');
+    }
+}
+
 module.exports = {
     createFeedback,
     getFeedbackByRentalPeriod,
+    getRoomReviews,
+    getLandlordReviews,
+    replyToReview,
 };

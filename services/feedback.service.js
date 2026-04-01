@@ -194,7 +194,197 @@ async function getFeedbackByRentalPeriod(userId, rentalPeriodId) {
     };
 }
 
+/**
+ * Lấy danh sách reviews của một room (công khai cho tenant)
+ */
+async function getRoomReviews(roomId, options = {}) {
+    const { page = 1, limit = 5 } = options;
+
+    // Kiểm tra room tồn tại
+    const room = await prisma.rooms.findUnique({
+        where: { id: roomId },
+        select: { id: true },
+    });
+
+    if (!room) {
+        throw Object.assign(new Error('Không tìm thấy phòng'), { statusCode: 404 });
+    }
+
+    // Query reviews cho room này (chỉ APPROVED)
+    const whereClause = {
+        target_type: 'ROOM',
+        target_id: roomId,
+        status: 'APPROVED',
+    };
+
+    const total = await prisma.feedback.count({ where: whereClause });
+
+    const reviews = await prisma.feedback.findMany({
+        where: whereClause,
+        include: {
+            users: { select: { id: true, fullName: true, avatarUrl: true } },
+        },
+        orderBy: { created_at: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+    });
+
+    const formatted = reviews.map((fb) => ({
+        id: fb.id,
+        rating: fb.rating,
+        cleanlinessRating: fb.cleanliness_rating,
+        locationRating: fb.location_rating,
+        valueRating: fb.value_rating,
+        landlordRating: fb.landlord_rating,
+        comment: fb.comment,
+        createdAt: fb.created_at,
+        author: {
+            id: fb.users?.id,
+            name: fb.users?.fullName || 'Ẩn danh',
+            avatar: fb.users?.avatarUrl,
+        },
+        landlordReply: fb.landlord_reply,
+        repliedAt: fb.replied_at,
+    }));
+
+    return {
+        reviews: formatted,
+        total,
+        page,
+        limit,
+        hasMore: (page - 1) * limit + limit < total,
+    };
+}
+
+/**
+ * Lấy danh sách reviews của landlord cho rentals/rooms của họ
+ */
+async function getLandlordReviews(landlordId, options = {}) {
+    const { status = 'APPROVED', page = 1, limit = 10, sortBy = 'recent' } = options;
+
+    // Lấy tất cả rentals của landlord
+    const rentals = await prisma.rental.findMany({
+        where: { owner_id: landlordId },
+        select: { id: true, title: true, rooms: { select: { id: true } } },
+    });
+
+    if (!rentals.length) {
+        return { reviews: [], total: 0, page, limit, hasMore: false };
+    }
+
+    const rentalIds = rentals.map((r) => r.id);
+    const roomIds = rentals.flatMap((r) => r.rooms.map((rm) => rm.id));
+
+    // Query reviews cho các rooms của landlord này
+    const whereClause = {
+        AND: [
+            {
+                OR: [
+                    { target_type: 'ROOM', target_id: { in: roomIds } },
+                    { target_type: 'RENTAL', target_id: { in: rentalIds } },
+                ],
+            },
+            ...(status ? [{ status }] : []),
+        ],
+    };
+
+    const total = await prisma.feedback.count({ where: whereClause });
+
+    const orderBy = sortBy === 'rating' ? { rating: 'desc' } : { created_at: 'desc' };
+
+    const reviews = await prisma.feedback.findMany({
+        where: whereClause,
+        include: {
+            users: { select: { id: true, fullName: true, avatarUrl: true } },
+            room_rental_periods: {
+                include: { room: { select: { id: true, room_name: true } } },
+            },
+        },
+        orderBy,
+        skip: (page - 1) * limit,
+        take: limit,
+    });
+
+    const formatted = reviews.map((fb) => ({
+        id: fb.id,
+        ratingOverall: fb.rating,
+        cleanlinessRating: fb.cleanliness_rating,
+        locationRating: fb.location_rating,
+        valueRating: fb.value_rating,
+        landlordRating: fb.landlord_rating,
+        comment: fb.comment,
+        reviewer: {
+            id: fb.users.id,
+            fullName: fb.users.fullName,
+            avatarUrl: fb.users.avatarUrl,
+        },
+        room: fb.room_rental_periods?.room || null,
+        targetType: fb.target_type,
+        status: fb.status,
+        createdAt: fb.created_at,
+        landlordReply: fb.landlord_reply,
+        repliedAt: fb.replied_at,
+    }));
+
+    return {
+        reviews: formatted,
+        total,
+        page,
+        limit,
+        hasMore: (page - 1) * limit + reviews.length < total,
+    };
+}
+
+/**
+ * Landlord reply to a review
+ */
+async function replyToReview(landlordId, reviewId, content) {
+    const review = await prisma.feedback.findUnique({
+        where: { id: reviewId },
+        include: {
+            room_rental_periods: {
+                include: { room: { include: { rentals: true } } },
+            },
+        },
+    });
+
+    if (!review) {
+        throw Object.assign(new Error('Không tìm thấy đánh giá'), { statusCode: 404 });
+    }
+
+    // Check if landlord owns this rental
+    const room = review.room_rental_periods?.room;
+    if (!room || room.rentals[0]?.owner_id !== landlordId) {
+        throw Object.assign(new Error('Bạn không có quyền trả lời đánh giá này'), { statusCode: 403 });
+    }
+
+    if (!content || typeof content !== 'string' || content.trim().length === 0) {
+        throw Object.assign(new Error('Nội dung phản hồi không được để trống'), { statusCode: 400 });
+    }
+
+    const updated = await prisma.feedback.update({
+        where: { id: reviewId },
+        data: {
+            landlord_reply: content.trim(),
+            replied_at: new Date(),
+        },
+    });
+
+    return {
+        success: true,
+        message: 'Phản hồi đã được lưu',
+        data: {
+            id: updated.id,
+            landlordReply: updated.landlord_reply,
+            repliedAt: updated.replied_at,
+        },
+    };
+}
+
 module.exports = {
     createFeedback,
     getFeedbackByRentalPeriod,
+    getRoomReviews,
+    getLandlordReviews,
+    replyToReview,
 };

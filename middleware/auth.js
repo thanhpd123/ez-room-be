@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const supabase = require('../config/supabase');
 const prisma = require('../config/prisma');
 
 /**
@@ -12,6 +13,52 @@ function getJwtSecret() {
     return secret;
 }
 
+async function resolveVipStatus(dbUser) {
+    const isVip = dbUser.isVip === true;
+    const expiresAt = dbUser.vip_expires_at ? new Date(dbUser.vip_expires_at) : null;
+    const isExpired = expiresAt && expiresAt.getTime() <= Date.now();
+
+    if (!isVip || !isExpired) {
+        return {
+            isVip: isVip,
+            vipExpiresAt: dbUser.vip_expires_at || null,
+        };
+    }
+
+    await prisma.user.update({
+        where: { id: dbUser.id },
+        data: {
+            isVip: false,
+            vip_expires_at: null,
+        },
+    });
+
+    return {
+        isVip: false,
+        vipExpiresAt: null,
+    };
+}
+
+async function buildAuthUser(dbUser) {
+    const vip = await resolveVipStatus(dbUser);
+    return {
+        id: dbUser.id,
+        email: dbUser.email,
+        full_name: dbUser.fullName,
+        avatar_url: dbUser.avatarUrl ?? null,
+        created_at: dbUser.createdAt,
+        role: dbUser.role,
+        phone: dbUser.phone ?? null,
+        isVip: vip.isVip,
+        vip_expires_at: vip.vipExpiresAt,
+        gender: dbUser.gender ?? null,
+    };
+}
+
+/**
+ * Verify Supabase JWT (Google OAuth) or Backend JWT (email/password)
+ * Attaches user info to req.auth.user
+ */
 async function verifyJWT(req, res, next) {
     const authHeader = req.headers.authorization;
 
@@ -31,9 +78,40 @@ async function verifyJWT(req, res, next) {
         });
     }
 
-    // 1) Try backend JWT (email/password login) first – signed with our JWT_SECRET
     try {
+        // 1) Try Supabase JWT (Google OAuth) – require matching Prisma user
+        const { data: { user: supaUser }, error } = await supabase.auth.getUser(token);
+        if (!error && supaUser) {
+            const email = (supaUser.email || '').toLowerCase();
+            const dbUser = await prisma.user.findUnique({
+                where: { email },
+            });
+            if (!dbUser || dbUser.status !== 'ACTIVE') {
+                return res.status(404).json({
+                    success: false,
+                    code: 'NEED_REGISTER',
+                    message: 'Tài khoản chưa đăng ký. Vui lòng đăng ký trước.',
+                    email: supaUser.email ?? null,
+                    full_name: supaUser.user_metadata?.full_name ?? supaUser.user_metadata?.name ?? null,
+                    avatar_url: supaUser.user_metadata?.avatar_url ?? null,
+                });
+            }
+            req.auth = {
+                user: {
+                    ...(await buildAuthUser(dbUser)),
+                },
+            };
+            return next();
+        }
+
+        // 2) Try backend JWT (email/password login)
         const payload = jwt.verify(token, getJwtSecret());
+        if (payload.type && payload.type !== 'access') {
+            return res.status(401).json({
+                success: false,
+                message: 'Loại token không hợp lệ',
+            });
+        }
         const userId = payload.userId || payload.sub;
         if (!userId) {
             return res.status(401).json({
@@ -52,111 +130,31 @@ async function verifyJWT(req, res, next) {
         }
         req.auth = {
             user: {
-                id: dbUser.id,
-                email: dbUser.email,
-                full_name: dbUser.fullName,
-                avatar_url: dbUser.avatarUrl ?? null,
-                created_at: dbUser.createdAt,
-                role: dbUser.role,
-                phone: dbUser.phone ?? null,
-                isVip: dbUser.isVip === true,
-                gender: dbUser.gender ?? null,
+                ...(await buildAuthUser(dbUser)),
             },
         };
         return next();
     } catch (err) {
-        // Expired backend JWT: return 401 immediately, do not call Supabase (avoids timeout).
+        if (err.name === 'JsonWebTokenError') {
+            return res.status(401).json({
+                success: false,
+                message: 'Token không hợp lệ',
+            });
+        }
         if (err.name === 'TokenExpiredError') {
             return res.status(401).json({
                 success: false,
-                message: 'Token đã hết hạn. Vui lòng đăng nhập lại.',
+                message: 'Token đã hết hạn',
+                code: 'TOKEN_EXPIRED',
             });
         }
-        // Other JWT/DB errors: only fall through for invalid signature (might be Supabase token).
-        if (err.name !== 'JsonWebTokenError') {
-            const isPrismaSchemaError = err.code && String(err.code).startsWith('P') ||
-                (err.message && (err.message.includes('Unknown argument') || err.message.includes('does not exist') || err.message.includes('column')));
-            return res.status(500).json({
-                success: false,
-                message: isPrismaSchemaError
-                    ? 'Schema hoặc DB chưa đồng bộ. Dừng server, chạy: npx prisma generate && npx prisma db push'
-                    : 'Xác thực token thất bại',
-                error: err.message,
-                code: err.code || undefined,
-            });
-        }
-    }
-
-    // 2) Treat token as Supabase JWT (Google OAuth) – decode locally and map by email.
-    try {
-        const payload = jwt.decode(token);
-        if (!payload || typeof payload !== 'object') {
-            return res.status(401).json({
-                success: false,
-                message: 'Token không hợp lệ',
-            });
-        }
-
-        const iss = payload.iss;
-        const aud = payload.aud;
-        // Basic sanity check: looks like a Supabase auth token for this project.
-        const expectedIss = process.env.SUPABASE_URL
-            ? `${process.env.SUPABASE_URL.replace(/\/$/, '')}/auth/v1`
-            : null;
-        if (!expectedIss || iss !== expectedIss || (aud && aud !== 'authenticated')) {
-            return res.status(401).json({
-                success: false,
-                message: 'Token không hợp lệ',
-            });
-        }
-
-        const email =
-            (payload.email ||
-                (payload.user_metadata && payload.user_metadata.email) ||
-                '').toLowerCase();
-
-        if (!email) {
-            return res.status(401).json({
-                success: false,
-                message: 'Token Supabase không chứa email hợp lệ',
-            });
-        }
-
-        const dbUser = await prisma.user.findUnique({
-            where: { email },
-        });
-
-        if (!dbUser || dbUser.status !== 'ACTIVE') {
-            return res.status(404).json({
-                success: false,
-                code: 'NEED_REGISTER',
-                message: 'Tài khoản chưa đăng ký. Vui lòng đăng ký trước.',
-                email,
-                full_name:
-                    (payload.user_metadata && (payload.user_metadata.full_name || payload.user_metadata.name)) ||
-                    null,
-                avatar_url: (payload.user_metadata && payload.user_metadata.avatar_url) || null,
-            });
-        }
-
-        req.auth = {
-            user: {
-                id: dbUser.id,
-                email: dbUser.email,
-                full_name: dbUser.fullName,
-                avatar_url: dbUser.avatarUrl ?? null,
-                created_at: dbUser.createdAt,
-                role: dbUser.role,
-                phone: dbUser.phone ?? null,
-                isVip: dbUser.isVip === true,
-                gender: dbUser.gender ?? null,
-            },
-        };
-        return next();
-    } catch (err) {
+        const isPrismaSchemaError = err.code && String(err.code).startsWith('P') ||
+            (err.message && (err.message.includes('Unknown argument') || err.message.includes('does not exist') || err.message.includes('column')));
         return res.status(500).json({
             success: false,
-            message: 'Xác thực Supabase thất bại',
+            message: isPrismaSchemaError
+                ? 'Schema hoặc DB chưa đồng bộ. Dừng server, chạy: npx prisma generate && npx prisma db push'
+                : 'Xác thực token thất bại',
             error: err.message,
             code: err.code || undefined,
         });
@@ -170,7 +168,6 @@ async function verifyJWT(req, res, next) {
  */
 function requireRole(...allowedRoles) {
     return (req, res, next) => {
-        // Lấy user từ req.auth.user (được set bởi verifyJWT)
         const user = req.auth?.user;
 
         if (!user) {
@@ -195,7 +192,6 @@ function requireRole(...allowedRoles) {
 
 /**
  * Optional JWT: attach user if token present, do not 401 if missing.
- * Useful for routes that work for both authenticated and guest users.
  */
 async function optionalJWT(req, res, next) {
     const authHeader = req.headers.authorization;
@@ -213,60 +209,42 @@ async function optionalJWT(req, res, next) {
     }
 
     try {
-        // 1) Try backend JWT
+        const { data: { user: supaUser }, error } = await supabase.auth.getUser(token);
+        if (!error && supaUser) {
+            const email = (supaUser.email || '').toLowerCase();
+            const dbUser = await prisma.user.findUnique({ where: { email } });
+            if (dbUser && dbUser.status === 'ACTIVE') {
+                req.auth = {
+                    user: {
+                        ...(await buildAuthUser(dbUser)),
+                    },
+                };
+                return next();
+            }
+        }
+
         const payload = jwt.verify(token, getJwtSecret());
+        if (payload.type && payload.type !== 'access') {
+            req.auth = null;
+            return next();
+        }
         const userId = payload.userId || payload.sub;
         if (userId) {
             const dbUser = await prisma.user.findUnique({ where: { id: userId } });
             if (dbUser && dbUser.status === 'ACTIVE') {
                 req.auth = {
                     user: {
-                        id: dbUser.id,
-                        email: dbUser.email,
-                        full_name: dbUser.fullName,
-                        avatar_url: dbUser.avatarUrl ?? null,
-                        created_at: dbUser.createdAt,
-                        role: dbUser.role,
-                        phone: dbUser.phone ?? null,
-                        isVip: dbUser.isVip === true,
-                        gender: dbUser.gender ?? null,
+                        ...(await buildAuthUser(dbUser)),
                     },
                 };
                 return next();
             }
         }
         req.auth = null;
-        next();
+        return next();
     } catch {
-        // 2) Fallback: treat as Supabase JWT (Google OAuth) using local decode only
-        const payload = jwt.decode(token);
-        if (payload && typeof payload === 'object') {
-            const email =
-                (payload.email ||
-                    (payload.user_metadata && payload.user_metadata.email) ||
-                    '').toLowerCase();
-            if (email) {
-                const dbUser = await prisma.user.findUnique({ where: { email } });
-                if (dbUser && dbUser.status === 'ACTIVE') {
-                    req.auth = {
-                        user: {
-                            id: dbUser.id,
-                            email: dbUser.email,
-                            full_name: dbUser.fullName,
-                            avatar_url: dbUser.avatarUrl ?? null,
-                            created_at: dbUser.createdAt,
-                            role: dbUser.role,
-                            phone: dbUser.phone ?? null,
-                            isVip: dbUser.isVip === true,
-                            gender: dbUser.gender ?? null,
-                        },
-                    };
-                    return next();
-                }
-            }
-        }
         req.auth = null;
-        next();
+        return next();
     }
 }
 

@@ -20,10 +20,10 @@ async function recordInteraction(userId, roomId, interactionType) {
     if (!Object.prototype.hasOwnProperty.call(INTERACTION_WEIGHTS, type)) {
         throw new Error(`Invalid interaction_type: ${interactionType}. Use: view, favorite, contact_landlord, share`);
     }
-    await prisma.userRoomInteraction.create({
+    await prisma.user_room_interactions.create({
         data: {
-            userId,
-            roomId,
+            user_id: userId,
+            room_id: roomId,
             interaction_type: type,
         },
     });
@@ -36,15 +36,15 @@ async function recordInteraction(userId, roomId, interactionType) {
 async function getEngagementScoresByRoom(roomIds) {
     if (!roomIds || roomIds.length === 0) return {};
 
-    const rows = await prisma.userRoomInteraction.groupBy({
-        by: ['roomId', 'interaction_type'],
-        where: { roomId: { in: roomIds } },
+    const rows = await prisma.user_room_interactions.groupBy({
+        by: ['room_id', 'interaction_type'],
+        where: { room_id: { in: roomIds } },
         _count: { id: true },
     });
 
     const scoreByRoom = {};
     for (const r of rows) {
-        const roomId = r.roomId;
+        const roomId = r.room_id;
         if (!scoreByRoom[roomId]) scoreByRoom[roomId] = 0;
         const w = INTERACTION_WEIGHTS[r.interaction_type] ?? 1;
         scoreByRoom[roomId] += (r._count.id || 0) * w;

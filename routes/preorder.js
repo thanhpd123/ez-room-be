@@ -1,12 +1,67 @@
 const express = require('express');
 const { verifyJWT, requireRole } = require('../middleware/auth');
 const {
+    getMyPreorders,
+    createDepositPayment,
+    handlePayOSWebhook,
     getLandlordRequests,
     confirmRequest,
     rejectRequest,
 } = require('../controllers/preorder.controller');
 
 const router = express.Router();
+
+/**
+ * @openapi
+ * /preorders/payos/webhook:
+ *   post:
+ *     tags: [Preorders]
+ *     summary: Webhook PayOS cập nhật trạng thái thanh toán đặt cọc
+ *     responses:
+ *       200:
+ *         description: Đã ghi nhận webhook
+ */
+router.post('/payos/webhook', handlePayOSWebhook);
+
+/**
+ * @openapi
+ * /preorders/mine:
+ *   get:
+ *     tags: [Preorders]
+ *     summary: Tenant xem danh sách đặt cọc của chính mình
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200:
+ *         description: Danh sách preorder của user
+ */
+router.get('/mine', verifyJWT, requireRole('TENANT'), getMyPreorders);
+
+/**
+ * @openapi
+ * /preorders/deposit/pay:
+ *   post:
+ *     tags: [Preorders]
+ *     summary: Tenant tạo link thanh toán PayOS để đặt cọc phòng
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [roomId]
+ *             properties:
+ *               roomId: { type: string }
+ *               depositMonths: { type: number, description: Số tháng cọc (ví dụ 0.5, 1, 2), hệ thống quy đổi sang phần trăm }
+ *               depositPercent: { type: number, description: Phần trăm tiền cọc theo giá phòng, phải < 100% }
+ *               depositAmount: { type: number, description: Legacy field (tùy chọn), hệ thống sẽ quy đổi sang phần trăm rồi chuẩn hóa lại }
+ *               buyerName: { type: string }
+ *               buyerEmail: { type: string }
+ *               buyerPhone: { type: string }
+ *     responses:
+ *       201:
+ *         description: Tạo link thành công
+ */
+router.post('/deposit/pay', verifyJWT, requireRole('TENANT'), createDepositPayment);
 
 /**
  * @openapi

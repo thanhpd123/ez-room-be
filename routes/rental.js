@@ -1,4 +1,5 @@
 const express = require('express');
+const multer = require('multer');
 const { verifyJWT, requireRole } = require('../middleware/auth');
 const {
     createRental,
@@ -10,10 +11,34 @@ const {
     updateRental,
     deleteRental,
     getRentalStats,
+    getLandlordDashboardStats,
+    getLandlordPerformanceMetrics,
+    getTopSearchedRooms,
+    getRentalDocumentsForModeration,
 } = require('../controllers/rental.controller');
 const { deleteRental: deleteRentalAdmin } = require('../controllers/rentals.controller');
+const { getRejectionInfo } = require('../controllers/moderator.controller');
 
 const router = express.Router();
+
+// Multer config for rental files (images + documents)
+const storage = multer.memoryStorage();
+const uploadMultiple = multer({
+    storage,
+    limits: { fileSize: 50 * 1024 * 1024 }, // 50MB per file
+    fileFilter: (req, file, cb) => {
+        // Images: JPEG, PNG, WebP | Documents: PDF
+        const allowedMimes = [
+            'image/jpeg', 'image/png', 'image/webp',
+            'application/pdf'
+        ];
+        if (allowedMimes.includes(file.mimetype)) {
+            cb(null, true);
+        } else {
+            cb(new Error('Invalid file type. Only images (JPEG, PNG, WebP) and PDF allowed.'));
+        }
+    }
+});
 
 /**
  * @openapi
@@ -30,6 +55,50 @@ router.get('/stats', verifyJWT, requireRole('MODERATOR', 'ADMIN'), getRentalStat
 
 /**
  * @openapi
+ * /rentals/dashboard:
+ *   get:
+ *     tags: [Rentals]
+ *     summary: Landlord xem dashboard thống kê
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200:
+ *         description: Thống kê dashboard landlord
+ */
+router.get('/dashboard', verifyJWT, requireRole('LANDLORD'), getLandlordDashboardStats);
+
+/**
+ * @openapi
+ * /rentals/performance:
+ *   get:
+ *     tags: [Rentals]
+ *     summary: Landlord xem chỉ số hiệu suất thuê phòng
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200:
+ *         description: Chỉ số hiệu suất của landlord
+ */
+router.get('/performance', verifyJWT, requireRole('LANDLORD'), getLandlordPerformanceMetrics);
+
+/**
+ * @openapi
+ * /rentals/top-searched:
+ *   get:
+ *     tags: [Rentals]
+ *     summary: Landlord xem phòng được tìm kiếm nhiều
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 5 }
+ *         description: Số lượng phòng muốn lấy (mặc định 5)
+ *     responses:
+ *       200:
+ *         description: Danh sách phòng được tìm kiếm nhiều
+ */
+router.get('/top-searched', verifyJWT, requireRole('LANDLORD'), getTopSearchedRooms);
+
+/**
+ * @openapi
  * /rentals/my-rentals:
  *   get:
  *     tags: [Rentals]
@@ -40,6 +109,28 @@ router.get('/stats', verifyJWT, requireRole('MODERATOR', 'ADMIN'), getRentalStat
  *         description: Danh sách rentals
  */
 router.get('/my-rentals', verifyJWT, requireRole('LANDLORD'), getMyRentals);
+
+/**
+ * @openapi
+ * /rentals/rejection-info:
+ *   get:
+ *     tags: [Rentals]
+ *     summary: Landlord lấy thông tin từ chối gần nhất
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: query
+ *         name: targetType
+ *         required: true
+ *         schema: { type: string, enum: [RENTAL, ROOM] }
+ *       - in: query
+ *         name: targetId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Thông tin từ chối
+ */
+router.get('/rejection-info', verifyJWT, requireRole('LANDLORD'), getRejectionInfo);
 
 /**
  * @openapi
@@ -81,7 +172,29 @@ router.get('/my-rentals', verifyJWT, requireRole('LANDLORD'), getMyRentals);
  *         description: Tạo thành công
  */
 router.get('/', getRentals);
-router.post('/', verifyJWT, requireRole('LANDLORD'), createRental);
+
+// Debug middleware for createRental
+const debugCreateRental = (req, res, next) => {
+    console.log('POST /rentals - AFTER MULTER:', {
+        contentType: req.get('content-type'),
+        hasFiles: !!req.files && req.files.length > 0,
+        filesCount: req.files?.length || 0,
+        bodyKeys: req.body ? Object.keys(req.body) : [],
+        body: req.body,
+    });
+    next();
+};
+
+// Middleware to log request before multer
+const debugBeforeMulter = (req, res, next) => {
+    console.log('POST /rentals - BEFORE MULTER:', {
+        contentType: req.get('content-type'),
+        method: req.method,
+    });
+    next();
+};
+
+router.post('/', verifyJWT, requireRole('LANDLORD'), debugBeforeMulter, uploadMultiple.any(), debugCreateRental, createRental);
 
 /**
  * @openapi
@@ -108,6 +221,24 @@ router.post('/', verifyJWT, requireRole('LANDLORD'), createRental);
  *         description: Danh sách rentals cần duyệt
  */
 router.get('/moderation', verifyJWT, requireRole('MODERATOR', 'ADMIN'), getRentalsForModeration);
+
+/**
+ * @openapi
+ * /rentals/{rentalId}/documents:
+ *   get:
+ *     tags: [Rentals]
+ *     summary: Moderator lấy documents của rental để duyệt
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: rentalId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Danh sách documents với signed URLs
+ */
+router.get('/:rentalId/documents', verifyJWT, requireRole('MODERATOR', 'ADMIN'), getRentalDocumentsForModeration);
 
 /**
  * @openapi

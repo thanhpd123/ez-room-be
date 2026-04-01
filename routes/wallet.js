@@ -5,6 +5,7 @@ const {
     getMyWalletTransactions,
     depositToWallet,
     withdrawFromWallet,
+    verifyWalletDeposit,
 } = require('../controllers/wallet.controller');
 
 const router = express.Router();
@@ -42,7 +43,7 @@ router.get('/transactions', getMyWalletTransactions);
  * /wallet/deposit:
  *   post:
  *     tags: [Wallet]
- *     summary: Nạp tiền (simulate, chưa tích hợp payment)
+ *     summary: Tạo link nạp tiền ví qua PayOS
  *     security: [{ bearerAuth: [] }]
  *     requestBody:
  *       content:
@@ -53,7 +54,7 @@ router.get('/transactions', getMyWalletTransactions);
  *               amount: { type: number }
  *     responses:
  *       200:
- *         description: Nạp thành công
+ *         description: Tạo link nạp ví thành công
  */
 router.post('/deposit', depositToWallet);
 
@@ -62,7 +63,7 @@ router.post('/deposit', depositToWallet);
  * /wallet/withdraw:
  *   post:
  *     tags: [Wallet]
- *     summary: Rút tiền (simulate)
+ *     summary: Rút tiền từ ví nội bộ
  *     security: [{ bearerAuth: [] }]
  *     requestBody:
  *       content:
@@ -76,5 +77,23 @@ router.post('/deposit', depositToWallet);
  *         description: Rút thành công
  */
 router.post('/withdraw', withdrawFromWallet);
+
+/**
+ * @openapi
+ * /wallet/verify-deposit:
+ *   get:
+ *     tags: [Wallet]
+ *     summary: Xác minh giao dịch nạp tiền từ PayOS return URL
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: query
+ *         name: orderCode
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Kết quả xác minh
+ */
+router.get('/verify-deposit', verifyWalletDeposit);
 
 module.exports = router;

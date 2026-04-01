@@ -1,5 +1,5 @@
 const express = require('express');
-const { verifyJWT, requireRole } = require('../middleware/auth');
+const { verifyJWT, requireRole, optionalJWT } = require('../middleware/auth');
 const {
     createRoom,
     getRooms,
@@ -12,6 +12,7 @@ const {
     searchTenants,
     createRentalContract,
     getMyBookings,
+    getRoomByIdForSearchRoomate,
 } = require('../controllers/room.controller');
 
 const router = express.Router();
@@ -155,6 +156,23 @@ router.post('/:roomId/contracts', verifyJWT, requireRole('LANDLORD'), createRent
  *         description: Không tìm thấy phòng
  */
 router.get('/:roomId', getRoomById);
+
+/**
+ * @openapi
+ * /rooms/{roomId}/search-roommate:
+ *   get:
+ *     tags: [Rooms]
+ *     summary: Lấy chi tiết phòng trọ phục vụ tracking cho Search Roommate
+ *     parameters:
+ *       - in: path
+ *         name: roomId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Chi tiết phòng
+ */
+router.get('/:roomId/search-roommate', optionalJWT, getRoomByIdForSearchRoomate);
 
 /**
  * @openapi

@@ -20,6 +20,9 @@ const {
     getReviewDetail,
     updateReviewStatus,
     deleteReview,
+    getQueueStatusForTarget,
+    getModeratorList,
+    getRejectionInfo,
 } = require('../controllers/moderator.controller');
 
 const router = express.Router();
@@ -27,6 +30,19 @@ const router = express.Router();
 // Tất cả routes yêu cầu: đăng nhập + role MODERATOR hoặc ADMIN
 router.use(verifyJWT);
 router.use(requireRole('MODERATOR', 'ADMIN'));
+
+/**
+ * @openapi
+ * /moderator/moderators:
+ *   get:
+ *     tags: [Moderator]
+ *     summary: Danh sách moderator (cho filter dropdown)
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200:
+ *         description: Danh sách moderators
+ */
+router.get('/moderators', getModeratorList);
 
 /**
  * @openapi
@@ -66,6 +82,28 @@ router.get('/queue', getModerationQueue);
  *         description: Activity data
  */
 router.get('/queue/activity', getQueueActivity);
+
+/**
+ * @openapi
+ * /moderator/queue/check:
+ *   get:
+ *     tags: [Moderator]
+ *     summary: Kiểm tra trạng thái queue của một target
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: query
+ *         name: targetType
+ *         required: true
+ *         schema: { type: string }
+ *       - in: query
+ *         name: targetId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Trạng thái queue
+ */
+router.get('/queue/check', getQueueStatusForTarget);
 
 /**
  * @openapi
@@ -428,5 +466,29 @@ router.get('/reviews', getReviewsForModeration);
 router.get('/reviews/:reviewId', getReviewDetail);
 router.patch('/reviews/:reviewId', updateReviewStatus);
 router.delete('/reviews/:reviewId', deleteReview);
+
+// ═══════════════════ Rejection Info (Audit Trail) ═══════════════════
+
+/**
+ * @openapi
+ * /moderator/rejection-info:
+ *   get:
+ *     tags: [Moderator]
+ *     summary: Lấy thông tin từ chối gần nhất của một target
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: query
+ *         name: targetType
+ *         required: true
+ *         schema: { type: string, enum: [RENTAL, ROOM] }
+ *       - in: query
+ *         name: targetId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Thông tin từ chối
+ */
+router.get('/rejection-info', getRejectionInfo);
 
 module.exports = router;
