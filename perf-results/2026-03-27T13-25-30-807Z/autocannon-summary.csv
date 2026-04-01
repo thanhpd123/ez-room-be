@@ -1,0 +1,4 @@
+name,requestsAverage,requestsP99,latencyAverageMs,latencyP95Ms,latencyP99Ms,throughputAverageBps,throughputAverageKbps,errorRate,totalRequests,totalErrors,non2xx,durationSeconds
+public-rentals-smoke,14.43,25,693.62,0,2010,65982.85,64.436376953125,0.1864406779661017,649,0,121,45.3
+public-search-smoke,5.58,10,1782.4,0,3082,40830.2,39.8732421875,0.00796812749003984,251,0,2,45.4
+rooms-list-smoke,11,15,904.9,0,2130,154572.27,150.949482421875,0.01818181818181818,495,0,9,45.33

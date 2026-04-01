@@ -1,0 +1,194 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<jmeterTestPlan version="1.2" properties="5.0" jmeter="5.5">
+  <hashTree>
+    <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="Ez-Room Load Test Plan" enabled="true">
+      <elementProp name="TestPlan.user_defined_variables" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments" testname="User Defined Variables" enabled="true">
+        <collectionProp name="Arguments.arguments"/>
+      </elementProp>
+      <stringProp name="TestPlan.user_define_classpath"></stringProp>
+      <boolProp name="TestPlan.functional_mode">false</boolProp>
+      <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
+      <elementProp name="TestPlan.comments" elementType="Comments" guiclass="CommentsPanel" testclass="Comments" testname="Comments" enabled="true">
+        <stringProp name="Comments.text">Ez-Room Backend Performance Test Plan
+Test các endpoints chính dưới tải cao
+Target: 50 concurrent users, 90 seconds</stringProp>
+      </elementProp>
+      <boolProp name="TestPlan.tearDown_on_shutdown">true</boolProp>
+    </TestPlan>
+    <hashTree>
+      <!-- Thread Group Configuration -->
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="Ez-Room Load Test (50 Users)" enabled="true">
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" testname="Loop Controller" enabled="true">
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <stringProp name="LoopController.loops">5</stringProp>
+        </elementProp>
+        <stringProp name="ThreadGroup.num_threads">50</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">10</stringProp>
+        <elementProp name="ThreadGroup.scheduler" elementType="kg.apc.jmeter.timers.VariableThroughputTimer" guiclass="kg.apc.jmeter.timers.VariableThroughputTimerGui" testclass="kg.apc.jmeter.timers.VariableThroughputTimer" testname="Variable Throughput Timer" enabled="true">
+          <intProp name="calcMode">0</intProp>
+          <collectionProp name="load_profile">
+            <collectionProp name="-2146572543">
+              <stringProp name="49">1.0</stringProp>
+              <stringProp name="1567">90</stringProp>
+              <stringProp name="1049">50</stringProp>
+            </collectionProp>
+          </collectionProp>
+        </elementProp>
+        <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
+        <boolProp name="ThreadGroup.scheduler">true</boolProp>
+        <stringProp name="ThreadGroup.duration">90</stringProp>
+        <stringProp name="ThreadGroup.delay">0</stringProp>
+        <boolProp name="ThreadGroup.delayedStart">false</boolProp>
+      </ThreadGroup>
+      <hashTree>
+        <!-- HTTP Request Sampler: Public Rentals -->
+        <HTTPSampler guiclass="HttpTestSampleGui" testclass="HTTPSampler" testname="GET /public/rentals" enabled="true">
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments" guiclass="HTTPArgumentsPanel" testclass="Arguments" testname="User Defined Variables" enabled="true">
+            <collectionProp name="Arguments.arguments">
+              <HTTPArgument name="page" value="1" always_encode="false" useEquals="true" arg_type="query"/>
+              <HTTPArgument name="limit" value="20" always_encode="false" useEquals="true" arg_type="query"/>
+            </collectionProp>
+          </elementProp>
+          <stringProp name="HTTPSampler.domain">localhost</stringProp>
+          <stringProp name="HTTPSampler.port">3000</stringProp>
+          <stringProp name="HTTPSampler.protocol">http</stringProp>
+          <stringProp name="HTTPSampler.path">/public/rentals</stringProp>
+          <stringProp name="HTTPSampler.method">GET</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <boolProp name="HTTPSampler.auto_redirects">false</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+          <boolProp name="HTTPSampler.DO_MULTIPART_POST">false</boolProp>
+          <stringProp name="HTTPSampler.embedded_url_re"></stringProp>
+          <stringProp name="HTTPSampler.connect_timeout"></stringProp>
+          <stringProp name="HTTPSampler.response_timeout"></stringProp>
+        </HTTPSampler>
+        <hashTree>
+          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="Assert HTTP 200" enabled="true">
+            <elementProp name="TestElements.test_elements" elementType="CollectionProperty" name="Asserion.test_type">
+              <stringProp name="49586">Assertion.response_code</stringProp>
+            </elementProp>
+            <stringProp name="Assertion.assume_success">false</stringProp>
+            <intProp name="Assertion.test_type">1</intProp>
+            <stringProp name="Assertion.test_strings">200</stringProp>
+            <stringProp name="Assertion.test_pattern"></stringProp>
+            <stringProp name="Assertion.test_type_string">response code</stringProp>
+            <boolProp name="Assertion.assume_success">false</boolProp>
+            <intProp name="Assertion.test_type">6</intProp>
+          </ResponseAssertion>
+          <hashTree/>
+        </hashTree>
+
+        <!-- HTTP Request Sampler: Search -->
+        <HTTPSampler guiclass="HttpTestSampleGui" testclass="HTTPSampler" testname="GET /public/search" enabled="true">
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments" guiclass="HTTPArgumentsPanel" testclass="Arguments" testname="User Defined Variables" enabled="true">
+            <collectionProp name="Arguments.arguments">
+              <HTTPArgument name="query" value="phong" always_encode="false" useEquals="true" arg_type="query"/>
+              <HTTPArgument name="page" value="1" always_encode="false" useEquals="true" arg_type="query"/>
+              <HTTPArgument name="limit" value="20" always_encode="false" useEquals="true" arg_type="query"/>
+            </collectionProp>
+          </elementProp>
+          <stringProp name="HTTPSampler.domain">localhost</stringProp>
+          <stringProp name="HTTPSampler.port">3000</stringProp>
+          <stringProp name="HTTPSampler.protocol">http</stringProp>
+          <stringProp name="HTTPSampler.path">/public/search</stringProp>
+          <stringProp name="HTTPSampler.method">GET</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <boolProp name="HTTPSampler.auto_redirects">false</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+          <boolProp name="HTTPSampler.DO_MULTIPART_POST">false</boolProp>
+          <stringProp name="HTTPSampler.embedded_url_re"></stringProp>
+          <stringProp name="HTTPSampler.connect_timeout"></stringProp>
+          <stringProp name="HTTPSampler.response_timeout"></stringProp>
+        </HTTPSampler>
+        <hashTree>
+          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="Assert HTTP 200" enabled="true">
+            <elementProp name="TestElements.test_elements" elementType="CollectionProperty" name="Asserion.test_type">
+              <stringProp name="49586">Assertion.response_code</stringProp>
+            </elementProp>
+            <stringProp name="Assertion.assume_success">false</stringProp>
+            <intProp name="Assertion.test_type">1</intProp>
+            <stringProp name="Assertion.test_strings">200</stringProp>
+            <stringProp name="Assertion.test_pattern"></stringProp>
+            <stringProp name="Assertion.test_type_string">response code</stringProp>
+            <boolProp name="Assertion.assume_success">false</boolProp>
+            <intProp name="Assertion.test_type">6</intProp>
+          </ResponseAssertion>
+          <hashTree/>
+        </hashTree>
+
+        <!-- HTTP Request Sampler: Rooms List -->
+        <HTTPSampler guiclass="HttpTestSampleGui" testclass="HTTPSampler" testname="GET /rooms" enabled="true">
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments" guiclass="HTTPArgumentsPanel" testclass="Arguments" testname="User Defined Variables" enabled="true">
+            <collectionProp name="Arguments.arguments">
+              <HTTPArgument name="page" value="1" always_encode="false" useEquals="true" arg_type="query"/>
+              <HTTPArgument name="limit" value="20" always_encode="false" useEquals="true" arg_type="query"/>
+            </collectionProp>
+          </elementProp>
+          <stringProp name="HTTPSampler.domain">localhost</stringProp>
+          <stringProp name="HTTPSampler.port">3000</stringProp>
+          <stringProp name="HTTPSampler.protocol">http</stringProp>
+          <stringProp name="HTTPSampler.path">/rooms</stringProp>
+          <stringProp name="HTTPSampler.method">GET</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <boolProp name="HTTPSampler.auto_redirects">false</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+          <boolProp name="HTTPSampler.DO_MULTIPART_POST">false</boolProp>
+          <stringProp name="HTTPSampler.embedded_url_re"></stringProp>
+          <stringProp name="HTTPSampler.connect_timeout"></stringProp>
+          <stringProp name="HTTPSampler.response_timeout"></stringProp>
+        </HTTPSampler>
+        <hashTree>
+          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="Assert HTTP 200" enabled="true">
+            <elementProp name="TestElements.test_elements" elementType="CollectionProperty" name="Asserion.test_type">
+              <stringProp name="49586">Assertion.response_code</stringProp>
+            </elementProp>
+            <stringProp name="Assertion.assume_success">false</stringProp>
+            <intProp name="Assertion.test_type">1</intProp>
+            <stringProp name="Assertion.test_strings">200</stringProp>
+            <stringProp name="Assertion.test_pattern"></stringProp>
+            <stringProp name="Assertion.test_type_string">response code</stringProp>
+            <boolProp name="Assertion.assume_success">false</boolProp>
+            <intProp name="Assertion.test_type">6</intProp>
+          </ResponseAssertion>
+          <hashTree/>
+        </hashTree>
+
+        <!-- Response Time Graph -->
+        <kg.apc.jmeter.vizualizers.CorrectedResultCollector guiclass="kg.apc.jmeter.vizualizers.ResponseTimesOverTimeGui" testclass="kg.apc.jmeter.vizualizers.CorrectedResultCollector" testname="Response Times Over Time" enabled="true">
+          <boolProp name="ResultCollector.error_logging">false</boolProp>
+          <objProp>
+            <name>samplers</name>
+            <value class="java.util.ArrayList"/>
+          </objProp>
+          <objProp>
+            <name>filterTester</name>
+            <obj class="kg.apc.jmeter.filter.AccessLogFilter"/>
+          </objProp>
+          <objProp>
+            <name>graphPanelCharts</name>
+            <obj class="java.util.ArrayList"/>
+          </objProp>
+          <stringProp name="filename"></stringProp>
+        </kg.apc.jmeter.vizualizers.CorrectedResultCollector>
+        <hashTree/>
+
+        <!-- Summary Report -->
+        <ResultCollector guiclass="StatVisualizer" testclass="ResultCollector" testname="Summary Report" enabled="true">
+          <elementProp name="ResultCollector.sample_filter_title_force_include_regex" elementType="TestElementProperty"/>
+          <elementProp name="ResultCollector.sample_filter_title_force_exclude_regex" elementType="TestElementProperty"/>
+          <elementProp name="ResultCollector.sample_filter_title_include_regex" elementType="TestElementProperty"/>
+          <elementProp name="ResultCollector.sample_filter_title_exclude_regex" elementType="TestElementProperty"/>
+          <elementProp name="ResultCollector.sample_filter_title_and_or_selector" elementType="TestElementProperty"/>
+          <elementProp name="ResultCollector.sample_filter_title_debug_response_logged_only" elementType="TestElementProperty"/>
+          <boolProp name="ResultCollector.error_logging">false</boolProp>
+          <objProp>
+            <name>samplers</name>
+            <value class="java.util.ArrayList"/>
+          </objProp>
+          <stringProp name="ResultCollector.filename">jmeter-results.csv</stringProp>
+        </ResultCollector>
+        <hashTree/>
+      </hashTree>
+    </hashTree>
+  </hashTree>
+</jmeterTestPlan>
