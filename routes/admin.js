@@ -19,6 +19,12 @@ const {
     getFinanceSummary,
     getFinanceReconciliation,
     getModeratorKpis,
+    getVipPackages,
+    getVipPackageById,
+    createVipPackage,
+    updateVipPackage,
+    getVipPurchases,
+    refundVipPurchase,
 } = require('../controllers/admin.controller');
 
 const router = express.Router();
@@ -442,5 +448,65 @@ router.patch('/wallets/withdrawals/batch-approve', approveWalletWithdrawalsBatch
  *         description: Kết quả từ chối hàng loạt
  */
 router.patch('/wallets/withdrawals/batch-reject', rejectWalletWithdrawalsBatch);
+
+/**
+ * @openapi
+ * /admin/vip/packages:
+ *   get:
+ *     tags: [Admin]
+ *     summary: Danh sách gói VIP (bao gồm active/inactive)
+ *     security: [{ bearerAuth: [] }]
+ */
+router.get('/vip/packages', getVipPackages);
+
+/**
+ * @openapi
+ * /admin/vip/packages/{packageId}:
+ *   get:
+ *     tags: [Admin]
+ *     summary: Chi tiết gói VIP + thống kê cơ bản
+ *     security: [{ bearerAuth: [] }]
+ */
+router.get('/vip/packages/:packageId', getVipPackageById);
+
+/**
+ * @openapi
+ * /admin/vip/packages:
+ *   post:
+ *     tags: [Admin]
+ *     summary: Tạo gói VIP mới
+ *     security: [{ bearerAuth: [] }]
+ */
+router.post('/vip/packages', createVipPackage);
+
+/**
+ * @openapi
+ * /admin/vip/packages/{packageId}:
+ *   patch:
+ *     tags: [Admin]
+ *     summary: Cập nhật gói VIP
+ *     security: [{ bearerAuth: [] }]
+ */
+router.patch('/vip/packages/:packageId', updateVipPackage);
+
+/**
+ * @openapi
+ * /admin/vip/purchases:
+ *   get:
+ *     tags: [Admin]
+ *     summary: Lịch sử mua VIP theo payment orders
+ *     security: [{ bearerAuth: [] }]
+ */
+router.get('/vip/purchases', getVipPurchases);
+
+/**
+ * @openapi
+ * /admin/vip/purchases/{orderId}/refund:
+ *   patch:
+ *     tags: [Admin]
+ *     summary: Hoàn tiền giao dịch VIP
+ *     security: [{ bearerAuth: [] }]
+ */
+router.patch('/vip/purchases/:orderId/refund', refundVipPurchase);
 
 module.exports = router;
