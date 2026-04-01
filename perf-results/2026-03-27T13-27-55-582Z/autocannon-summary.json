@@ -1,0 +1,47 @@
+[
+  {
+    "name": "public-rentals-load20",
+    "requestsAverage": 26.89,
+    "requestsP99": 30,
+    "latencyAverageMs": 743.46,
+    "latencyP95Ms": 0,
+    "latencyP99Ms": 1993,
+    "throughputAverageBps": 139350.94,
+    "throughputAverageKbps": 136.08490234375,
+    "errorRate": 0.04277743335399876,
+    "totalRequests": 1613,
+    "totalErrors": 0,
+    "non2xx": 69,
+    "durationSeconds": 60.43
+  },
+  {
+    "name": "public-search-load20",
+    "requestsAverage": 9.04,
+    "requestsP99": 18,
+    "latencyAverageMs": 2180.57,
+    "latencyP95Ms": 0,
+    "latencyP99Ms": 3836,
+    "throughputAverageBps": 59689.25,
+    "throughputAverageKbps": 58.290283203125,
+    "errorRate": 0.12361623616236163,
+    "totalRequests": 542,
+    "totalErrors": 0,
+    "non2xx": 67,
+    "durationSeconds": 60.44
+  },
+  {
+    "name": "rooms-list-load20",
+    "requestsAverage": 14.9,
+    "requestsP99": 19,
+    "latencyAverageMs": 1335.81,
+    "latencyP95Ms": 0,
+    "latencyP99Ms": 2405,
+    "throughputAverageBps": 199322.94,
+    "throughputAverageKbps": 194.65130859375,
+    "errorRate": 0.06935123042505593,
+    "totalRequests": 894,
+    "totalErrors": 0,
+    "non2xx": 62,
+    "durationSeconds": 60.52
+  }
+]
