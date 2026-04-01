@@ -51,6 +51,22 @@ async function createDepositPayment(req, res) {
     }
 }
 
+async function verifyPreorderPayment(req, res) {
+    try {
+        const result = await preorderService.verifyPreorderPayment(req.auth.user.id, req.query);
+        return res.status(200).json({
+            success: true,
+            ...result,
+        });
+    } catch (err) {
+        const statusCode = err.statusCode || 500;
+        return res.status(statusCode).json({
+            success: false,
+            message: err.message || 'Không thể xác minh thanh toán preorder',
+        });
+    }
+}
+
 async function handlePayOSWebhook(req, res) {
     try {
         const result = await preorderService.handlePayOSWebhook(req.body);
@@ -100,6 +116,7 @@ async function rejectRequest(req, res) {
 module.exports = {
     getMyPreorders,
     createDepositPayment,
+    verifyPreorderPayment,
     handlePayOSWebhook,
     getLandlordRequests,
     confirmRequest,

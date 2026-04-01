@@ -1166,6 +1166,7 @@ async function getFinanceSummary(params) {
         refundCompleted,
         platformFees,
         pendingOrders,
+        paymentOrdersByStatus,
     ] = await Promise.all([
         prisma.payment_orders.aggregate({
             where: {
@@ -1210,13 +1211,33 @@ async function getFinanceSummary(params) {
             _sum: { amount: true },
             _count: true,
         }),
-        prisma.payment_orders.count({
+        prisma.payment_orders.aggregate({
             where: {
                 status: 'PENDING',
                 created_at: rangeFilter,
             },
+            _sum: { amount: true },
+            _count: true,
+        }),
+        prisma.payment_orders.groupBy({
+            by: ['status'],
+            where: {
+                created_at: rangeFilter,
+            },
+            _sum: { amount: true },
+            _count: {
+                _all: true,
+            },
         }),
     ]);
+
+    const statusBreakdown = paymentOrdersByStatus.reduce((acc, item) => {
+        acc[item.status] = {
+            count: item._count?._all || 0,
+            amount: item._sum?.amount || 0,
+        };
+        return acc;
+    }, {});
 
     return {
         data: {
@@ -1245,7 +1266,9 @@ async function getFinanceSummary(params) {
                     entries: platformFees._count,
                     amount: platformFees._sum.amount || 0,
                 },
-                pendingPaymentOrders: pendingOrders,
+                pendingPaymentOrders: pendingOrders._count,
+                pendingPaymentAmount: pendingOrders._sum.amount || 0,
+                paymentOrdersByStatus: statusBreakdown,
             },
         },
     };

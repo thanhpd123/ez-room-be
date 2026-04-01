@@ -3,6 +3,7 @@ const { verifyJWT, requireRole } = require('../middleware/auth');
 const {
     getMyPreorders,
     createDepositPayment,
+    verifyPreorderPayment,
     handlePayOSWebhook,
     getLandlordRequests,
     confirmRequest,
@@ -62,6 +63,28 @@ router.get('/mine', verifyJWT, requireRole('TENANT'), getMyPreorders);
  *         description: Tạo link thành công
  */
 router.post('/deposit/pay', verifyJWT, requireRole('TENANT'), createDepositPayment);
+
+/**
+ * @openapi
+ * /preorders/verify-payment:
+ *   get:
+ *     tags: [Preorders]
+ *     summary: Tenant xác minh trạng thái thanh toán preorder từ return URL PayOS
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: query
+ *         name: orderCode
+ *         required: false
+ *         schema: { type: string }
+ *       - in: query
+ *         name: preorderId
+ *         required: false
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Kết quả xác minh
+ */
+router.get('/verify-payment', verifyJWT, requireRole('TENANT'), verifyPreorderPayment);
 
 /**
  * @openapi

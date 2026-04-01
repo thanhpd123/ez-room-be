@@ -187,8 +187,12 @@ function mapPreorderItem(p) {
 }
 
 function mapPaymentOrderStatus(webhookData) {
+    const rawStatus = String(webhookData?.data?.status || webhookData?.status || '').toUpperCase();
     const code = String(webhookData?.data?.code || webhookData?.code || '').toUpperCase();
-    const success = webhookData?.success === true || code === '00';
+    const success = webhookData?.success === true || code === '00' || rawStatus === 'PAID' || rawStatus === 'SUCCESS';
+
+    if (rawStatus === 'CANCELLED' || rawStatus === 'CANCELED') return 'CANCELLED';
+    if (rawStatus === 'EXPIRED') return 'EXPIRED';
 
     if (success) return 'SUCCESS';
 
@@ -196,6 +200,27 @@ function mapPaymentOrderStatus(webhookData) {
     if (desc.includes('cancel')) return 'CANCELLED';
     if (desc.includes('expire')) return 'EXPIRED';
     return 'FAILED';
+}
+
+function mapPayOSOrderStatusToInternal(payosStatus) {
+    const normalized = String(payosStatus || '').toUpperCase();
+    if (normalized === 'PAID' || normalized === 'SUCCESS') return 'SUCCESS';
+    if (normalized === 'CANCELLED' || normalized === 'CANCELED') return 'CANCELLED';
+    if (normalized === 'EXPIRED') return 'EXPIRED';
+    if (normalized === 'PENDING' || normalized === 'PROCESSING') return 'PENDING';
+    return 'FAILED';
+}
+
+async function getPayOSPaymentByOrderCode(payos, orderCode) {
+    if (payos?.paymentRequests?.get) {
+        return payos.paymentRequests.get(orderCode);
+    }
+
+    if (payos?.paymentRequests?.getByOrderCode) {
+        return payos.paymentRequests.getByOrderCode(orderCode);
+    }
+
+    throw new Error('SDK PayOS không hỗ trợ truy vấn theo orderCode');
 }
 
 function mapWalletTxnStatus(orderStatus) {
@@ -246,7 +271,15 @@ async function createDepositPayment(userId, body) {
 
     let depositPercent;
     let depositMonths = null;
-    if (rawDepositMonths != null && String(rawDepositMonths).trim() !== '') {
+    if (rawDepositAmount != null && String(rawDepositAmount).trim() !== '') {
+        const requestedAmount = parseDepositAmount(rawDepositAmount);
+        if (!requestedAmount) {
+            throw Object.assign(new Error('Số tiền đặt cọc phải là số nguyên dương (VND)'), {
+                statusCode: 400,
+            });
+        }
+        depositPercent = Math.round(((requestedAmount / roomPrice) * 100) * 100) / 100;
+    } else if (rawDepositMonths != null && String(rawDepositMonths).trim() !== '') {
         depositMonths = parseDepositMonths(rawDepositMonths);
         if (!depositMonths) {
             throw Object.assign(new Error('Số tháng đặt cọc phải là số dương'), {
@@ -262,14 +295,6 @@ async function createDepositPayment(userId, body) {
                 { statusCode: 400 }
             );
         }
-    } else if (rawDepositAmount != null && String(rawDepositAmount).trim() !== '') {
-        const requestedAmount = parseDepositAmount(rawDepositAmount);
-        if (!requestedAmount) {
-            throw Object.assign(new Error('Số tiền đặt cọc phải là số nguyên dương (VND)'), {
-                statusCode: 400,
-            });
-        }
-        depositPercent = Math.round(((requestedAmount / roomPrice) * 100) * 100) / 100;
     } else {
         depositPercent = defaultPercent;
     }
@@ -978,10 +1003,176 @@ async function rejectRequest(preorderId, landlordId, body) {
     return { data: updated };
 }
 
+async function verifyPreorderPayment(userId, query) {
+    const orderCodeInput = String(query?.orderCode || '').trim();
+    const preorderIdInput = String(query?.preorderId || '').trim();
+
+    if (!orderCodeInput && !preorderIdInput) {
+        throw Object.assign(new Error('Thiếu orderCode hoặc preorderId'), { statusCode: 400 });
+    }
+
+    let order = null;
+    if (orderCodeInput) {
+        order = await prisma.payment_orders.findUnique({
+            where: { vnp_txn_ref: orderCodeInput },
+        });
+    }
+
+    if (!order && preorderIdInput) {
+        order = await prisma.payment_orders.findFirst({
+            where: {
+                purpose: 'PREORDER_DEPOSIT',
+                ref_type: 'PREORDER',
+                ref_id: preorderIdInput,
+            },
+            orderBy: { created_at: 'desc' },
+        });
+    }
+
+    if (!order) {
+        throw Object.assign(new Error('Không tìm thấy giao dịch preorder'), { statusCode: 404 });
+    }
+
+    if (order.user_id !== userId) {
+        throw Object.assign(new Error('Không có quyền xác minh giao dịch này'), { statusCode: 403 });
+    }
+
+    if (order.purpose !== 'PREORDER_DEPOSIT' || order.ref_type !== 'PREORDER' || !order.ref_id) {
+        throw Object.assign(new Error('Giao dịch không phải thanh toán đặt cọc preorder'), { statusCode: 400 });
+    }
+
+    let preorder = await prisma.preorder.findUnique({
+        where: { id: order.ref_id },
+        select: {
+            id: true,
+            userId: true,
+            status: true,
+            payment_status: true,
+            deposit_amount: true,
+        },
+    });
+
+    if (!preorder) {
+        throw Object.assign(new Error('Không tìm thấy preorder tương ứng'), { statusCode: 404 });
+    }
+
+    if (preorder.userId !== userId) {
+        throw Object.assign(new Error('Không có quyền xem preorder này'), { statusCode: 403 });
+    }
+
+    if (order.status === 'SUCCESS' && preorder.payment_status === 'PAID') {
+        return {
+            message: 'Thanh toán đặt cọc đã được xác nhận',
+            data: {
+                status: 'success',
+                confirmed: true,
+                preorderId: preorder.id,
+                orderCode: order.vnp_txn_ref,
+                paymentOrderStatus: order.status,
+                preorderStatus: preorder.status,
+                preorderPaymentStatus: preorder.payment_status,
+                depositAmount: toNumber(preorder.deposit_amount),
+            },
+        };
+    }
+
+    let internalStatus = order.status;
+    if (order.status === 'PENDING') {
+        const payos = getPayOSClient();
+        let payosPayment;
+        try {
+            const orderCodeNumber = Number(order.vnp_txn_ref);
+            payosPayment = await getPayOSPaymentByOrderCode(payos, Number.isFinite(orderCodeNumber) ? orderCodeNumber : order.vnp_txn_ref);
+        } catch (err) {
+            throw Object.assign(new Error(`Không thể xác minh với PayOS: ${err.message}`), {
+                statusCode: 502,
+            });
+        }
+
+        internalStatus = mapPayOSOrderStatusToInternal(payosPayment?.status);
+
+        if (internalStatus !== 'PENDING') {
+            await prisma.$transaction(async (tx) => {
+                const latestOrder = await tx.payment_orders.findUnique({ where: { id: order.id } });
+                if (!latestOrder) return;
+
+                const nextOrderStatus = latestOrder.status === 'SUCCESS' ? 'SUCCESS' : internalStatus;
+
+                await tx.payment_orders.update({
+                    where: { id: latestOrder.id },
+                    data: {
+                        status: nextOrderStatus,
+                        vnp_response_code: String(payosPayment?.code || latestOrder.vnp_response_code || ''),
+                        vnp_pay_date: payosPayment?.transactionDateTime || latestOrder.vnp_pay_date,
+                        raw_ipn_payload: {
+                            source: 'verify_preorder_payment',
+                            payosStatus: String(payosPayment?.status || ''),
+                        },
+                    },
+                });
+
+                if (nextOrderStatus === 'SUCCESS') {
+                    await tx.preorder.update({
+                        where: { id: latestOrder.ref_id },
+                        data: {
+                            payment_status: 'PAID',
+                            status: 'PENDING',
+                        },
+                    });
+                } else {
+                    await tx.preorder.update({
+                        where: { id: latestOrder.ref_id },
+                        data: {
+                            payment_status: 'UNPAID',
+                            status: 'CANCELLED',
+                            cancel_reason: `PAYOS_${nextOrderStatus}`,
+                        },
+                    });
+                }
+            });
+
+            order = await prisma.payment_orders.findUnique({ where: { id: order.id } });
+            preorder = await prisma.preorder.findUnique({
+                where: { id: preorder.id },
+                select: {
+                    id: true,
+                    userId: true,
+                    status: true,
+                    payment_status: true,
+                    deposit_amount: true,
+                },
+            });
+        }
+    }
+
+    const finalOrderStatus = String(order?.status || internalStatus).toUpperCase();
+    const isSuccess = finalOrderStatus === 'SUCCESS' && preorder?.payment_status === 'PAID';
+    const isCancelled = finalOrderStatus === 'CANCELLED' || finalOrderStatus === 'EXPIRED';
+
+    return {
+        message: isSuccess
+            ? 'Thanh toán đặt cọc thành công'
+            : isCancelled
+                ? 'Thanh toán đặt cọc đã bị hủy hoặc hết hạn'
+                : 'Thanh toán đặt cọc đang chờ xử lý',
+        data: {
+            status: isSuccess ? 'success' : (isCancelled ? 'cancel' : 'pending'),
+            confirmed: isSuccess,
+            preorderId: preorder?.id || order.ref_id,
+            orderCode: order?.vnp_txn_ref || orderCodeInput,
+            paymentOrderStatus: finalOrderStatus,
+            preorderStatus: preorder?.status || null,
+            preorderPaymentStatus: preorder?.payment_status || null,
+            depositAmount: toNumber(preorder?.deposit_amount),
+        },
+    };
+}
+
 module.exports = {
     createDepositPayment,
     getMyPreorders,
     handlePayOSWebhook,
+    verifyPreorderPayment,
     getLandlordRequests,
     confirmRequest,
     rejectRequest,
