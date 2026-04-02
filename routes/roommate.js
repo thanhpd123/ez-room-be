@@ -10,6 +10,8 @@ const {
     inviteRoommate,
     semanticSearch,
     searchByArea,
+    createRoommateRating,
+    checkRoommateRating,
 } = require('../controllers/roommate.controller');
 
 const router = express.Router();
@@ -193,6 +195,9 @@ router.patch('/matches/:matchId', updateMatchStatus);
  *         description: Hồ sơ công khai
  */
 router.get('/profile/:userId', getProfile);
+
+router.post('/experiences', createRoommateRating);
+router.get('/experiences/check', checkRoommateRating);
 
 module.exports = router;
 
