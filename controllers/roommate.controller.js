@@ -124,6 +124,25 @@ async function searchByArea(req, res) {
     }
 }
 
+async function createRoommateRating(req, res) {
+    try {
+        const result = await roommateService.createRoommateRating(req.auth.user.id, req.body);
+        return res.status(201).json({ success: true, message: 'Đánh giá đã được ghi nhận', ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi tạo đánh giá');
+    }
+}
+
+async function checkRoommateRating(req, res) {
+    try {
+        const { targetId, rentalPeriodId } = req.query;
+        const result = await roommateService.checkRoommateRating(req.auth.user.id, targetId, rentalPeriodId);
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi kiểm tra đánh giá');
+    }
+}
+
 module.exports = {
     getSuggestions,
     sendRequest,
@@ -134,5 +153,7 @@ module.exports = {
     inviteRoommate,
     semanticSearch,
     searchByArea,
+    createRoommateRating,
+    checkRoommateRating,
 };
 

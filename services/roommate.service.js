@@ -984,6 +984,77 @@ async function getTopSearchersInArea(currentUserId, areaQuery, limit = 10) {
     };
 }
 
+// ─── Roommate Rating helpers ─────────────────────────────────────────────────
+
+function periodsOverlap(startA, endA, startB, endB) {
+    const endAEff = endA || new Date('9999-12-31');
+    const endBEff = endB || new Date('9999-12-31');
+    return startA <= endBEff && startB <= endAEff;
+}
+
+async function createRoommateRating(reviewerId, body) {
+    const { targetId, rentalPeriodId, overallRating, comment } = body;
+
+    if (!targetId || !rentalPeriodId || !overallRating) {
+        const err = new Error('Thiếu thông tin bắt buộc');
+        err.statusCode = 400;
+        throw err;
+    }
+    if (overallRating < 1 || overallRating > 5) {
+        const err = new Error('Rating phải trong khoảng 1–5');
+        err.statusCode = 400;
+        throw err;
+    }
+
+    // Kiểm tra RoomRentalPeriod chung
+    const [reviewerPeriods, targetPeriods] = await Promise.all([
+        prisma.roomRentalPeriod.findMany({ where: { userId: reviewerId }, select: { id: true, roomId: true, startDate: true, endDate: true } }),
+        prisma.roomRentalPeriod.findMany({ where: { userId: targetId }, select: { id: true, roomId: true, startDate: true, endDate: true } }),
+    ]);
+
+    const hasSharedPeriod = reviewerPeriods.some((rp) =>
+        targetPeriods.some(
+            (tp) => tp.roomId === rp.roomId && periodsOverlap(rp.startDate, rp.endDate, tp.startDate, tp.endDate)
+        )
+    );
+
+    if (!hasSharedPeriod) {
+        const err = new Error('Bạn chưa từng ở cùng người này');
+        err.statusCode = 403;
+        throw err;
+    }
+
+    // Kiểm tra unique
+    const existing = await prisma.roommateRating.findFirst({
+        where: { reviewer_id: reviewerId, target_id: targetId, rental_period_id: rentalPeriodId },
+    });
+    if (existing) {
+        const err = new Error('Bạn đã đánh giá người này cho kỳ thuê này');
+        err.statusCode = 409;
+        throw err;
+    }
+
+    const rating = await prisma.roommateRating.create({
+        data: {
+            reviewer_id: reviewerId,
+            target_id: targetId,
+            rental_period_id: rentalPeriodId,
+            overall_rating: overallRating,
+            comment: comment || null,
+        },
+    });
+
+    return { data: rating };
+}
+
+async function checkRoommateRating(reviewerId, targetId, rentalPeriodId) {
+    const existing = await prisma.roommateRating.findFirst({
+        where: { reviewer_id: reviewerId, target_id: targetId, rental_period_id: rentalPeriodId },
+        select: { id: true, overall_rating: true, comment: true, created_at: true },
+    });
+    return { data: existing || null };
+}
+
 module.exports = {
     computeLifestyleScore,
     getSuggestions,
@@ -994,4 +1065,6 @@ module.exports = {
     getMyActiveRooms,
     inviteRoommate,
     getTopSearchersInArea,
+    createRoommateRating,
+    checkRoommateRating,
 };
