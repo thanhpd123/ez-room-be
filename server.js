@@ -24,11 +24,13 @@ const moderatorRoutes = require('./routes/moderator');
 const reportRoutes = require('./routes/report');
 const preorderRoutes = require('./routes/preorder');
 const feedbackRoutes = require('./routes/feedback');
+const tenantReviewRoutes = require('./routes/tenant-review');
 const documentRoutes = require('./routes/document');
 const vipRoutes = require('./routes/vip');
 const notificationRoutes = require('./routes/notification');
 const { startPreorderPayoutReconciliationJob } = require('./services/preorder-reconciliation.service');
 const { startStaleCron } = require('./cron/release-stale-tasks');
+const { startCompleteRentalCron } = require('./cron/complete-rental-periods');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -86,6 +88,7 @@ app.use('/moderator', moderatorRoutes);
 app.use('/reports', reportRoutes);
 app.use('/preorders', preorderRoutes);
 app.use('/feedback', feedbackRoutes);
+app.use('/tenant-reviews', tenantReviewRoutes);
 app.use('/documents', documentRoutes);
 app.use('/vip', vipRoutes);
 app.use('/notifications', notificationRoutes);
@@ -156,4 +159,5 @@ app.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
     startPreorderPayoutReconciliationJob();
     startStaleCron();
+    startCompleteRentalCron();
 });

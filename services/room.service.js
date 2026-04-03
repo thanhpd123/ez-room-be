@@ -83,6 +83,46 @@ function mapRentalPeriodStatus(s) {
     return m[s] || 'active';
 }
 
+async function reconcileRoomOccupancyStatus(roomId) {
+    const endOfToday = new Date();
+    endOfToday.setHours(23, 59, 59, 999);
+
+    await prisma.$transaction(async (tx) => {
+        // Auto-complete expired ACTIVE rental periods for this room.
+        await tx.roomRentalPeriod.updateMany({
+            where: {
+                roomId,
+                status: 'ACTIVE',
+                endDate: { lte: endOfToday },
+            },
+            data: {
+                status: 'COMPLETED',
+                updatedAt: new Date(),
+            },
+        });
+
+        const activeCount = await tx.roomRentalPeriod.count({
+            where: {
+                roomId,
+                status: 'ACTIVE',
+            },
+        });
+
+        if (activeCount === 0) {
+            await tx.rooms.updateMany({
+                where: {
+                    id: roomId,
+                    status: 'RENTED',
+                },
+                data: {
+                    status: 'AVAILABLE',
+                    updated_at: new Date(),
+                },
+            });
+        }
+    });
+}
+
 async function createRoom(userId, body, authUser = null) {
     const rentalId = body.rentalId || body.rental_id;
     const roomName = body.roomName || body.title;
@@ -225,7 +265,9 @@ async function getRooms(params) {
     };
 }
 
-async function getRoomById(roomId) {
+async function getRoomById(roomId, userId = null) {
+    await reconcileRoomOccupancyStatus(roomId);
+
     const room = await prisma.rooms.findUnique({
         where: { id: roomId },
         include: {
@@ -468,7 +510,7 @@ async function getRoomTenants(roomId, userId) {
 
     const [rentalPeriods, preorders] = await Promise.all([
         prisma.roomRentalPeriod.findMany({
-            where: { roomId },
+            where: { roomId, status: 'ACTIVE' },
             include: {
                 tenant: {
                     select: {
@@ -783,6 +825,8 @@ async function getMyBookings(userId) {
 }
 
 async function getRoomByIdForSearchRoomate(roomId, userId = null) {
+    await reconcileRoomOccupancyStatus(roomId);
+
     const room = await prisma.rooms.findUnique({
         where: { id: roomId },
         include: {
@@ -850,6 +894,124 @@ async function getRoomByIdForSearchRoomate(roomId, userId = null) {
     };
 }
 
+async function completeRentalPeriod(rentalPeriodId, userId) {
+    const rentalPeriod = await prisma.roomRentalPeriod.findUnique({
+        where: { id: rentalPeriodId },
+        include: {
+            room: {
+                include: {
+                    rentals: true,
+                },
+            },
+            tenant: {
+                select: {
+                    id: true,
+                    fullName: true,
+                    email: true,
+                },
+            },
+        },
+    });
+
+    if (!rentalPeriod) {
+        throw Object.assign(new Error('Không tìm thấy kỳ thuê'), { statusCode: 404 });
+    }
+
+    // Allow landlord or the tenant to complete a rental period
+    const landlordId = rentalPeriod.room.rentals?.owner_id;
+    if (landlordId !== userId && rentalPeriod.userId !== userId) {
+        throw Object.assign(
+            new Error('Bạn không có quyền kết thúc kỳ thuê này'),
+            { statusCode: 403 }
+        );
+    }
+
+    if (rentalPeriod.status !== 'ACTIVE') {
+        throw Object.assign(
+            new Error('Chỉ có thể kết thúc kỳ thuê đang hoạt động'),
+            { statusCode: 400 }
+        );
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+        // Update rental period status to COMPLETED
+        const updated = await tx.roomRentalPeriod.update({
+            where: { id: rentalPeriodId },
+            data: {
+                status: 'COMPLETED',
+                updatedAt: new Date(),
+            },
+            include: {
+                tenant: {
+                    select: {
+                        id: true,
+                        fullName: true,
+                        email: true,
+                    },
+                },
+            },
+        });
+
+        // Check if there are other ACTIVE rental periods for this room
+        const otherActivePeriods = await tx.roomRentalPeriod.count({
+            where: {
+                roomId: rentalPeriod.roomId,
+                status: 'ACTIVE',
+            },
+        });
+
+        // If no other active periods, set room back to AVAILABLE
+        if (otherActivePeriods === 0 && rentalPeriod.room.status === 'RENTED') {
+            await tx.rooms.update({
+                where: { id: rentalPeriod.roomId },
+                data: {
+                    status: 'AVAILABLE',
+                    updated_at: new Date(),
+                },
+            });
+        }
+
+        // Create notification for tenant
+        await tx.notification.create({
+            data: {
+                userId: rentalPeriod.userId,
+                type: 'RENTAL_COMPLETED',
+                title: 'Hợp đồng thuê phòng đã kết thúc',
+                body: `Kỳ thuê phòng của bạn đã được kết thúc. Cảm ơn bạn đã sử dụng dịch vụ của chúng tôi.`,
+                status: 'UNREAD',
+            },
+        });
+
+        // Create notification for landlord
+        const landlord = rentalPeriod.room.rentals;
+        if (landlord?.owner_id) {
+            await tx.notification.create({
+                data: {
+                    userId: landlord.owner_id,
+                    type: 'ROOM_AVAILABLE',
+                    title: 'Phòng của bạn đã trở lại trạng thái có sẵn',
+                    body: `Kỳ thuê phòng "${rentalPeriod.room.room_name || 'Phòng trọ'}" đã kết thúc. Phòng này bây giờ có sẵn để cho thuê.`,
+                    status: 'UNREAD',
+                },
+            });
+        }
+
+        return updated;
+    });
+
+    return {
+        message: 'Kết thúc kỳ thuê thành công',
+        data: {
+            id: result.id,
+            roomId: result.roomId,
+            tenant: result.tenant,
+            startDate: result.startDate,
+            endDate: result.endDate,
+            status: result.status,
+        },
+    };
+}
+
 module.exports = {
     createRoom,
     getRooms,
@@ -861,6 +1023,7 @@ module.exports = {
     getRoomTenants,
     searchTenants,
     createRentalContract,
+    completeRentalPeriod,
     getMyBookings,
     getRoomByIdForSearchRoomate,
 };
