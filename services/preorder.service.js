@@ -1,4 +1,4 @@
-const prisma = require('../config/prisma');
+﻿const prisma = require('../config/prisma');
 const { getPayOSClient } = require('../config/payos');
 const vipService = require('./vip.service');
 
@@ -187,8 +187,12 @@ function mapPreorderItem(p) {
 }
 
 function mapPaymentOrderStatus(webhookData) {
+    const rawStatus = String(webhookData?.data?.status || webhookData?.status || '').toUpperCase();
     const code = String(webhookData?.data?.code || webhookData?.code || '').toUpperCase();
-    const success = webhookData?.success === true || code === '00';
+    const success = webhookData?.success === true || code === '00' || rawStatus === 'PAID' || rawStatus === 'SUCCESS';
+
+    if (rawStatus === 'CANCELLED' || rawStatus === 'CANCELED') return 'CANCELLED';
+    if (rawStatus === 'EXPIRED') return 'EXPIRED';
 
     if (success) return 'SUCCESS';
 
@@ -196,6 +200,27 @@ function mapPaymentOrderStatus(webhookData) {
     if (desc.includes('cancel')) return 'CANCELLED';
     if (desc.includes('expire')) return 'EXPIRED';
     return 'FAILED';
+}
+
+function mapPayOSOrderStatusToInternal(payosStatus) {
+    const normalized = String(payosStatus || '').toUpperCase();
+    if (normalized === 'PAID' || normalized === 'SUCCESS') return 'SUCCESS';
+    if (normalized === 'CANCELLED' || normalized === 'CANCELED') return 'CANCELLED';
+    if (normalized === 'EXPIRED') return 'EXPIRED';
+    if (normalized === 'PENDING' || normalized === 'PROCESSING') return 'PENDING';
+    return 'FAILED';
+}
+
+async function getPayOSPaymentByOrderCode(payos, orderCode) {
+    if (payos?.paymentRequests?.get) {
+        return payos.paymentRequests.get(orderCode);
+    }
+
+    if (payos?.paymentRequests?.getByOrderCode) {
+        return payos.paymentRequests.getByOrderCode(orderCode);
+    }
+
+    throw new Error('SDK PayOS khÃ´ng há»— trá»£ truy váº¥n theo orderCode');
 }
 
 function mapWalletTxnStatus(orderStatus) {
@@ -213,7 +238,7 @@ async function getPayOSPaymentByOrderCode(payos, orderCode) {
         return payos.paymentRequests.getByOrderCode(orderCode);
     }
 
-    throw new Error('SDK PayOS không hỗ trợ truy vấn theo orderCode');
+    throw new Error('SDK PayOS khÃ´ng há»— trá»£ truy váº¥n theo orderCode');
 }
 
 function mapPayOSPaymentLinkStatusToOrderStatus(linkStatusRaw) {
@@ -226,7 +251,7 @@ function mapPayOSPaymentLinkStatusToOrderStatus(linkStatusRaw) {
 }
 
 /**
- * Tenant tạo yêu cầu đặt cọc và link thanh toán PayOS
+ * Tenant táº¡o yÃªu cáº§u Ä‘áº·t cá»c vÃ  link thanh toÃ¡n PayOS
  */
 async function createDepositPayment(userId, body) {
     const roomId = String(body?.roomId || '').trim();
@@ -235,7 +260,7 @@ async function createDepositPayment(userId, body) {
     const rawDepositAmount = body?.depositAmount;
 
     if (!roomId) {
-        throw Object.assign(new Error('Thiếu roomId'), { statusCode: 400 });
+        throw Object.assign(new Error('Thiáº¿u roomId'), { statusCode: 400 });
     }
 
     const room = await prisma.rooms.findUnique({
@@ -244,20 +269,20 @@ async function createDepositPayment(userId, body) {
     });
 
     if (!room) {
-        throw Object.assign(new Error('Phòng không tồn tại'), { statusCode: 404 });
+        throw Object.assign(new Error('PhÃ²ng khÃ´ng tá»“n táº¡i'), { statusCode: 404 });
     }
 
     if (room.status !== 'AVAILABLE') {
-        throw Object.assign(new Error('Phòng hiện không khả dụng để đặt cọc'), { statusCode: 400 });
+        throw Object.assign(new Error('PhÃ²ng hiá»‡n khÃ´ng kháº£ dá»¥ng Ä‘á»ƒ Ä‘áº·t cá»c'), { statusCode: 400 });
     }
 
     if (room.rentals?.owner_id === userId) {
-        throw Object.assign(new Error('Không thể tự đặt cọc phòng của chính bạn'), { statusCode: 400 });
+        throw Object.assign(new Error('KhÃ´ng thá»ƒ tá»± Ä‘áº·t cá»c phÃ²ng cá»§a chÃ­nh báº¡n'), { statusCode: 400 });
     }
 
     const roomPrice = toNumber(room.price);
     if (roomPrice <= 0) {
-        throw Object.assign(new Error('Giá phòng không hợp lệ để tính tiền đặt cọc'), {
+        throw Object.assign(new Error('GiÃ¡ phÃ²ng khÃ´ng há»£p lá»‡ Ä‘á»ƒ tÃ­nh tiá»n Ä‘áº·t cá»c'), {
             statusCode: 400,
         });
     }
@@ -267,10 +292,18 @@ async function createDepositPayment(userId, body) {
 
     let depositPercent;
     let depositMonths = null;
-    if (rawDepositMonths != null && String(rawDepositMonths).trim() !== '') {
+    if (rawDepositAmount != null && String(rawDepositAmount).trim() !== '') {
+        const requestedAmount = parseDepositAmount(rawDepositAmount);
+        if (!requestedAmount) {
+            throw Object.assign(new Error('Sá»‘ tiá»n Ä‘áº·t cá»c pháº£i lÃ  sá»‘ nguyÃªn dÆ°Æ¡ng (VND)'), {
+                statusCode: 400,
+            });
+        }
+        depositPercent = Math.round(((requestedAmount / roomPrice) * 100) * 100) / 100;
+    } else if (rawDepositMonths != null && String(rawDepositMonths).trim() !== '') {
         depositMonths = parseDepositMonths(rawDepositMonths);
         if (!depositMonths) {
-            throw Object.assign(new Error('Số tháng đặt cọc phải là số dương'), {
+            throw Object.assign(new Error('Sá»‘ thÃ¡ng Ä‘áº·t cá»c pháº£i lÃ  sá»‘ dÆ°Æ¡ng'), {
                 statusCode: 400,
             });
         }
@@ -279,44 +312,36 @@ async function createDepositPayment(userId, body) {
         depositPercent = parseDepositPercent(rawDepositPercent);
         if (!depositPercent) {
             throw Object.assign(
-                new Error('Phần trăm đặt cọc phải là số dương và nhỏ hơn 100%'),
+                new Error('Pháº§n trÄƒm Ä‘áº·t cá»c pháº£i lÃ  sá»‘ dÆ°Æ¡ng vÃ  nhá» hÆ¡n 100%'),
                 { statusCode: 400 }
             );
         }
-    } else if (rawDepositAmount != null && String(rawDepositAmount).trim() !== '') {
-        const requestedAmount = parseDepositAmount(rawDepositAmount);
-        if (!requestedAmount) {
-            throw Object.assign(new Error('Số tiền đặt cọc phải là số nguyên dương (VND)'), {
-                statusCode: 400,
-            });
-        }
-        depositPercent = Math.round(((requestedAmount / roomPrice) * 100) * 100) / 100;
     } else {
         depositPercent = defaultPercent;
     }
 
     if (!Number.isFinite(depositPercent) || depositPercent <= 0) {
-        throw Object.assign(new Error('Không thể xác định phần trăm đặt cọc hợp lệ'), {
+        throw Object.assign(new Error('KhÃ´ng thá»ƒ xÃ¡c Ä‘á»‹nh pháº§n trÄƒm Ä‘áº·t cá»c há»£p lá»‡'), {
             statusCode: 400,
         });
     }
 
     if (depositPercent >= 100) {
-        throw Object.assign(new Error('Tiền đặt cọc không được bằng hoặc vượt 100% giá phòng'), {
+        throw Object.assign(new Error('Tiá»n Ä‘áº·t cá»c khÃ´ng Ä‘Æ°á»£c báº±ng hoáº·c vÆ°á»£t 100% giÃ¡ phÃ²ng'), {
             statusCode: 400,
         });
     }
 
     if (depositPercent < min || depositPercent > max) {
         throw Object.assign(
-            new Error(`Phần trăm đặt cọc phải nằm trong khoảng ${min}% - ${max}%`),
+            new Error(`Pháº§n trÄƒm Ä‘áº·t cá»c pháº£i náº±m trong khoáº£ng ${min}% - ${max}%`),
             { statusCode: 400 }
         );
     }
 
     const depositAmount = computeDepositAmountByPercent(roomPrice, depositPercent);
     if (depositAmount <= 0 || depositAmount >= roomPrice) {
-        throw Object.assign(new Error('Số tiền đặt cọc sau khi tính theo phần trăm không hợp lệ'), {
+        throw Object.assign(new Error('Sá»‘ tiá»n Ä‘áº·t cá»c sau khi tÃ­nh theo pháº§n trÄƒm khÃ´ng há»£p lá»‡'), {
             statusCode: 400,
         });
     }
@@ -331,7 +356,7 @@ async function createDepositPayment(userId, body) {
     });
 
     if (existing) {
-        throw Object.assign(new Error('Bạn đã có yêu cầu đặt cọc đang hoạt động cho phòng này'), {
+        throw Object.assign(new Error('Báº¡n Ä‘Ã£ cÃ³ yÃªu cáº§u Ä‘áº·t cá»c Ä‘ang hoáº¡t Ä‘á»™ng cho phÃ²ng nÃ y'), {
             statusCode: 409,
         });
     }
@@ -392,7 +417,7 @@ async function createDepositPayment(userId, body) {
         });
 
         return {
-            message: 'Tạo link thanh toán đặt cọc thành công',
+            message: 'Táº¡o link thanh toÃ¡n Ä‘áº·t cá»c thÃ nh cÃ´ng',
             data: {
                 preorderId: created.preorder.id,
                 roomId,
@@ -431,14 +456,14 @@ async function createDepositPayment(userId, body) {
             });
         });
 
-        throw Object.assign(new Error(`Không thể tạo link thanh toán PayOS: ${err.message}`), {
+        throw Object.assign(new Error(`KhÃ´ng thá»ƒ táº¡o link thanh toÃ¡n PayOS: ${err.message}`), {
             statusCode: 502,
         });
     }
 }
 
 /**
- * Tenant xem danh sách preorder của mình
+ * Tenant xem danh sÃ¡ch preorder cá»§a mÃ¬nh
  */
 async function getMyPreorders(userId, params) {
     const { status, paymentStatus, page = 1, limit = 20 } = params;
@@ -488,7 +513,7 @@ async function getMyPreorders(userId, params) {
 }
 
 /**
- * Webhook PayOS cập nhật trạng thái thanh toán (đặt cọc + nạp ví)
+ * Webhook PayOS cáº­p nháº­t tráº¡ng thÃ¡i thanh toÃ¡n (Ä‘áº·t cá»c + náº¡p vÃ­)
  */
 async function handlePayOSWebhook(payload) {
     const payos = getPayOSClient();
@@ -497,7 +522,7 @@ async function handlePayOSWebhook(payload) {
     const orderCode = String(eventData?.orderCode || '').trim();
 
     if (!orderCode) {
-        throw Object.assign(new Error('Webhook thiếu orderCode'), { statusCode: 400 });
+        throw Object.assign(new Error('Webhook thiáº¿u orderCode'), { statusCode: 400 });
     }
 
     const order = await prisma.payment_orders.findUnique({
@@ -508,7 +533,7 @@ async function handlePayOSWebhook(payload) {
         return {
             acknowledged: true,
             updated: false,
-            message: 'Order không tồn tại trong hệ thống',
+            message: 'Order khÃ´ng tá»“n táº¡i trong há»‡ thá»‘ng',
         };
     }
 
@@ -557,8 +582,8 @@ async function handlePayOSWebhook(payload) {
                             userId: latestOrder.user_id,
                             type: 'PREORDER',
                             status: 'UNREAD',
-                            title: 'Đặt cọc thành công',
-                            body: 'Thanh toán đặt cọc của bạn đã được ghi nhận. Chờ chủ trọ xác nhận yêu cầu.',
+                            title: 'Äáº·t cá»c thÃ nh cÃ´ng',
+                            body: 'Thanh toÃ¡n Ä‘áº·t cá»c cá»§a báº¡n Ä‘Ã£ Ä‘Æ°á»£c ghi nháº­n. Chá» chá»§ trá» xÃ¡c nháº­n yÃªu cáº§u.',
                         },
                     });
                 }
@@ -591,7 +616,7 @@ async function handlePayOSWebhook(payload) {
                         },
                         data: {
                             status: 'SUCCESS',
-                            description: walletTx.description || 'Nạp tiền ví qua PayOS',
+                            description: walletTx.description || 'Náº¡p tiá»n vÃ­ qua PayOS',
                         },
                     });
 
@@ -606,8 +631,8 @@ async function handlePayOSWebhook(payload) {
                                 userId: latestOrder.user_id,
                                 type: 'PAYMENT',
                                 status: 'UNREAD',
-                                title: 'Nạp ví thành công',
-                                body: `Ví của bạn đã được cộng ${toNumber(latestOrder.amount).toLocaleString('vi-VN')} VND.`,
+                                title: 'Náº¡p vÃ­ thÃ nh cÃ´ng',
+                                body: `VÃ­ cá»§a báº¡n Ä‘Ã£ Ä‘Æ°á»£c cá»™ng ${toNumber(latestOrder.amount).toLocaleString('vi-VN')} VND.`,
                             },
                         });
                     }
@@ -639,7 +664,7 @@ async function handlePayOSWebhook(payload) {
 }
 
 /**
- * Lấy danh sách yêu cầu thuê cho landlord
+ * Láº¥y danh sÃ¡ch yÃªu cáº§u thuÃª cho landlord
  */
 async function getLandlordRequests(landlordId, params) {
     const { status, search, page = 1, limit = 20 } = params;
@@ -708,11 +733,11 @@ async function getLandlordRequests(landlordId, params) {
 }
 
 /**
- * Landlord xác nhận yêu cầu thuê
+ * Landlord xÃ¡c nháº­n yÃªu cáº§u thuÃª
  */
 async function confirmRequest(preorderId, landlordId) {
     const updated = await prisma.$transaction(async (tx) => {
-        // Lock theo preorder để tránh race-condition khi confirm đồng thời.
+        // Lock theo preorder Ä‘á»ƒ trÃ¡nh race-condition khi confirm Ä‘á»“ng thá»i.
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${preorderId}))`;
 
         const preorder = await tx.preorder.findUnique({
@@ -723,11 +748,11 @@ async function confirmRequest(preorderId, landlordId) {
         });
 
         if (!preorder) {
-            throw Object.assign(new Error('Yêu cầu không tồn tại'), { statusCode: 404 });
+            throw Object.assign(new Error('YÃªu cáº§u khÃ´ng tá»“n táº¡i'), { statusCode: 404 });
         }
 
         if (preorder.room.rentals.owner_id !== landlordId) {
-            throw Object.assign(new Error('Bạn không có quyền xác nhận yêu cầu này'), {
+            throw Object.assign(new Error('Báº¡n khÃ´ng cÃ³ quyá»n xÃ¡c nháº­n yÃªu cáº§u nÃ y'), {
                 statusCode: 403,
             });
         }
@@ -776,17 +801,17 @@ async function confirmRequest(preorderId, landlordId) {
         }
 
         if (preorder.status !== 'PENDING') {
-            throw Object.assign(new Error('Chỉ có thể xác nhận yêu cầu đang chờ'), { statusCode: 400 });
+            throw Object.assign(new Error('Chá»‰ cÃ³ thá»ƒ xÃ¡c nháº­n yÃªu cáº§u Ä‘ang chá»'), { statusCode: 400 });
         }
 
         if (preorder.payment_status !== 'PAID') {
-            throw Object.assign(new Error('Chỉ có thể xác nhận yêu cầu đã thanh toán đặt cọc'), {
+            throw Object.assign(new Error('Chá»‰ cÃ³ thá»ƒ xÃ¡c nháº­n yÃªu cáº§u Ä‘Ã£ thanh toÃ¡n Ä‘áº·t cá»c'), {
                 statusCode: 400,
             });
         }
 
         if (grossDepositAmount <= 0) {
-            throw Object.assign(new Error('Không tìm thấy tiền cọc hợp lệ để chuyển cho chủ trọ'), {
+            throw Object.assign(new Error('KhÃ´ng tÃ¬m tháº¥y tiá»n cá»c há»£p lá»‡ Ä‘á»ƒ chuyá»ƒn cho chá»§ trá»'), {
                 statusCode: 400,
             });
         }
@@ -816,7 +841,7 @@ async function confirmRequest(preorderId, landlordId) {
                     transaction_type: 'PREORDER',
                     status: 'SUCCESS',
                     amount: computed.payoutAmount,
-                    description: `Nhận tiền đặt cọc preorder ${preorder.id} (phí ${computed.feeAmount.toLocaleString('vi-VN')} VND)`,
+                    description: `Nháº­n tiá»n Ä‘áº·t cá»c preorder ${preorder.id} (phÃ­ ${computed.feeAmount.toLocaleString('vi-VN')} VND)`,
                     ref_type: 'PREORDER_PAYOUT',
                     ref_id: preorder.id,
                 },
@@ -849,8 +874,8 @@ async function confirmRequest(preorderId, landlordId) {
                     userId: landlordId,
                     type: 'PAYMENT',
                     status: 'UNREAD',
-                    title: 'Bạn nhận được tiền đặt cọc',
-                    body: `Ví của bạn đã được cộng ${computed.payoutAmount.toLocaleString('vi-VN')} VND từ yêu cầu thuê ${preorder.id}.`,
+                    title: 'Báº¡n nháº­n Ä‘Æ°á»£c tiá»n Ä‘áº·t cá»c',
+                    body: `VÃ­ cá»§a báº¡n Ä‘Ã£ Ä‘Æ°á»£c cá»™ng ${computed.payoutAmount.toLocaleString('vi-VN')} VND tá»« yÃªu cáº§u thuÃª ${preorder.id}.`,
                 },
             });
         }
@@ -872,8 +897,8 @@ async function confirmRequest(preorderId, landlordId) {
                 userId: preorder.userId,
                 type: 'PREORDER',
                 status: 'UNREAD',
-                title: 'Yêu cầu đặt cọc đã được xác nhận',
-                body: 'Chủ trọ đã xác nhận yêu cầu của bạn. Tiền đặt cọc đã được ghi nhận cho chủ trọ.',
+                title: 'YÃªu cáº§u Ä‘áº·t cá»c Ä‘Ã£ Ä‘Æ°á»£c xÃ¡c nháº­n',
+                body: 'Chá»§ trá» Ä‘Ã£ xÃ¡c nháº­n yÃªu cáº§u cá»§a báº¡n. Tiá»n Ä‘áº·t cá»c Ä‘Ã£ Ä‘Æ°á»£c ghi nháº­n cho chá»§ trá».',
             },
         });
 
@@ -884,7 +909,7 @@ async function confirmRequest(preorderId, landlordId) {
 }
 
 /**
- * Landlord từ chối yêu cầu thuê
+ * Landlord tá»« chá»‘i yÃªu cáº§u thuÃª
  */
 async function rejectRequest(preorderId, landlordId, body) {
     const { reason } = body;
@@ -897,17 +922,17 @@ async function rejectRequest(preorderId, landlordId, body) {
     });
 
     if (!preorder) {
-        throw Object.assign(new Error('Yêu cầu không tồn tại'), { statusCode: 404 });
+        throw Object.assign(new Error('YÃªu cáº§u khÃ´ng tá»“n táº¡i'), { statusCode: 404 });
     }
 
     if (preorder.room.rentals.owner_id !== landlordId) {
-        throw Object.assign(new Error('Bạn không có quyền từ chối yêu cầu này'), {
+        throw Object.assign(new Error('Báº¡n khÃ´ng cÃ³ quyá»n tá»« chá»‘i yÃªu cáº§u nÃ y'), {
             statusCode: 403,
         });
     }
 
     if (preorder.status !== 'PENDING') {
-        throw Object.assign(new Error('Chỉ có thể từ chối yêu cầu đang chờ'), { statusCode: 400 });
+        throw Object.assign(new Error('Chá»‰ cÃ³ thá»ƒ tá»« chá»‘i yÃªu cáº§u Ä‘ang chá»'), { statusCode: 400 });
     }
 
     const normalizedReason = typeof reason === 'string' ? reason.trim() : '';
@@ -916,18 +941,18 @@ async function rejectRequest(preorderId, landlordId, body) {
     const updated = await prisma.$transaction(async (tx) => {
         const latest = await tx.preorder.findUnique({ where: { id: preorderId } });
         if (!latest) {
-            throw Object.assign(new Error('Yêu cầu không tồn tại'), { statusCode: 404 });
+            throw Object.assign(new Error('YÃªu cáº§u khÃ´ng tá»“n táº¡i'), { statusCode: 404 });
         }
 
         if (latest.status !== 'PENDING') {
-            throw Object.assign(new Error('Yêu cầu đã được xử lý trước đó'), { statusCode: 409 });
+            throw Object.assign(new Error('YÃªu cáº§u Ä‘Ã£ Ä‘Æ°á»£c xá»­ lÃ½ trÆ°á»›c Ä‘Ã³'), { statusCode: 409 });
         }
 
-        // Nếu tenant đã thanh toán cọc, hoàn về ví nội bộ ngay khi landlord từ chối.
+        // Náº¿u tenant Ä‘Ã£ thanh toÃ¡n cá»c, hoÃ n vá» vÃ­ ná»™i bá»™ ngay khi landlord tá»« chá»‘i.
         if (latest.payment_status === 'PAID') {
             const refundAmount = toNumber(latest.deposit_amount);
             if (refundAmount <= 0) {
-                throw Object.assign(new Error('Không tìm thấy số tiền cọc hợp lệ để hoàn'), {
+                throw Object.assign(new Error('KhÃ´ng tÃ¬m tháº¥y sá»‘ tiá»n cá»c há»£p lá»‡ Ä‘á»ƒ hoÃ n'), {
                     statusCode: 400,
                 });
             }
@@ -951,7 +976,7 @@ async function rejectRequest(preorderId, landlordId, body) {
                     transaction_type: 'REFUND',
                     status: 'SUCCESS',
                     amount: refundAmount,
-                    description: `Hoàn cọc preorder ${latest.id}${cancelReason ? ` - ${cancelReason}` : ''}`,
+                    description: `HoÃ n cá»c preorder ${latest.id}${cancelReason ? ` - ${cancelReason}` : ''}`,
                     ref_type: 'PREORDER_REFUND',
                     ref_id: latest.id,
                 },
@@ -991,8 +1016,8 @@ async function rejectRequest(preorderId, landlordId, body) {
                     userId: latest.userId,
                     type: 'PAYMENT',
                     status: 'UNREAD',
-                    title: 'Yêu cầu đặt cọc bị từ chối',
-                    body: `Bạn đã được hoàn ${refundAmount.toLocaleString('vi-VN')} VND vào ví nội bộ.${cancelReason ? ` Lý do: ${cancelReason}` : ''}`,
+                    title: 'YÃªu cáº§u Ä‘áº·t cá»c bá»‹ tá»« chá»‘i',
+                    body: `Báº¡n Ä‘Ã£ Ä‘Æ°á»£c hoÃ n ${refundAmount.toLocaleString('vi-VN')} VND vÃ o vÃ­ ná»™i bá»™.${cancelReason ? ` LÃ½ do: ${cancelReason}` : ''}`,
                 },
             });
 
@@ -1013,7 +1038,7 @@ async function rejectRequest(preorderId, landlordId, body) {
 }
 
 /**
- * Tenant resumes an unpaid PENDING preorder — fetches fresh PayOS checkout URL
+ * Tenant resumes an unpaid PENDING preorder - fetches fresh PayOS checkout URL
  */
 async function resumePayment(userId, preorderId) {
     const preorder = await prisma.preorder.findUnique({
@@ -1026,19 +1051,18 @@ async function resumePayment(userId, preorderId) {
     });
 
     if (!preorder) {
-        throw Object.assign(new Error('Yêu cầu đặt cọc không tồn tại'), { statusCode: 404 });
+        throw Object.assign(new Error('Yeu cau dat coc khong ton tai'), { statusCode: 404 });
     }
     if (preorder.userId !== userId) {
-        throw Object.assign(new Error('Bạn không có quyền truy cập yêu cầu này'), { statusCode: 403 });
+        throw Object.assign(new Error('Ban khong co quyen truy cap yeu cau nay'), { statusCode: 403 });
     }
     if (preorder.status !== 'PENDING' || preorder.payment_status !== 'UNPAID') {
         throw Object.assign(
-            new Error('Chỉ có thể tiếp tục thanh toán cho yêu cầu chưa thanh toán'),
+            new Error('Chi co the tiep tuc thanh toan cho yeu cau chua thanh toan'),
             { statusCode: 400 }
         );
     }
 
-    // Find the most recent payment order for this preorder
     const paymentOrder = await prisma.payment_orders.findFirst({
         where: {
             ref_id: preorderId,
@@ -1051,21 +1075,21 @@ async function resumePayment(userId, preorderId) {
     let checkoutUrl = null;
 
     if (paymentOrder) {
-        // 1. Try the URL we persisted when the link was first created
         const stored = paymentOrder.raw_ipn_payload || {};
         checkoutUrl = stored.checkoutUrl || null;
 
-        // 2. If we have the paymentLinkId we can build the URL ourselves (PayOS format)
         if (!checkoutUrl && stored.paymentLinkId) {
             checkoutUrl = `https://pay.payos.vn/web/${stored.paymentLinkId}`;
         }
 
-        // 3. Fall back to asking PayOS – response includes `id` (the payment link ID)
         if (!checkoutUrl) {
             const payos = getPayOSClient();
             try {
-            const info = await getPayOSPaymentByOrderCode(payos, Number(paymentOrder.vnp_txn_ref));
-                // SDK may return data directly or nested; id / paymentLinkId both tried
+                const orderCodeNumber = Number(paymentOrder.vnp_txn_ref);
+                const info = await getPayOSPaymentByOrderCode(
+                    payos,
+                    Number.isFinite(orderCodeNumber) ? orderCodeNumber : paymentOrder.vnp_txn_ref
+                );
                 const linkId = info?.id || info?.paymentLinkId || info?.data?.id || info?.data?.paymentLinkId;
                 if (linkId) {
                     checkoutUrl = `https://pay.payos.vn/web/${linkId}`;
@@ -1073,12 +1097,11 @@ async function resumePayment(userId, preorderId) {
                     checkoutUrl = info?.checkoutUrl || info?.data?.checkoutUrl;
                 }
             } catch {
-                // PayOS query failed – checkoutUrl stays null
+                // Keep fallback path below
             }
         }
     }
 
-    // 4. If no valid link is found, generate a fresh payment order + payment link.
     if (!checkoutUrl) {
         const orderCodeNum = generateOrderCode();
         orderCode = String(orderCodeNum);
@@ -1130,7 +1153,7 @@ async function resumePayment(userId, preorderId) {
                 },
             });
             throw Object.assign(
-                new Error('Không thể tạo lại link thanh toán, vui lòng thử lại sau'),
+                new Error('Khong the tao lai link thanh toan, vui long thu lai sau'),
                 { statusCode: 502 }
             );
         }
@@ -1157,7 +1180,7 @@ async function resumePayment(userId, preorderId) {
 }
 
 /**
- * Tenant hủy preorder chưa thanh toán
+ * Tenant huy preorder chua thanh toan
  */
 async function cancelUnpaidPreorder(userId, preorderId, body = {}) {
     const preorder = await prisma.preorder.findUnique({
@@ -1165,14 +1188,14 @@ async function cancelUnpaidPreorder(userId, preorderId, body = {}) {
     });
 
     if (!preorder) {
-        throw Object.assign(new Error('Yêu cầu đặt cọc không tồn tại'), { statusCode: 404 });
+        throw Object.assign(new Error('Yeu cau dat coc khong ton tai'), { statusCode: 404 });
     }
     if (preorder.userId !== userId) {
-        throw Object.assign(new Error('Bạn không có quyền hủy yêu cầu này'), { statusCode: 403 });
+        throw Object.assign(new Error('Ban khong co quyen huy yeu cau nay'), { statusCode: 403 });
     }
     if (preorder.status !== 'PENDING' || preorder.payment_status !== 'UNPAID') {
         throw Object.assign(
-            new Error('Chỉ có thể hủy yêu cầu đang chờ và chưa thanh toán'),
+            new Error('Chi co the huy yeu cau dang cho va chua thanh toan'),
             { statusCode: 400 }
         );
     }
@@ -1210,55 +1233,122 @@ async function cancelUnpaidPreorder(userId, preorderId, body = {}) {
 }
 
 /**
- * Tenant chủ động verify trạng thái thanh toán preorder (fallback khi webhook không về)
+ * Tenant chu dong verify trang thai thanh toan preorder (tuong thich route cu va moi)
  */
-async function verifyPreorderPayment(userId, preorderId, orderCodeRaw) {
-    const VERIFY_COOLDOWN_SECONDS = Math.max(
-        10,
-        Number(process.env.PREORDER_VERIFY_COOLDOWN_SECONDS || 20)
-    );
-    const cooldownMs = VERIFY_COOLDOWN_SECONDS * 1000;
-    const preorder = await prisma.preorder.findUnique({
+async function verifyPreorderPayment(userId, input = {}, orderCodeRaw) {
+    const normalizedInput = (typeof input === 'object' && input !== null)
+        ? input
+        : { preorderId: input, orderCode: orderCodeRaw };
+    const preorderIdInput = String(normalizedInput.preorderId || '').trim();
+    const orderCodeInput = String(normalizedInput.orderCode || '').trim();
+
+    if (!orderCodeInput && !preorderIdInput) {
+        throw Object.assign(new Error('Thieu orderCode hoac preorderId'), { statusCode: 400 });
+    }
+
+    let paymentOrder = null;
+    if (orderCodeInput) {
+        paymentOrder = await prisma.payment_orders.findUnique({
+            where: { vnp_txn_ref: orderCodeInput },
+        });
+    }
+
+    if (!paymentOrder && preorderIdInput) {
+        paymentOrder = await prisma.payment_orders.findFirst({
+            where: {
+                purpose: 'PREORDER_DEPOSIT',
+                ref_type: 'PREORDER',
+                ref_id: preorderIdInput,
+                user_id: userId,
+            },
+            orderBy: { created_at: 'desc' },
+        });
+    }
+
+    if (!paymentOrder) {
+        throw Object.assign(new Error('Khong tim thay giao dich preorder'), { statusCode: 404 });
+    }
+    if (paymentOrder.user_id !== userId) {
+        throw Object.assign(new Error('Khong co quyen xac minh giao dich nay'), { statusCode: 403 });
+    }
+    if (paymentOrder.purpose !== 'PREORDER_DEPOSIT' || paymentOrder.ref_type !== 'PREORDER' || !paymentOrder.ref_id) {
+        throw Object.assign(new Error('Giao dich khong phai thanh toan dat coc preorder'), { statusCode: 400 });
+    }
+
+    const preorderId = preorderIdInput || String(paymentOrder.ref_id);
+    let preorder = await prisma.preorder.findUnique({
         where: { id: preorderId },
-        select: { id: true, userId: true },
+        include: {
+            room: {
+                select: {
+                    id: true,
+                    room_name: true,
+                    price: true,
+                    rentals: { select: { id: true, title: true } },
+                },
+            },
+        },
     });
 
     if (!preorder) {
-        throw Object.assign(new Error('Yêu cầu đặt cọc không tồn tại'), { statusCode: 404 });
+        throw Object.assign(new Error('Yeu cau dat coc khong ton tai'), { statusCode: 404 });
     }
     if (preorder.userId !== userId) {
-        throw Object.assign(new Error('Bạn không có quyền truy cập yêu cầu này'), { statusCode: 403 });
+        throw Object.assign(new Error('Ban khong co quyen truy cap yeu cau nay'), { statusCode: 403 });
     }
 
-    const orderCode = String(orderCodeRaw || '').trim();
-    if (!orderCode) {
-        throw Object.assign(new Error('Thiếu orderCode để xác minh thanh toán'), { statusCode: 400 });
+    const finalFromCurrent = String(paymentOrder.status || 'PENDING').toUpperCase();
+    if (finalFromCurrent === 'SUCCESS' && preorder.payment_status === 'PAID') {
+        return {
+            message: 'Thanh toan dat coc da duoc xac nhan',
+            data: {
+                status: 'success',
+                confirmed: true,
+                preorderId: preorder.id,
+                orderCode: paymentOrder.vnp_txn_ref,
+                paymentOrderStatus: finalFromCurrent,
+                preorderStatus: preorder.status,
+                preorderPaymentStatus: preorder.payment_status,
+                depositAmount: toNumber(preorder.deposit_amount),
+                preorder: mapPreorderItem(preorder),
+                payment: {
+                    orderCode: paymentOrder.vnp_txn_ref,
+                    status: finalFromCurrent,
+                    payosStatus: null,
+                    skippedExternal: true,
+                },
+            },
+        };
     }
 
-    const paymentOrder = await prisma.payment_orders.findFirst({
-        where: {
-            vnp_txn_ref: orderCode,
-            purpose: 'PREORDER_DEPOSIT',
-            ref_type: 'PREORDER',
-            ref_id: preorderId,
-            user_id: userId,
-        },
-        orderBy: { created_at: 'desc' },
-    });
-    if (!paymentOrder) {
-        throw Object.assign(new Error('Không tìm thấy đơn thanh toán tương ứng'), { statusCode: 404 });
-    }
-
+    const VERIFY_COOLDOWN_SECONDS = Math.max(10, Number(process.env.PREORDER_VERIFY_COOLDOWN_SECONDS || 20));
+    const cooldownMs = VERIFY_COOLDOWN_SECONDS * 1000;
     const lastCheckedAtRaw = paymentOrder?.raw_ipn_payload?._verify?.lastCheckedAt;
     const lastCheckedAtMs = lastCheckedAtRaw ? new Date(lastCheckedAtRaw).getTime() : NaN;
     const withinCooldown = Number.isFinite(lastCheckedAtMs) && (Date.now() - lastCheckedAtMs) < cooldownMs;
+
     if (withinCooldown) {
+        const isSuccess = finalFromCurrent === 'SUCCESS' && preorder.payment_status === 'PAID';
+        const isCancelled = finalFromCurrent === 'CANCELLED' || finalFromCurrent === 'EXPIRED';
         return {
+            message: isSuccess
+                ? 'Thanh toan dat coc thanh cong'
+                : isCancelled
+                    ? 'Thanh toan dat coc da bi huy hoac het han'
+                    : 'Thanh toan dat coc dang cho xu ly',
             data: {
-                preorder: null,
+                status: isSuccess ? 'success' : (isCancelled ? 'cancel' : 'pending'),
+                confirmed: isSuccess,
+                preorderId: preorder.id,
+                orderCode: paymentOrder.vnp_txn_ref,
+                paymentOrderStatus: finalFromCurrent,
+                preorderStatus: preorder.status,
+                preorderPaymentStatus: preorder.payment_status,
+                depositAmount: toNumber(preorder.deposit_amount),
+                preorder: mapPreorderItem(preorder),
                 payment: {
-                    orderCode,
-                    status: String(paymentOrder.status || 'PENDING'),
+                    orderCode: paymentOrder.vnp_txn_ref,
+                    status: finalFromCurrent,
                     payosStatus: paymentOrder?.raw_ipn_payload?._verify?.lastPayosStatus || null,
                     skippedExternal: true,
                     cooldownSeconds: VERIFY_COOLDOWN_SECONDS,
@@ -1270,10 +1360,14 @@ async function verifyPreorderPayment(userId, preorderId, orderCodeRaw) {
     const payos = getPayOSClient();
     let info;
     try {
-        info = await getPayOSPaymentByOrderCode(payos, Number(orderCode));
+        const orderCodeNumber = Number(paymentOrder.vnp_txn_ref);
+        info = await getPayOSPaymentByOrderCode(
+            payos,
+            Number.isFinite(orderCodeNumber) ? orderCodeNumber : paymentOrder.vnp_txn_ref
+        );
     } catch (err) {
         throw Object.assign(
-            new Error(`Không thể xác minh trạng thái thanh toán: ${err?.message || 'PayOS error'}`),
+            new Error(`Khong the xac minh trang thai thanh toan: ${err?.message || 'PayOS error'}`),
             { statusCode: 502 }
         );
     }
@@ -1322,7 +1416,10 @@ async function verifyPreorderPayment(userId, preorderId, orderCodeRaw) {
         }
     });
 
-    const updated = await prisma.preorder.findUnique({
+    const latestOrder = await prisma.payment_orders.findUnique({ where: { id: paymentOrder.id } });
+    const finalOrderStatus = String(latestOrder?.status || nextStatus).toUpperCase();
+
+    preorder = await prisma.preorder.findUnique({
         where: { id: preorderId },
         include: {
             room: {
@@ -1336,12 +1433,28 @@ async function verifyPreorderPayment(userId, preorderId, orderCodeRaw) {
         },
     });
 
+    const isSuccess = finalOrderStatus === 'SUCCESS' && preorder?.payment_status === 'PAID';
+    const isCancelled = finalOrderStatus === 'CANCELLED' || finalOrderStatus === 'EXPIRED';
+
     return {
+        message: isSuccess
+            ? 'Thanh toan dat coc thanh cong'
+            : isCancelled
+                ? 'Thanh toan dat coc da bi huy hoac het han'
+                : 'Thanh toan dat coc dang cho xu ly',
         data: {
-            preorder: updated ? mapPreorderItem(updated) : null,
+            status: isSuccess ? 'success' : (isCancelled ? 'cancel' : 'pending'),
+            confirmed: isSuccess,
+            preorderId: preorder?.id || preorderId,
+            orderCode: latestOrder?.vnp_txn_ref || paymentOrder.vnp_txn_ref || orderCodeInput,
+            paymentOrderStatus: finalOrderStatus,
+            preorderStatus: preorder?.status || null,
+            preorderPaymentStatus: preorder?.payment_status || null,
+            depositAmount: toNumber(preorder?.deposit_amount),
+            preorder: preorder ? mapPreorderItem(preorder) : null,
             payment: {
-                orderCode,
-                status: nextStatus,
+                orderCode: latestOrder?.vnp_txn_ref || paymentOrder.vnp_txn_ref || orderCodeInput,
+                status: finalOrderStatus,
                 payosStatus: linkStatus || null,
                 skippedExternal: false,
                 cooldownSeconds: VERIFY_COOLDOWN_SECONDS,
@@ -1351,11 +1464,11 @@ async function verifyPreorderPayment(userId, preorderId, orderCodeRaw) {
 }
 
 module.exports = {
+    getMyPreorders,
     createDepositPayment,
     resumePayment,
     cancelUnpaidPreorder,
     verifyPreorderPayment,
-    getMyPreorders,
     handlePayOSWebhook,
     getLandlordRequests,
     confirmRequest,
