@@ -389,9 +389,50 @@ async function verifyVipPurchase(userId, orderCode) {
     };
 }
 
+async function getMyVipStatus(userId) {
+    if (!userId) throw Object.assign(new Error('Unauthorized'), { statusCode: 401 });
+
+    const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { isVip: true, vip_expires_at: true },
+    });
+
+    const purchases = await prisma.user_vip_purchases.findMany({
+        where: { user_id: userId },
+        orderBy: { start_date: 'desc' },
+        take: 10,
+        include: { vip_packages: { select: { name: true, duration_days: true, target_role: true } } },
+    });
+
+    const now = new Date();
+    const isActive = user?.isVip === true && user?.vip_expires_at && new Date(user.vip_expires_at) > now;
+    const daysRemaining = isActive
+        ? Math.ceil((new Date(user.vip_expires_at) - now) / (1000 * 60 * 60 * 24))
+        : 0;
+
+    return {
+        data: {
+            isVip: isActive === true,
+            vipExpiresAt: user?.vip_expires_at || null,
+            daysRemaining,
+            purchases: purchases.map((p) => ({
+                id: p.id,
+                packageName: p.vip_packages?.name || 'Gói VIP',
+                durationDays: p.vip_packages?.duration_days || 0,
+                targetRole: p.vip_packages?.target_role || null,
+                startDate: p.start_date,
+                endDate: p.end_date,
+                pricePaid: Number(p.price_paid),
+                createdAt: p.created_at,
+            })),
+        },
+    };
+}
+
 module.exports = {
     getVipPackages,
     createVipPurchase,
     verifyVipPurchase,
     activateVipFromPaymentOrder,
+    getMyVipStatus,
 };

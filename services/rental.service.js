@@ -1,9 +1,10 @@
 const prisma = require('../config/prisma');
 const supabase = require('../config/supabase');
 const cache = require('../utils/simple-cache');
-const { getLabelForDb } = require('../utils/room-type-mapper');
+const { getLabelForDb, ROOM_TYPE_LABELS } = require('../utils/room-type-mapper');
 const { validateCreateRental, validateUpdateRentalStatus } = require('../validators/rental.validator');
 const { expandCity, expandDistrict } = require('../data/legacy-location-map');
+const { publishPendingRoomsWhenRentalAvailable } = require('./sync-rental-rooms-on-approve');
 
 const ROOM_TYPES_CACHE_KEY = 'public:room-types';
 const placeholderImage = 'https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?w=800';
@@ -472,10 +473,16 @@ async function updateRentalStatus(rentalId, body) {
         throw Object.assign(new Error('Không tìm thấy bài đăng'), { statusCode: 404 });
     }
 
-    const updatedRental = await prisma.rental.update({
-        where: { id: rentalId },
-        data: { status },
-        include: { location: true },
+    const updatedRental = await prisma.$transaction(async (tx) => {
+        const rental = await tx.rental.update({
+            where: { id: rentalId },
+            data: { status },
+            include: { location: true },
+        });
+        if (status === 'AVAILABLE') {
+            await publishPendingRoomsWhenRentalAvailable(rentalId, tx);
+        }
+        return rental;
     });
 
     return {
@@ -647,7 +654,8 @@ async function getPublicRentals(params) {
     const skip = (pageNum - 1) * limitNum;
     const orderBy = getPublicRentalsOrderBy(sort);
 
-    const where = {};
+    /** Only show approved listings on public browse (aligned with /public/search). */
+    const where = { status: 'AVAILABLE' };
     const districtParam = district && String(district).trim();
     const cityParam = city && String(city).trim();
     if (districtParam || cityParam) {
@@ -723,17 +731,24 @@ async function getPublicRentals(params) {
 }
 
 async function getPublicRoomTypes() {
-    const cached = cache.get(ROOM_TYPES_CACHE_KEY);
-    if (cached) return { data: cached };
-    const rows = await prisma.rooms.findMany({
-        where: { rentals: { status: 'AVAILABLE' } },
-        select: { room_type: true },
-        distinct: ['room_type'],
-        orderBy: { room_type: 'asc' },
-    });
-    const data = rows.map((r) => getLabelForDb(r.room_type)).filter(Boolean);
-    cache.set(ROOM_TYPES_CACHE_KEY, data);
-    return { data };
+    const fallback = () => Object.values(ROOM_TYPE_LABELS);
+    try {
+        const cached = cache.get(ROOM_TYPES_CACHE_KEY);
+        if (cached) return { data: cached };
+        const rows = await prisma.rooms.findMany({
+            where: { rentals: { status: 'AVAILABLE' } },
+            select: { room_type: true },
+            distinct: ['room_type'],
+            orderBy: { room_type: 'asc' },
+        });
+        const data = rows.map((r) => getLabelForDb(r.room_type)).filter(Boolean);
+        const result = data.length > 0 ? data : fallback();
+        cache.set(ROOM_TYPES_CACHE_KEY, result);
+        return { data: result };
+    } catch (err) {
+        console.error('[getPublicRoomTypes]', err?.message || err);
+        return { data: fallback() };
+    }
 }
 
 async function getLandlordProfile(userId) {

@@ -55,10 +55,23 @@ async function getFavoriteIds(req, res) {
     }
 }
 
+async function getRoomWishersForLandlord(req, res) {
+    try {
+        const result = await favoriteService.getRoomWishersForLandlord(
+            req.auth.user.id,
+            req.params.roomId
+        );
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi lấy danh sách wishlist của phòng');
+    }
+}
+
 module.exports = {
     addFavorite,
     removeFavorite,
     getMyFavorites,
     getFavoriteIds,
+    getRoomWishersForLandlord,
     formatRoomForFavorite: favoriteService.formatRoomForFavorite,
 };

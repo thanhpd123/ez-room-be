@@ -9,6 +9,7 @@ const {
     logoutAll,
     forgotPassword,
     resetPassword,
+    changePassword,
     updateProfile,
     getLifestyle,
     upsertLifestyle,
@@ -43,13 +44,14 @@ router.get('/suggest-password', suggestPassword);
  *         application/json:
  *           schema:
  *             type: object
- *             required: [fullName, email, password, confirmPassword]
+ *             required: [fullName, email, password, confirmPassword, role]
  *             properties:
  *               fullName: { type: string }
  *               email: { type: string, format: email }
  *               phone: { type: string }
  *               password: { type: string }
  *               confirmPassword: { type: string }
+ *               role: { type: string, enum: [TENANT, LANDLORD] }
  *     responses:
  *       201:
  *         description: Đăng ký thành công
@@ -188,6 +190,12 @@ router.post('/reset-password', resetPassword);
  *         description: Đăng ký thành công
  */
 router.post('/register-oauth', registerOAuth);
+
+/**
+ * PATCH /auth/change-password
+ * Body: { currentPassword, newPassword, confirmNewPassword }
+ */
+router.patch('/change-password', verifyJWT, changePassword);
 
 /**
  * @openapi

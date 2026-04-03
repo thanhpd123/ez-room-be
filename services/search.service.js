@@ -5,6 +5,8 @@ const {
     expandDistrict,
     extractLocationTermsFromQuery,
 } = require('../data/legacy-location-map');
+const { getPopularityScoresForRooms } = require('./interaction.service');
+const { resolveAmenityIds } = require('../utils/resolve-amenity-ids');
 
 const placeholderImage = 'https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?w=800';
 const VIP_LANDLORD_SEARCH_BOOST = Number(process.env.VIP_LANDLORD_SEARCH_BOOST || 8);
@@ -103,9 +105,13 @@ function computeMatchScore(room, params, preference, avgRating) {
     if (params.city && city.toLowerCase().includes((params.city || '').toLowerCase())) score += 10;
     if (params.q) {
         const q = params.q.toLowerCase();
+        const roomName = (room.room_name || '').toLowerCase();
+        const roomDesc = (room.description || '').toLowerCase();
         if (
             title.toLowerCase().includes(q) ||
             desc.toLowerCase().includes(q) ||
+            roomName.includes(q) ||
+            roomDesc.includes(q) ||
             district.toLowerCase().includes(q) ||
             city.toLowerCase().includes(q) ||
             addr.toLowerCase().includes(q)
@@ -241,7 +247,10 @@ async function getPublicSearch(params, userId) {
         if (prefs) preference = prefs;
     }
 
-    const rentalAnd = [{ status: 'AVAILABLE' }];
+    searchParams.amenityIds = await resolveAmenityIds(searchParams.amenityIds);
+
+    /** Base rental filter: AVAILABLE + optional location (no text query here). */
+    const rentalBaseAnd = [{ status: 'AVAILABLE' }];
     if (searchParams.district || searchParams.city || searchParams.address) {
         const locConditions = [];
         if (searchParams.district) {
@@ -272,15 +281,18 @@ async function getPublicSearch(params, userId) {
             locConditions.push({
                 address: { contains: searchParams.address, mode: 'insensitive' },
             });
-        rentalAnd.push({
+        rentalBaseAnd.push({
             location: {
                 is:
                     locConditions.length === 1 ? locConditions[0] : { AND: locConditions },
             },
         });
     }
-    if (searchParams.q.length > 0) {
-        const textOr = [
+
+    const hasQ = searchParams.q.length > 0;
+    let textOr = [];
+    if (hasQ) {
+        textOr = [
             { title: { contains: searchParams.q, mode: 'insensitive' } },
             { description: { contains: searchParams.q, mode: 'insensitive' } },
             {
@@ -321,12 +333,40 @@ async function getPublicSearch(params, userId) {
                     },
                 },
             });
-        rentalAnd.push({ OR: textOr });
     }
-    const rentalWhere =
-        rentalAnd.length === 1 ? { status: 'AVAILABLE' } : { AND: rentalAnd };
 
-    const roomWhere = { rentals: rentalWhere };
+    let roomWhere;
+    if (hasQ) {
+        const rentalBaseWhere =
+            rentalBaseAnd.length === 1 ? rentalBaseAnd[0] : { AND: rentalBaseAnd };
+        roomWhere = {
+            status: { in: ['AVAILABLE', 'RENTED'] },
+            AND: [
+                { rentals: rentalBaseWhere },
+                {
+                    OR: [
+                        { rentals: { OR: textOr } },
+                        {
+                            room_name: {
+                                contains: searchParams.q,
+                                mode: 'insensitive',
+                            },
+                        },
+                        {
+                            description: {
+                                contains: searchParams.q,
+                                mode: 'insensitive',
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+    } else {
+        const rentalWhere =
+            rentalBaseAnd.length === 1 ? rentalBaseAnd[0] : { AND: rentalBaseAnd };
+        roomWhere = { status: { in: ['AVAILABLE', 'RENTED'] }, rentals: rentalWhere };
+    }
     if (
         (searchParams.minPrice != null && !Number.isNaN(searchParams.minPrice)) ||
         (searchParams.maxPrice != null && !Number.isNaN(searchParams.maxPrice))
@@ -518,21 +558,49 @@ async function getRecommend(userId) {
     });
 
     const roomIds = rooms.map((r) => r.id);
-    const ratingRows = await prisma.feedback.groupBy({
-        by: ['target_id'],
-        where: {
-            target_type: 'ROOM',
-            target_id: { in: roomIds },
-            rating: { not: null },
-        },
-        _avg: { rating: true },
-    });
+    const [ratingRows, popularityByRoom, similarUserFavorites] = await Promise.all([
+        prisma.feedback.groupBy({
+            by: ['target_id'],
+            where: {
+                target_type: 'ROOM',
+                target_id: { in: roomIds },
+                rating: { not: null },
+            },
+            _avg: { rating: true },
+        }),
+        getPopularityScoresForRooms(roomIds),
+        favoriteRoomIds.size > 0
+            ? prisma.favoriteRoom.findMany({
+                where: {
+                    roomId: { in: Array.from(favoriteRoomIds) },
+                    userId: { not: userId },
+                },
+                select: { userId: true },
+            })
+            : [],
+    ]);
     const ratingByRoom = Object.fromEntries(
         ratingRows.map((r) => [
             r.target_id,
             r._avg.rating != null ? Number(r._avg.rating) : null,
         ])
     );
+
+    const similarUserIds = [...new Set(similarUserFavorites.map((f) => f.userId))];
+    let collaborativeByRoom = {};
+    if (similarUserIds.length > 0) {
+        const favs = await prisma.favoriteRoom.findMany({
+            where: { userId: { in: similarUserIds }, roomId: { in: roomIds } },
+            select: { roomId: true },
+        });
+        for (const f of favs) {
+            collaborativeByRoom[f.roomId] = (collaborativeByRoom[f.roomId] || 0) + 1;
+        }
+        const maxCol = Math.max(1, ...Object.values(collaborativeByRoom));
+        for (const rid of Object.keys(collaborativeByRoom)) {
+            collaborativeByRoom[rid] = Math.min(100, Math.round((collaborativeByRoom[rid] / maxCol) * 100));
+        }
+    }
 
     const params = {
         q: '',
@@ -551,8 +619,12 @@ async function getRecommend(userId) {
         .filter((room) => !favoriteRoomIds.has(room.id))
         .map((room) => {
             const avgRating = ratingByRoom[room.id] ?? null;
-            let score = computeMatchScore(room, params, preference, avgRating);
-            score += computeSimilarToFavoritesBonus(room, favoriteRooms);
+            let contentScore = computeMatchScore(room, params, preference, avgRating);
+            contentScore += computeSimilarToFavoritesBonus(room, favoriteRooms);
+            const collaborativeScore = collaborativeByRoom[room.id] ?? 0;
+            const popularityScore = popularityByRoom[room.id] ?? 0;
+            const contentNorm = Math.min(100, contentScore);
+            const score = 0.4 * contentNorm + 0.4 * collaborativeScore + 0.2 * popularityScore;
             const rental = room.rentals;
             const loc = rental?.location;
             const roomImgs = (room.images || []).map((img) => img.imageUrl);

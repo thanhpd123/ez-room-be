@@ -26,10 +26,12 @@ async function check() {
     console.error('✗ Cannot reach database:', err.message || err);
     console.error('');
     console.error('Common causes:');
-    console.error('  1. Project paused → Supabase Dashboard → your project → click "Restore"');
-    console.error('  2. Port 5432 blocked → use pooler URL (port 6543) in DATABASE_URL');
-    console.error('  3. Wrong password → Project Settings → Database → reset if needed');
-    console.error('  4. Firewall/VPN blocking Supabase');
+    console.error('  1. Network blocks DB ports → try phone hotspot; FPT/school Wi‑Fi often blocks 5432/6543');
+    console.error('  2. Supabase project paused → Dashboard → Restore project');
+    console.error('  3. Wrong host/region → copy URI again from Settings → Database (Transaction pooler)');
+    console.error('  4. Try appending to DATABASE_URL: &sslmode=require (after ?pgbouncer=true use &sslmode=require)');
+    console.error('  5. Wrong password → reset in Supabase; URL‑encode special chars in the password');
+    console.error('  6. Test direct: set DATABASE_URL to DIRECT_URL temporarily (port 5432) from same PC');
     process.exit(1);
   } finally {
     await prisma.$disconnect();

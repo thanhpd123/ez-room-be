@@ -84,7 +84,7 @@ function createMockPrisma() {
         };
     }
 
-    return {
+    const mock = {
         user: modelMock(),
         wallet: modelMock(),
         walletTransaction: modelMock(),
@@ -105,9 +105,13 @@ function createMockPrisma() {
         userPreference: modelMock(),
         lifestyleProfile: modelMock(),
         preorder: modelMock(),
+        userRoomInteraction: modelMock(),
+        user_room_interactions: modelMock(),
         $executeRaw: async () => 1,
-        $transaction: async (fn) => fn(createMockPrisma()),
     };
+    /** Pass same client as `tx` so services using $transaction see the same mocks. */
+    mock.$transaction = async (fn) => fn(mock);
+    return mock;
 }
 
 /**

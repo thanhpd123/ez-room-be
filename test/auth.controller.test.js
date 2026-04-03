@@ -82,7 +82,7 @@ describe('Auth > register', () => {
     it('should register successfully', async () => {
         const ctrl = loadController();
         const req = mockReq({
-            body: { fullName: 'New User', email: 'new@example.com', password: 'Abc12345!', confirmPassword: 'Abc12345!' },
+            body: { fullName: 'New User', email: 'new@example.com', password: 'Abc12345!', confirmPassword: 'Abc12345!', role: 'TENANT' },
         });
         const res = mockRes();
         await ctrl.register(req, res);
@@ -104,7 +104,7 @@ describe('Auth > register', () => {
         mockPrisma.user.findUnique = async () => fakeUser;
         const ctrl = loadController();
         const req = mockReq({
-            body: { fullName: 'Dup', email: 'test@example.com', password: 'Abc12345!', confirmPassword: 'Abc12345!' },
+            body: { fullName: 'Dup', email: 'test@example.com', password: 'Abc12345!', confirmPassword: 'Abc12345!', role: 'TENANT' },
         });
         const res = mockRes();
         await ctrl.register(req, res);
@@ -116,7 +116,7 @@ describe('Auth > register', () => {
         mockPrisma.user.create = async () => { throw new Error('db fail'); };
         const ctrl = loadController();
         const req = mockReq({
-            body: { fullName: 'X', email: 'x@example.com', password: 'Abc12345!', confirmPassword: 'Abc12345!' },
+            body: { fullName: 'X', email: 'x@example.com', password: 'Abc12345!', confirmPassword: 'Abc12345!', role: 'TENANT' },
         });
         const res = mockRes();
         await ctrl.register(req, res);
@@ -247,7 +247,7 @@ describe('Auth > forgotPassword', () => {
         const req = mockReq({ body: {} });
         const res = mockRes();
         await ctrl.forgotPassword(req, res);
-        assert.equal(res._status, 500);
+        assert.equal(res._status, 400);
     });
 
     it('should return 500 on DB error', async () => {
@@ -344,7 +344,7 @@ describe('Auth > registerOAuth', () => {
 
     it('should register OAuth user successfully', async () => {
         const ctrl = loadController();
-        const req = mockReq({ body: { email: 'oauth@example.com', fullName: 'OAuth User' } });
+        const req = mockReq({ body: { email: 'oauth@example.com', fullName: 'OAuth User', role: 'TENANT' } });
         const res = mockRes();
         await ctrl.registerOAuth(req, res);
         assert.equal(res._status, 201);
@@ -354,7 +354,7 @@ describe('Auth > registerOAuth', () => {
     it('should return 409 when email already exists', async () => {
         mockPrisma.user.findUnique = async () => fakeUser;
         const ctrl = loadController();
-        const req = mockReq({ body: { email: 'test@example.com', fullName: 'Dup' } });
+        const req = mockReq({ body: { email: 'test@example.com', fullName: 'Dup', role: 'TENANT' } });
         const res = mockRes();
         await ctrl.registerOAuth(req, res);
         assert.equal(res._status, 409);
@@ -372,20 +372,20 @@ describe('Auth > registerOAuth', () => {
     it('should return 500 on DB error', async () => {
         mockPrisma.user.create = async () => { throw new Error('db fail'); };
         const ctrl = loadController();
-        const req = mockReq({ body: { email: 'new@example.com', fullName: 'Err' } });
+        const req = mockReq({ body: { email: 'new@example.com', fullName: 'Err', role: 'TENANT' } });
         const res = mockRes();
         await ctrl.registerOAuth(req, res);
         assert.equal(res._status, 500);
     });
 
-    it('should default role to TENANT', async () => {
+    it('should set role to LANDLORD when requested', async () => {
         let captured = null;
-        mockPrisma.user.create = async (args) => { captured = args; return fakeUser; };
+        mockPrisma.user.create = async (args) => { captured = args; return { ...fakeUser, role: 'LANDLORD' }; };
         const ctrl = loadController();
-        const req = mockReq({ body: { email: 'x@example.com', fullName: 'X' } });
+        const req = mockReq({ body: { email: 'x@example.com', fullName: 'X', role: 'LANDLORD' } });
         const res = mockRes();
         await ctrl.registerOAuth(req, res);
-        assert.equal(captured.data.role, 'TENANT');
+        assert.equal(captured.data.role, 'LANDLORD');
     });
 });
 

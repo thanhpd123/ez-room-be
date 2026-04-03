@@ -1,4 +1,7 @@
 const authService = require('../services/auth.service');
+const prisma = require('../config/prisma');
+const bcrypt = require('bcryptjs');
+const { validateChangePassword } = require('../validators/auth.validator');
 
 const REFRESH_TOKEN_COOKIE = process.env.REFRESH_TOKEN_COOKIE_NAME || 'ezroom_refresh_token';
 const COOKIE_SECURE = process.env.NODE_ENV === 'production';
@@ -149,10 +152,8 @@ async function forgotPassword(req, res) {
             message: result.message,
         });
     } catch (err) {
-        return res.status(500).json({
-            success: false,
-            message: 'Đã xảy ra lỗi. Vui lòng thử lại sau.',
-        });
+        console.error('[forgotPassword]', err?.message || err);
+        return handleError(err, res, 'Đã xảy ra lỗi. Vui lòng thử lại sau.');
     }
 }
 
@@ -234,6 +235,60 @@ async function upsertPreference(req, res) {
     }
 }
 
+async function changePassword(req, res) {
+    try {
+        const userId = req.auth?.user?.id;
+        if (!userId) {
+            return res.status(401).json({ success: false, message: 'Chưa đăng nhập' });
+        }
+
+        const { valid, errors } = validateChangePassword(req.body);
+        if (!valid) {
+            return res.status(400).json({ success: false, message: 'Dữ liệu không hợp lệ', errors });
+        }
+
+        const { currentPassword, newPassword } = req.body;
+
+        const user = await prisma.user.findUnique({
+            where: { id: userId },
+            select: { id: true, password_hash: true },
+        });
+
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
+        }
+
+        if (!user.password_hash) {
+            return res.status(400).json({
+                success: false,
+                message: 'Tài khoản đăng nhập bằng Google không thể đổi mật khẩu tại đây.',
+            });
+        }
+
+        const isMatch = await bcrypt.compare(currentPassword, user.password_hash);
+        if (!isMatch) {
+            return res.status(400).json({ success: false, message: 'Mật khẩu hiện tại không đúng' });
+        }
+
+        const salt = await bcrypt.genSalt(10);
+        const password_hash = await bcrypt.hash(newPassword, salt);
+
+        await prisma.user.update({
+            where: { id: userId },
+            data: { password_hash },
+        });
+
+        return res.json({ success: true, message: 'Đổi mật khẩu thành công' });
+    } catch (err) {
+        console.error('Change password error:', err);
+        return res.status(500).json({
+            success: false,
+            message: 'Đổi mật khẩu thất bại',
+            error: err.message,
+        });
+    }
+}
+
 function suggestPassword(req, res) {
     try {
         const result = authService.suggestPassword();
@@ -252,6 +307,7 @@ module.exports = {
     logoutAll,
     forgotPassword,
     resetPassword,
+    changePassword,
     updateProfile,
     getLifestyle,
     upsertLifestyle,
