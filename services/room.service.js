@@ -157,14 +157,13 @@ async function createRoom(userId, body, authUser = null) {
                 roomAmenities: { include: { amenity: true } },
             },
         });
-        await tx.moderation_queue.create({
-            data: {
-                target_type: 'ROOM',
-                target_id: created.id,
-                priority: vipLandlord ? 'HIGH' : 'NORMAL',
-                category: 'NEW_LISTING',
-                source: 'SYSTEM',
-            },
+        const moderatorService = require('./moderator.service');
+        await moderatorService.autoAssignNewTask(tx, {
+            target_type: 'ROOM',
+            target_id: created.id,
+            priority: vipLandlord ? 'HIGH' : 'NORMAL',
+            category: 'NEW_LISTING',
+            source: 'SYSTEM',
         });
         return created;
     });
@@ -375,14 +374,13 @@ async function updateRoom(roomId, userId, body) {
 
         // Resubmit hoặc edit bài đã duyệt: tạo mục mới trong moderation queue
         if (needsModeration) {
-            await tx.moderation_queue.create({
-                data: {
-                    target_type: 'ROOM',
-                    target_id: roomId,
-                    priority: 'NORMAL',
-                    category: 'NEW_LISTING',
-                    source: 'SYSTEM',
-                },
+            const moderatorService = require('./moderator.service');
+            await moderatorService.autoAssignNewTask(tx, {
+                target_type: 'ROOM',
+                target_id: roomId,
+                priority: 'NORMAL',
+                category: 'NEW_LISTING',
+                source: 'SYSTEM',
             });
         }
 

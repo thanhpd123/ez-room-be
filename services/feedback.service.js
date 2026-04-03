@@ -86,14 +86,13 @@ async function createFeedback(userId, body) {
                     updated_at: new Date(),
                 },
             });
-            await tx.moderation_queue.create({
-                data: {
-                    target_type: 'FEEDBACK',
-                    target_id: updated.id,
-                    priority: 'NORMAL',
-                    category: 'FEEDBACK_REVIEW',
-                    source: 'SYSTEM',
-                },
+            const moderatorService = require('./moderator.service');
+            await moderatorService.autoAssignNewTask(tx, {
+                target_type: 'FEEDBACK',
+                target_id: updated.id,
+                priority: 'NORMAL',
+                category: 'FEEDBACK_REVIEW',
+                source: 'SYSTEM',
             });
             return updated;
         });
@@ -114,14 +113,13 @@ async function createFeedback(userId, body) {
                     status: 'PENDING',
                 },
             });
-            await tx.moderation_queue.create({
-                data: {
-                    target_type: 'FEEDBACK',
-                    target_id: created.id,
-                    priority: 'NORMAL',
-                    category: 'FEEDBACK_REVIEW',
-                    source: 'SYSTEM',
-                },
+            const moderatorService = require('./moderator.service');
+            await moderatorService.autoAssignNewTask(tx, {
+                target_type: 'FEEDBACK',
+                target_id: created.id,
+                priority: 'NORMAL',
+                category: 'FEEDBACK_REVIEW',
+                source: 'SYSTEM',
             });
             return created;
         });
