@@ -1708,7 +1708,8 @@ async function cancelPendingPaymentOrder(input, adminId) {
             },
             data: {
                 status: 'CANCELLED',
-                vnp_response_code: 'ADMIN_CANCELLED',
+                // payment_orders.vnp_response_code is varchar(10)
+                vnp_response_code: 'ADM_CANCEL',
                 updated_at: new Date(),
             },
         });
