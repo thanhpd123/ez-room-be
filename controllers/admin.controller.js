@@ -215,6 +215,51 @@ async function getFinanceReconciliation(req, res) {
     }
 }
 
+async function getPendingPaymentOrders(req, res) {
+    try {
+        const result = await adminService.getPendingPaymentOrders({
+            page: parseInt(req.query.page, 10) || 1,
+            limit: parseInt(req.query.limit, 10) || 20,
+            purpose: req.query.purpose,
+            search: req.query.search,
+            sortBy: req.query.sortBy,
+            order: req.query.order,
+            createdAfter: req.query.createdAfter,
+            createdBefore: req.query.createdBefore,
+        });
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi lấy danh sách đơn pending');
+    }
+}
+
+async function cancelPendingPaymentOrder(req, res) {
+    try {
+        const result = await adminService.cancelPendingPaymentOrder(
+            {
+                source: req.params.source,
+                itemId: req.params.itemId,
+                reason: req.body?.reason,
+            },
+            req.auth.user.id
+        );
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi hủy đơn pending');
+    }
+}
+
+async function runPreorderReconciliationNow(req, res) {
+    try {
+        const result = await adminService.runPreorderReconciliationNow({
+            batchSize: parseInt(req.body?.batchSize, 10) || parseInt(req.query.batchSize, 10) || undefined,
+        });
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi chạy reconcile thủ công');
+    }
+}
+
 async function getModeratorKpis(req, res) {
     try {
         const result = await adminService.getModeratorKpis({
@@ -323,6 +368,9 @@ module.exports = {
     updateSystemSettings,
     getFinanceSummary,
     getFinanceReconciliation,
+    getPendingPaymentOrders,
+    cancelPendingPaymentOrder,
+    runPreorderReconciliationNow,
     getModeratorKpis,
     getVipPackages,
     getVipPackageById,

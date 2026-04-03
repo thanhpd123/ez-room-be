@@ -1,4 +1,5 @@
 const prisma = require('../config/prisma');
+const { reconcilePreorderPayoutsOnce } = require('./preorder-reconciliation.service');
 
 const VALID_ROLES = ['ADMIN', 'LANDLORD', 'TENANT', 'GUEST', 'MODERATOR'];
 const VALID_STATUSES = ['ACTIVE', 'INACTIVE', 'SUSPENDED', 'BANNED'];
@@ -132,6 +133,37 @@ function getWithdrawPriority(amount, waitingHours) {
     return amount >= WITHDRAW_PRIORITY_AMOUNT_THRESHOLD || waitingHours > WITHDRAW_PRIORITY_WAITING_HOURS
         ? 'HIGH'
         : 'NORMAL';
+}
+
+function normalizePendingPurpose(purpose) {
+    const raw = String(purpose || 'ALL').trim().toUpperCase();
+    const allowed = new Set(['ALL', 'PREORDER_DEPOSIT', 'WALLET_TOPUP', 'VIP_PURCHASE', 'WITHDRAWAL']);
+    if (!allowed.has(raw)) {
+        throw Object.assign(new Error('purpose không hợp lệ'), { statusCode: 400 });
+    }
+    return raw;
+}
+
+function getAgingBucket(waitingHours) {
+    if (waitingHours < 0.5) return 'LT_30M';
+    if (waitingHours < 2) return 'FROM_30M_TO_2H';
+    if (waitingHours < 24) return 'FROM_2H_TO_24H';
+    return 'GE_24H';
+}
+
+function normalizePendingSource(source) {
+    const raw = String(source || '').trim().toUpperCase();
+    const allowed = new Set(['PAYMENT_ORDER', 'WALLET_TRANSACTION']);
+    if (!allowed.has(raw)) {
+        throw Object.assign(new Error('source không hợp lệ'), { statusCode: 400 });
+    }
+    return raw;
+}
+
+function normalizeAdminActionReason(reason, fallback) {
+    const raw = typeof reason === 'string' ? reason.trim() : '';
+    if (!raw) return fallback;
+    return raw.slice(0, 180);
 }
 
 function isUuid(value) {
@@ -1416,6 +1448,333 @@ async function getFinanceReconciliation(params) {
     };
 }
 
+async function getPendingPaymentOrders(params) {
+    const page = toPositiveInt(params?.page, 1, 1, 5000);
+    const limit = toPositiveInt(params?.limit, 20, 1, 200);
+    const purpose = normalizePendingPurpose(params?.purpose);
+    const sortBy = String(params?.sortBy || 'createdAt').trim();
+    const order = String(params?.order || 'desc').trim().toLowerCase() === 'asc' ? 'asc' : 'desc';
+    const search = String(params?.search || '').trim().toLowerCase();
+
+    const createdAfter = parseDateInput(params?.createdAfter);
+    const createdBefore = parseDateInput(params?.createdBefore);
+    if (params?.createdAfter && !createdAfter) {
+        throw Object.assign(new Error('createdAfter không hợp lệ'), { statusCode: 400 });
+    }
+    if (params?.createdBefore && !createdBefore) {
+        throw Object.assign(new Error('createdBefore không hợp lệ'), { statusCode: 400 });
+    }
+    if (createdAfter && createdBefore && createdAfter >= createdBefore) {
+        throw Object.assign(new Error('Khoảng thời gian createdAfter/createdBefore không hợp lệ'), {
+            statusCode: 400,
+        });
+    }
+
+    const createdFilter = {};
+    if (createdAfter) createdFilter.gte = createdAfter;
+    if (createdBefore) createdFilter.lt = createdBefore;
+    const hasCreatedFilter = Object.keys(createdFilter).length > 0;
+
+    const includePaymentOrders = ['ALL', 'PREORDER_DEPOSIT', 'WALLET_TOPUP', 'VIP_PURCHASE'].includes(purpose);
+    const includeWithdrawals = ['ALL', 'WITHDRAWAL'].includes(purpose);
+
+    const [paymentOrders, withdrawTransactions] = await Promise.all([
+        includePaymentOrders
+            ? prisma.payment_orders.findMany({
+                where: {
+                    status: 'PENDING',
+                    ...(purpose === 'ALL' ? {} : { purpose }),
+                    ...(hasCreatedFilter ? { created_at: createdFilter } : {}),
+                },
+                select: {
+                    id: true,
+                    user_id: true,
+                    vnp_txn_ref: true,
+                    amount: true,
+                    purpose: true,
+                    status: true,
+                    ref_type: true,
+                    ref_id: true,
+                    created_at: true,
+                    users_payment_orders_user_idTousers: {
+                        select: {
+                            id: true,
+                            fullName: true,
+                            email: true,
+                            phone: true,
+                        },
+                    },
+                },
+            })
+            : Promise.resolve([]),
+        includeWithdrawals
+            ? prisma.walletTransaction.findMany({
+                where: {
+                    transaction_type: 'WITHDRAW',
+                    status: 'PENDING',
+                    ...(hasCreatedFilter ? { createdAt: createdFilter } : {}),
+                },
+                select: {
+                    id: true,
+                    walletId: true,
+                    amount: true,
+                    status: true,
+                    transaction_type: true,
+                    description: true,
+                    createdAt: true,
+                    wallet: {
+                        select: {
+                            id: true,
+                            user: {
+                                select: {
+                                    id: true,
+                                    fullName: true,
+                                    email: true,
+                                    phone: true,
+                                },
+                            },
+                        },
+                    },
+                },
+            })
+            : Promise.resolve([]),
+    ]);
+
+    const mappedPaymentOrders = paymentOrders.map((item) => {
+        const createdAt = item.created_at || null;
+        const waitingHours = getWaitingHours(createdAt || new Date());
+        return {
+            id: item.id,
+            source: 'PAYMENT_ORDER',
+            purpose: item.purpose,
+            status: item.status || 'PENDING',
+            amount: Number(item.amount || 0),
+            createdAt,
+            waitingHours,
+            agingBucket: getAgingBucket(waitingHours),
+            orderCode: item.vnp_txn_ref,
+            refType: item.ref_type || null,
+            refId: item.ref_id || null,
+            walletId: null,
+            description: null,
+            user: {
+                id: item.users_payment_orders_user_idTousers?.id || item.user_id,
+                fullName: item.users_payment_orders_user_idTousers?.fullName || null,
+                email: item.users_payment_orders_user_idTousers?.email || null,
+                phone: item.users_payment_orders_user_idTousers?.phone || null,
+            },
+        };
+    });
+
+    const mappedWithdrawals = withdrawTransactions.map((item) => {
+        const createdAt = item.createdAt || null;
+        const waitingHours = getWaitingHours(createdAt || new Date());
+        return {
+            id: item.id,
+            source: 'WALLET_TRANSACTION',
+            purpose: 'WITHDRAWAL',
+            status: item.status || 'PENDING',
+            amount: Number(item.amount || 0),
+            createdAt,
+            waitingHours,
+            agingBucket: getAgingBucket(waitingHours),
+            orderCode: null,
+            refType: null,
+            refId: null,
+            walletId: item.walletId,
+            description: item.description || null,
+            user: {
+                id: item.wallet?.user?.id || null,
+                fullName: item.wallet?.user?.fullName || null,
+                email: item.wallet?.user?.email || null,
+                phone: item.wallet?.user?.phone || null,
+            },
+        };
+    });
+
+    const allItems = [...mappedPaymentOrders, ...mappedWithdrawals].filter((item) => {
+        if (!search) return true;
+        const haystack = [
+            item.id,
+            item.orderCode,
+            item.user?.fullName,
+            item.user?.email,
+            item.user?.phone,
+            item.refId,
+            item.walletId,
+        ]
+            .filter(Boolean)
+            .join(' ')
+            .toLowerCase();
+        return haystack.includes(search);
+    });
+
+    const sortedItems = allItems.sort((a, b) => {
+        if (sortBy === 'amount') {
+            return order === 'asc' ? a.amount - b.amount : b.amount - a.amount;
+        }
+        const aTime = new Date(a.createdAt || 0).getTime();
+        const bTime = new Date(b.createdAt || 0).getTime();
+        return order === 'asc' ? aTime - bTime : bTime - aTime;
+    });
+
+    const summary = sortedItems.reduce(
+        (acc, item) => {
+            acc.totalAmount += Number(item.amount || 0);
+            acc.byPurpose[item.purpose] = {
+                count: (acc.byPurpose[item.purpose]?.count || 0) + 1,
+                amount: Number((acc.byPurpose[item.purpose]?.amount || 0) + Number(item.amount || 0)),
+            };
+            acc.byAgingBucket[item.agingBucket] = (acc.byAgingBucket[item.agingBucket] || 0) + 1;
+            return acc;
+        },
+        {
+            totalAmount: 0,
+            byPurpose: {},
+            byAgingBucket: {},
+        }
+    );
+
+    const total = sortedItems.length;
+    const start = (page - 1) * limit;
+    const data = sortedItems.slice(start, start + limit);
+
+    return {
+        data: {
+            filters: {
+                purpose,
+                search: params?.search || null,
+                sortBy,
+                order,
+                createdAfter: createdAfter ? createdAfter.toISOString() : null,
+                createdBefore: createdBefore ? createdBefore.toISOString() : null,
+            },
+            summary: {
+                total,
+                totalAmount: Number(summary.totalAmount || 0),
+                byPurpose: summary.byPurpose,
+                byAgingBucket: summary.byAgingBucket,
+            },
+            items: data,
+        },
+        pagination: {
+            page,
+            limit,
+            total,
+            totalPages: Math.ceil(total / limit),
+        },
+    };
+}
+
+async function cancelPendingPaymentOrder(input, adminId) {
+    const source = normalizePendingSource(input?.source);
+    const itemId = String(input?.itemId || '').trim();
+    if (!isUuid(itemId)) {
+        throw Object.assign(new Error('itemId không hợp lệ'), { statusCode: 400 });
+    }
+
+    if (source === 'WALLET_TRANSACTION') {
+        const result = await rejectWalletWithdrawal(
+            itemId,
+            adminId,
+            { reason: normalizeAdminActionReason(input?.reason, 'ADMIN_CANCELLED_PENDING_ORDER') }
+        );
+        return {
+            message: 'Đã hủy đơn pending rút ví',
+            data: {
+                source,
+                itemId,
+                result,
+            },
+        };
+    }
+
+    const reason = normalizeAdminActionReason(input?.reason, 'ADMIN_CANCELLED_PENDING_ORDER');
+
+    const result = await prisma.$transaction(async (tx) => {
+        const order = await tx.payment_orders.findUnique({ where: { id: itemId } });
+        if (!order) {
+            throw Object.assign(new Error('Không tìm thấy payment order'), { statusCode: 404 });
+        }
+
+        if (order.status !== 'PENDING') {
+            throw Object.assign(new Error(`Đơn đã được xử lý (${order.status})`), { statusCode: 409 });
+        }
+
+        const updated = await tx.payment_orders.updateMany({
+            where: {
+                id: itemId,
+                status: 'PENDING',
+            },
+            data: {
+                status: 'CANCELLED',
+                vnp_response_code: 'ADMIN_CANCELLED',
+                updated_at: new Date(),
+            },
+        });
+
+        if (updated.count === 0) {
+            throw Object.assign(new Error('Đơn pending đã được xử lý trước đó'), { statusCode: 409 });
+        }
+
+        if (order.purpose === 'PREORDER_DEPOSIT' && order.ref_type === 'PREORDER' && order.ref_id) {
+            await tx.preorder.updateMany({
+                where: {
+                    id: order.ref_id,
+                    status: 'PENDING',
+                    payment_status: 'UNPAID',
+                },
+                data: {
+                    status: 'CANCELLED',
+                    cancel_reason: reason,
+                },
+            });
+        }
+
+        await tx.notification.create({
+            data: {
+                userId: order.user_id,
+                type: 'PAYMENT',
+                status: 'UNREAD',
+                title: 'Đơn thanh toán đã bị hủy bởi Admin',
+                body: `Đơn ${order.vnp_txn_ref} đã bị hủy. Lý do: ${reason}`,
+            },
+        });
+
+        const latest = await tx.payment_orders.findUnique({ where: { id: itemId } });
+        return {
+            order: latest,
+            reason,
+        };
+    });
+
+    return {
+        message: 'Đã hủy đơn pending thanh toán',
+        data: {
+            source,
+            itemId,
+            reason: result.reason,
+            order: result.order,
+        },
+    };
+}
+
+async function runPreorderReconciliationNow(params) {
+    const batchSize = toPositiveInt(params?.batchSize, 100, 1, 500);
+    const summary = await reconcilePreorderPayoutsOnce({
+        batchSize,
+        logger: console,
+    });
+
+    return {
+        message: 'Đã chạy reconcile preorder payouts',
+        data: {
+            batchSize,
+            summary,
+        },
+    };
+}
+
 async function getModeratorKpis(params) {
     const { from, to } = resolveDateRange(params);
     const rangeFilter = { gte: from, lt: to };
@@ -1973,6 +2332,9 @@ module.exports = {
     updateSystemSettings,
     getFinanceSummary,
     getFinanceReconciliation,
+    getPendingPaymentOrders,
+    cancelPendingPaymentOrder,
+    runPreorderReconciliationNow,
     getModeratorKpis,
     getVipPackages,
     getVipPackageById,
