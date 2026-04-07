@@ -36,14 +36,13 @@ async function createReport(reporterId, body) {
                 description: description || null,
             },
         });
-        await tx.moderation_queue.create({
-            data: {
-                target_type: 'REPORT',
-                target_id: created.id,
-                priority: 'NORMAL',
-                category: 'REPORTED_CONTENT',
-                source: 'USER_REPORT',
-            },
+        const moderatorService = require('./moderator.service');
+        await moderatorService.autoAssignNewTask(tx, {
+            target_type: 'REPORT',
+            target_id: created.id,
+            priority: 'NORMAL',
+            category: 'REPORTED_CONTENT',
+            source: 'USER_REPORT',
         });
         return created;
     });
