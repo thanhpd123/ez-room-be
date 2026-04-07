@@ -4,6 +4,7 @@ const multer = require('multer');
 const { verifyJWT } = require('../middleware/auth');
 const cloudinary = require('../config/cloudinary');
 const supabase = require('../config/supabase');
+const { isSupabaseConfigured } = require('../config/supabase-helpers');
 
 const router = express.Router();
 
@@ -61,18 +62,28 @@ router.post('/image', verifyJWT, upload.single('file'), (req, res) => {
             resource_type: 'image',
         },
         (err, result) => {
-            if (err) {
-                console.error('Cloudinary upload error:', err);
-                return res.status(500).json({
-                    success: false,
-                    message: 'Tải ảnh lên thất bại',
-                    error: err.message,
+            try {
+                if (err) {
+                    console.error('Cloudinary upload error:', err);
+                    return res.status(500).json({
+                        success: false,
+                        message: 'Tải ảnh lên thất bại',
+                        error: err.message,
+                    });
+                }
+                res.json({
+                    success: true,
+                    url: result.secure_url,
                 });
+            } catch (callbackErr) {
+                console.error('Cloudinary callback error:', callbackErr);
+                if (!res.headersSent) {
+                    res.status(500).json({
+                        success: false,
+                        message: 'Lỗi xử lý kết quả tải ảnh',
+                    });
+                }
             }
-            res.json({
-                success: true,
-                url: result.secure_url,
-            });
         }
     );
 
@@ -103,6 +114,12 @@ router.post('/image', verifyJWT, upload.single('file'), (req, res) => {
  */
 router.post('/rental-image', verifyJWT, upload.single('file'), async (req, res) => {
     try {
+        if (!isSupabaseConfigured() || !supabase) {
+            return res.status(503).json({
+                success: false,
+                message: 'Chưa cấu hình Supabase Storage. Thêm SUPABASE_URL và SUPABASE_SERVICE_ROLE_KEY vào .env',
+            });
+        }
         if (!req.file || !req.file.buffer) {
             return res.status(400).json({
                 success: false,

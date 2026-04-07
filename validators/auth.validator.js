@@ -1,5 +1,3 @@
-const ALLOWED_ROLES = ['TENANT', 'LANDLORD'];
-
 /**
  * Validate password strength: 8+ chars, at least 1 uppercase, 1 number, 1 special char.
  * Returns array of error messages (empty if valid).
@@ -27,7 +25,7 @@ function validatePasswordStrength(password) {
 
 /**
  * Validate register input
- * Fields: fullName, email, phone (optional), password, confirmPassword, role (optional: TENANT | LANDLORD)
+ * Fields: fullName, email, phone (optional), password, confirmPassword
  */
 function validateRegister(body) {
     const errors = [];
@@ -70,11 +68,12 @@ function validateRegister(body) {
         errors.push('Xác nhận mật khẩu không khớp');
     }
 
-    // role: optional, must be TENANT or LANDLORD
-    if (role !== undefined && role !== null && role !== '') {
-        if (!ALLOWED_ROLES.includes(String(role).toUpperCase())) {
-            errors.push('Vai trò phải là Người thuê (TENANT) hoặc Chủ nhà (LANDLORD)');
-        }
+    // role: required, TENANT|LANDLORD
+    const normalizedRole = typeof role === 'string' ? role.trim().toUpperCase() : '';
+    if (!normalizedRole) {
+        errors.push('Vai trò là bắt buộc');
+    } else if (!['TENANT', 'LANDLORD'].includes(normalizedRole)) {
+        errors.push('Vai trò không hợp lệ');
     }
 
     return { valid: errors.length === 0, errors };
@@ -82,11 +81,11 @@ function validateRegister(body) {
 
 /**
  * Validate register-oauth (complete signup after Google OAuth)
- * Fields: email, fullName, role (TENANT | LANDLORD), phone (optional)
+ * Fields: email, fullName, phone (optional)
  */
 function validateRegisterOAuth(body) {
     const errors = [];
-    const { email, fullName, role, phone } = body || {};
+    const { email, fullName, phone, role } = body || {};
     if (!email || typeof email !== 'string' || !email.trim()) {
         errors.push('Email là bắt buộc');
     } else {
@@ -98,12 +97,15 @@ function validateRegisterOAuth(body) {
     } else if (fullName.trim().length > 100) {
         errors.push('Họ và tên không được quá 100 ký tự');
     }
-    if (!role || !ALLOWED_ROLES.includes(String(role).toUpperCase())) {
-        errors.push('Vai trò phải là Người thuê (TENANT) hoặc Chủ nhà (LANDLORD)');
-    }
     if (phone !== undefined && phone !== null && phone !== '') {
         const phoneRegex = /^[0-9]{10,20}$/;
         if (!phoneRegex.test(String(phone).trim())) errors.push('Số điện thoại phải từ 10 đến 20 chữ số');
+    }
+    const normalizedRole = typeof role === 'string' ? role.trim().toUpperCase() : '';
+    if (!normalizedRole) {
+        errors.push('Vai trò là bắt buộc');
+    } else if (!['TENANT', 'LANDLORD'].includes(normalizedRole)) {
+        errors.push('Vai trò không hợp lệ');
     }
     return { valid: errors.length === 0, errors };
 }
@@ -164,6 +166,28 @@ function validateResetPassword(body) {
 }
 
 /**
+ * Validate change-password input. Fields: currentPassword, newPassword, confirmNewPassword
+ */
+function validateChangePassword(body) {
+    const errors = [];
+    const { currentPassword, newPassword, confirmNewPassword } = body || {};
+    if (!currentPassword || typeof currentPassword !== 'string' || !currentPassword.trim()) {
+        errors.push('Mật khẩu hiện tại là bắt buộc');
+    }
+    const newPasswordErrors = validatePasswordStrength(newPassword);
+    if (newPasswordErrors.length > 0) {
+        errors.push(...newPasswordErrors);
+    }
+    if (newPassword !== confirmNewPassword) {
+        errors.push('Xác nhận mật khẩu mới không khớp');
+    }
+    if (currentPassword && newPassword && currentPassword === newPassword) {
+        errors.push('Mật khẩu mới phải khác mật khẩu hiện tại');
+    }
+    return { valid: errors.length === 0, errors };
+}
+
+/**
  * Validate refresh token payload. Field: refreshToken
  */
 function validateRefreshToken(body) {
@@ -183,6 +207,7 @@ module.exports = {
     validateLogin,
     validateForgotPassword,
     validateResetPassword,
+    validateChangePassword,
     validateRefreshToken,
     validatePasswordStrength,
 };

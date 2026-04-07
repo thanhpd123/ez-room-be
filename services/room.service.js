@@ -197,14 +197,13 @@ async function createRoom(userId, body, authUser = null) {
                 roomAmenities: { include: { amenity: true } },
             },
         });
-        await tx.moderation_queue.create({
-            data: {
-                target_type: 'ROOM',
-                target_id: created.id,
-                priority: vipLandlord ? 'HIGH' : 'NORMAL',
-                category: 'NEW_LISTING',
-                source: 'SYSTEM',
-            },
+        const moderatorService = require('./moderator.service');
+        await moderatorService.autoAssignNewTask(tx, {
+            target_type: 'ROOM',
+            target_id: created.id,
+            priority: vipLandlord ? 'HIGH' : 'NORMAL',
+            category: 'NEW_LISTING',
+            source: 'SYSTEM',
         });
         return created;
     });
@@ -213,7 +212,17 @@ async function createRoom(userId, body, authUser = null) {
 }
 
 async function getRooms(params) {
-    const { rentalId, rental_id, roomType, minPrice, maxPrice, page = 1, limit = 20 } = params;
+    const {
+        rentalId,
+        rental_id,
+        roomType,
+        minPrice,
+        maxPrice,
+        status,
+        includeAllStatuses,
+        page = 1,
+        limit = 20,
+    } = params;
     const pageNum = Math.max(1, parseInt(page));
     const pageSize = Math.min(100, Math.max(1, parseInt(limit)));
     const skip = (pageNum - 1) * pageSize;
@@ -222,6 +231,15 @@ async function getRooms(params) {
     const filterRentalId = rentalId || rental_id;
     if (filterRentalId) where.rental_id = filterRentalId;
     if (roomType) where.room_type = mapFeToDb(roomType);
+    const includeAll = String(includeAllStatuses || '').toLowerCase() === 'true';
+    if (status) {
+        const normalized = String(status).toUpperCase();
+        if (['PENDING', 'AVAILABLE', 'RENTED', 'MAINTENANCE'].includes(normalized)) {
+            where.status = normalized;
+        }
+    } else if (!includeAll) {
+        where.status = { in: ['AVAILABLE', 'RENTED'] };
+    }
     if (minPrice || maxPrice) {
         where.price = {};
         if (minPrice) where.price.gte = parseFloat(minPrice);
@@ -299,17 +317,6 @@ async function getRoomById(roomId, userId = null) {
         where: { id: roomId },
         data: { search_count: { increment: 1 } },
     }).catch(err => console.error('Error incrementing search_count:', err));
-
-    // Track per-user VIEW interaction (used for area-based roommate ranking)
-    if (userId) {
-        prisma.user_room_interactions.create({
-            data: {
-                user_id: userId,
-                room_id: roomId,
-                interaction_type: 'VIEW',
-            },
-        }).catch(err => console.error('Error tracking room view:', err));
-    }
 
     return {
         data: {
@@ -409,14 +416,13 @@ async function updateRoom(roomId, userId, body) {
 
         // Resubmit hoặc edit bài đã duyệt: tạo mục mới trong moderation queue
         if (needsModeration) {
-            await tx.moderation_queue.create({
-                data: {
-                    target_type: 'ROOM',
-                    target_id: roomId,
-                    priority: 'NORMAL',
-                    category: 'NEW_LISTING',
-                    source: 'SYSTEM',
-                },
+            const moderatorService = require('./moderator.service');
+            await moderatorService.autoAssignNewTask(tx, {
+                target_type: 'ROOM',
+                target_id: roomId,
+                priority: 'NORMAL',
+                category: 'NEW_LISTING',
+                source: 'SYSTEM',
             });
         }
 
@@ -653,8 +659,16 @@ async function createRentalContract(roomId, userId, body) {
         );
     }
 
-    if (room.status === 'RENTED') {
-        throw Object.assign(new Error('Phòng đã được thuê'), { statusCode: 400 });
+    if (room.status === 'MAINTENANCE' || room.status === 'PENDING') {
+        throw Object.assign(new Error('Phòng chưa sẵn sàng để cho thuê'), { statusCode: 400 });
+    }
+
+    const activeContractsCount = await prisma.roomRentalPeriod.count({
+        where: { roomId, status: 'ACTIVE' },
+    });
+
+    if (activeContractsCount >= (room.max_people || 1)) {
+        throw Object.assign(new Error(`Phòng đã đạt số người ở tối đa (${room.max_people} người)`), { statusCode: 400 });
     }
 
     const tenant = await prisma.user.findUnique({
@@ -706,10 +720,13 @@ async function createRentalContract(roomId, userId, body) {
             },
         });
 
-        await tx.rooms.update({
-            where: { id: roomId },
-            data: { status: 'RENTED' },
-        });
+        const newCount = activeContractsCount + 1;
+        if (newCount >= (room.max_people || 1)) {
+            await tx.rooms.update({
+                where: { id: roomId },
+                data: { status: 'RENTED' },
+            });
+        }
 
         const roomTitle = room.room_name || room.rentals?.title || 'Phòng trọ';
         await tx.notification.create({
@@ -818,6 +835,46 @@ async function getMyBookings(userId) {
         periods.forEach((p, i) => {
             const rid = p.room?.rentals?.id;
             if (rid) bookings[i].landlordName = landlordMap.get(rid) || 'Chủ nhà';
+        });
+    }
+
+    // Fetch roommates: other active tenants in the same rooms
+    const roomIds = [...new Set(periods.map((p) => p.room?.id).filter(Boolean))];
+    if (roomIds.length > 0) {
+        const otherPeriods = await prisma.roomRentalPeriod.findMany({
+            where: {
+                roomId: { in: roomIds },
+                status: 'ACTIVE',
+                userId: { not: userId },
+            },
+            include: {
+                tenant: {
+                    select: {
+                        id: true,
+                        fullName: true,
+                        email: true,
+                        phone: true,
+                        avatarUrl: true,
+                    },
+                },
+            },
+        });
+        // Group roommates by roomId
+        const roommatesByRoom = new Map();
+        for (const op of otherPeriods) {
+            const list = roommatesByRoom.get(op.roomId) || [];
+            list.push({
+                id: op.tenant.id,
+                fullName: op.tenant.fullName,
+                email: op.tenant.email || null,
+                phone: op.tenant.phone || null,
+                avatarUrl: op.tenant.avatarUrl || null,
+            });
+            roommatesByRoom.set(op.roomId, list);
+        }
+        // Attach to bookings
+        bookings.forEach((b, i) => {
+            b.roommates = roommatesByRoom.get(b.roomId) || [];
         });
     }
 

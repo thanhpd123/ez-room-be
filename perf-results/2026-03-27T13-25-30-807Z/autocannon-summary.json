@@ -1,0 +1,47 @@
+[
+  {
+    "name": "public-rentals-smoke",
+    "requestsAverage": 14.43,
+    "requestsP99": 25,
+    "latencyAverageMs": 693.62,
+    "latencyP95Ms": 0,
+    "latencyP99Ms": 2010,
+    "throughputAverageBps": 65982.85,
+    "throughputAverageKbps": 64.436376953125,
+    "errorRate": 0.1864406779661017,
+    "totalRequests": 649,
+    "totalErrors": 0,
+    "non2xx": 121,
+    "durationSeconds": 45.3
+  },
+  {
+    "name": "public-search-smoke",
+    "requestsAverage": 5.58,
+    "requestsP99": 10,
+    "latencyAverageMs": 1782.4,
+    "latencyP95Ms": 0,
+    "latencyP99Ms": 3082,
+    "throughputAverageBps": 40830.2,
+    "throughputAverageKbps": 39.8732421875,
+    "errorRate": 0.00796812749003984,
+    "totalRequests": 251,
+    "totalErrors": 0,
+    "non2xx": 2,
+    "durationSeconds": 45.4
+  },
+  {
+    "name": "rooms-list-smoke",
+    "requestsAverage": 11,
+    "requestsP99": 15,
+    "latencyAverageMs": 904.9,
+    "latencyP95Ms": 0,
+    "latencyP99Ms": 2130,
+    "throughputAverageBps": 154572.27,
+    "throughputAverageKbps": 150.949482421875,
+    "errorRate": 0.01818181818181818,
+    "totalRequests": 495,
+    "totalErrors": 0,
+    "non2xx": 9,
+    "durationSeconds": 45.33
+  }
+]

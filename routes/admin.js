@@ -18,7 +18,16 @@ const {
     updateSystemSettings,
     getFinanceSummary,
     getFinanceReconciliation,
+    getPendingPaymentOrders,
+    cancelPendingPaymentOrder,
+    runPreorderReconciliationNow,
     getModeratorKpis,
+    getVipPackages,
+    getVipPackageById,
+    createVipPackage,
+    updateVipPackage,
+    getVipPurchases,
+    refundVipPurchase,
 } = require('../controllers/admin.controller');
 
 const router = express.Router();
@@ -119,6 +128,93 @@ router.get('/finance/summary', getFinanceSummary);
  *         description: Reconciliation report
  */
 router.get('/finance/reconciliation', getFinanceReconciliation);
+
+/**
+ * @openapi
+ * /admin/finance/pending-orders:
+ *   get:
+ *     tags: [Admin]
+ *     summary: Danh sách đơn thanh toán đang chờ xử lý (đa loại)
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, default: 1 }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 20 }
+ *       - in: query
+ *         name: purpose
+ *         schema: { type: string, enum: [ALL, PREORDER_DEPOSIT, WALLET_TOPUP, VIP_PURCHASE, WITHDRAWAL] }
+ *       - in: query
+ *         name: search
+ *         schema: { type: string }
+ *       - in: query
+ *         name: sortBy
+ *         schema: { type: string, enum: [createdAt, amount] }
+ *       - in: query
+ *         name: order
+ *         schema: { type: string, enum: [asc, desc] }
+ *       - in: query
+ *         name: createdAfter
+ *         schema: { type: string }
+ *       - in: query
+ *         name: createdBefore
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Pending orders list
+ */
+router.get('/finance/pending-orders', getPendingPaymentOrders);
+
+/**
+ * @openapi
+ * /admin/finance/pending-orders/{source}/{itemId}/cancel:
+ *   patch:
+ *     tags: [Admin]
+ *     summary: Hủy một đơn pending theo source
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: source
+ *         required: true
+ *         schema: { type: string, enum: [PAYMENT_ORDER, WALLET_TRANSACTION] }
+ *       - in: path
+ *         name: itemId
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               reason: { type: string }
+ *     responses:
+ *       200:
+ *         description: Cancel thành công
+ */
+router.patch('/finance/pending-orders/:source/:itemId/cancel', cancelPendingPaymentOrder);
+
+/**
+ * @openapi
+ * /admin/finance/reconciliation/run:
+ *   post:
+ *     tags: [Admin]
+ *     summary: Trigger reconcile preorder payouts thủ công
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               batchSize: { type: integer, default: 100 }
+ *     responses:
+ *       200:
+ *         description: Reconcile completed
+ */
+router.post('/finance/reconciliation/run', runPreorderReconciliationNow);
 
 /**
  * @openapi
@@ -442,5 +538,65 @@ router.patch('/wallets/withdrawals/batch-approve', approveWalletWithdrawalsBatch
  *         description: Kết quả từ chối hàng loạt
  */
 router.patch('/wallets/withdrawals/batch-reject', rejectWalletWithdrawalsBatch);
+
+/**
+ * @openapi
+ * /admin/vip/packages:
+ *   get:
+ *     tags: [Admin]
+ *     summary: Danh sách gói VIP (bao gồm active/inactive)
+ *     security: [{ bearerAuth: [] }]
+ */
+router.get('/vip/packages', getVipPackages);
+
+/**
+ * @openapi
+ * /admin/vip/packages/{packageId}:
+ *   get:
+ *     tags: [Admin]
+ *     summary: Chi tiết gói VIP + thống kê cơ bản
+ *     security: [{ bearerAuth: [] }]
+ */
+router.get('/vip/packages/:packageId', getVipPackageById);
+
+/**
+ * @openapi
+ * /admin/vip/packages:
+ *   post:
+ *     tags: [Admin]
+ *     summary: Tạo gói VIP mới
+ *     security: [{ bearerAuth: [] }]
+ */
+router.post('/vip/packages', createVipPackage);
+
+/**
+ * @openapi
+ * /admin/vip/packages/{packageId}:
+ *   patch:
+ *     tags: [Admin]
+ *     summary: Cập nhật gói VIP
+ *     security: [{ bearerAuth: [] }]
+ */
+router.patch('/vip/packages/:packageId', updateVipPackage);
+
+/**
+ * @openapi
+ * /admin/vip/purchases:
+ *   get:
+ *     tags: [Admin]
+ *     summary: Lịch sử mua VIP theo payment orders
+ *     security: [{ bearerAuth: [] }]
+ */
+router.get('/vip/purchases', getVipPurchases);
+
+/**
+ * @openapi
+ * /admin/vip/purchases/{orderId}/refund:
+ *   patch:
+ *     tags: [Admin]
+ *     summary: Hoàn tiền giao dịch VIP
+ *     security: [{ bearerAuth: [] }]
+ */
+router.patch('/vip/purchases/:orderId/refund', refundVipPurchase);
 
 module.exports = router;

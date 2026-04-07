@@ -31,6 +31,8 @@ async function getRooms(req, res) {
             roomType: req.query.roomType,
             minPrice: req.query.minPrice,
             maxPrice: req.query.maxPrice,
+            status: req.query.status,
+            includeAllStatuses: req.query.includeAllStatuses,
             page: req.query.page,
             limit: req.query.limit,
         });

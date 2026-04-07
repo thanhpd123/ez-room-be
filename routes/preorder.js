@@ -3,6 +3,9 @@ const { verifyJWT, requireRole } = require('../middleware/auth');
 const {
     getMyPreorders,
     createDepositPayment,
+    resumePayment,
+    cancelUnpaidPreorder,
+    verifyPreorderPayment,
     handlePayOSWebhook,
     getLandlordRequests,
     confirmRequest,
@@ -10,6 +13,43 @@ const {
 } = require('../controllers/preorder.controller');
 
 const router = express.Router();
+const verifyPaymentRateBuckets = new Map();
+
+function verifyPaymentRateLimit(req, res, next) {
+    const windowMs = 60 * 1000;
+    const maxRequests = Math.max(5, Number(process.env.PREORDER_VERIFY_RATE_LIMIT_MAX || 8));
+    const userId = req?.auth?.user?.id || 'anonymous';
+    const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+    const key = `${userId}:${ip}`;
+    const now = Date.now();
+    const bucket = verifyPaymentRateBuckets.get(key) || { count: 0, windowStart: now };
+
+    if (now - bucket.windowStart >= windowMs) {
+        bucket.count = 0;
+        bucket.windowStart = now;
+    }
+
+    bucket.count += 1;
+    verifyPaymentRateBuckets.set(key, bucket);
+
+    if (bucket.count > maxRequests) {
+        return res.status(429).json({
+            success: false,
+            message: `Bạn thao tác quá nhanh. Vui lòng thử lại sau khoảng 1 phút.`,
+        });
+    }
+
+    // Lightweight cleanup to avoid unbounded growth in long-running process.
+    if (verifyPaymentRateBuckets.size > 5000) {
+        for (const [bucketKey, value] of verifyPaymentRateBuckets.entries()) {
+            if (now - value.windowStart > windowMs * 2) {
+                verifyPaymentRateBuckets.delete(bucketKey);
+            }
+        }
+    }
+
+    return next();
+}
 
 /**
  * @openapi
@@ -38,6 +78,32 @@ router.get('/mine', verifyJWT, requireRole('TENANT'), getMyPreorders);
 
 /**
  * @openapi
+ * /preorders/{preorderId}/resume-payment:
+ *   get:
+ *     tags: [Preorders]
+ *     summary: Tenant lấy lại link thanh toán cho preorder chưa thanh toán
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: preorderId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Trả về checkout URL
+ */
+router.get('/:preorderId/resume-payment', verifyJWT, requireRole('TENANT'), resumePayment);
+router.patch('/:preorderId/cancel', verifyJWT, requireRole('TENANT'), cancelUnpaidPreorder);
+router.get(
+    '/:preorderId/verify-payment',
+    verifyJWT,
+    requireRole('TENANT'),
+    verifyPaymentRateLimit,
+    verifyPreorderPayment
+);
+
+/**
+ * @openapi
  * /preorders/deposit/pay:
  *   post:
  *     tags: [Preorders]
@@ -62,6 +128,28 @@ router.get('/mine', verifyJWT, requireRole('TENANT'), getMyPreorders);
  *         description: Tạo link thành công
  */
 router.post('/deposit/pay', verifyJWT, requireRole('TENANT'), createDepositPayment);
+
+/**
+ * @openapi
+ * /preorders/verify-payment:
+ *   get:
+ *     tags: [Preorders]
+ *     summary: Tenant xác minh trạng thái thanh toán preorder từ return URL PayOS
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: query
+ *         name: orderCode
+ *         required: false
+ *         schema: { type: string }
+ *       - in: query
+ *         name: preorderId
+ *         required: false
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Kết quả xác minh
+ */
+router.get('/verify-payment', verifyJWT, requireRole('TENANT'), verifyPreorderPayment);
 
 /**
  * @openapi

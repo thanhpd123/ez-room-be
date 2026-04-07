@@ -161,6 +161,7 @@ async function getModerationQueue(req, res) {
             priority: req.query.priority,
             category: req.query.category,
             assignedTo: req.query.assignedTo,
+            sortBy: req.query.sortBy,
         });
         return res.json({ success: true, ...result });
     } catch (err) {
@@ -184,6 +185,15 @@ async function releaseQueueItem(req, res) {
         return res.json({ success: true, ...result });
     } catch (err) {
         return handleError(err, res, 'Lỗi khi release task');
+    }
+}
+
+async function distributeTasks(req, res) {
+    try {
+        const result = await moderatorService.distributeTasks(req.auth?.user?.id);
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi chia đều task');
     }
 }
 
@@ -284,6 +294,15 @@ async function getRejectionInfo(req, res) {
     }
 }
 
+async function getOverview(req, res) {
+    try {
+        const result = await moderatorService.getOverview();
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi lấy tổng quan kiểm duyệt');
+    }
+}
+
 module.exports = {
     getAllUsers,
     getUserById,
@@ -307,4 +326,6 @@ module.exports = {
     getQueueStatusForTarget,
     getModeratorList,
     getRejectionInfo,
+    getOverview,
+    distributeTasks,
 };
