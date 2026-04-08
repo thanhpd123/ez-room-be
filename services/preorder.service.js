@@ -7,6 +7,7 @@ const PREORDER_DEFAULT_DEPOSIT_PERCENT = Number(process.env.PREORDER_DEFAULT_DEP
 const PREORDER_MIN_DEPOSIT_PERCENT = Number(process.env.PREORDER_MIN_DEPOSIT_PERCENT || 5);
 const PREORDER_MAX_DEPOSIT_PERCENT = Number(process.env.PREORDER_MAX_DEPOSIT_PERCENT || 80);
 const PREORDER_DEPOSIT_PERCENT_BASE_MONTHS = Number(process.env.PREORDER_DEPOSIT_PERCENT_BASE_MONTHS || 12);
+const NEARLY_AVAILABLE_DAYS = Math.max(1, Number(process.env.NEARLY_AVAILABLE_DAYS || 7));
 
 const SYSTEM_SETTING_PREORDER_DEPOSIT_KEY = 'preorder.deposit';
 const SYSTEM_SETTING_PLATFORM_COMMISSION_KEY = 'platform.commission';
@@ -265,14 +266,36 @@ async function createDepositPayment(userId, body) {
 
     const room = await prisma.rooms.findUnique({
         where: { id: roomId },
-        include: { rentals: { select: { owner_id: true, title: true } } },
+        include: {
+            rentals: { select: { owner_id: true, title: true } },
+            rentalPeriods: {
+                where: { status: 'ACTIVE' },
+                select: { endDate: true },
+                orderBy: { endDate: 'asc' },
+                take: 1,
+            },
+        },
     });
 
     if (!room) {
         throw Object.assign(new Error('PhÃ²ng khÃ´ng tá»“n táº¡i'), { statusCode: 404 });
     }
 
-    if (room.status !== 'AVAILABLE') {
+    const nearestEndDate = room.rentalPeriods?.[0]?.endDate
+        ? new Date(room.rentalPeriods[0].endDate)
+        : null;
+    const daysUntilAvailable = nearestEndDate
+        ? Math.ceil((nearestEndDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+        : null;
+    const isNearlyAvailable =
+        room.status === 'RENTED' &&
+        nearestEndDate &&
+        daysUntilAvailable != null &&
+        daysUntilAvailable >= 0 &&
+        daysUntilAvailable <= NEARLY_AVAILABLE_DAYS;
+
+    const canPreorder = room.status === 'AVAILABLE' || Boolean(isNearlyAvailable);
+    if (!canPreorder) {
         throw Object.assign(new Error('PhÃ²ng hiá»‡n khÃ´ng kháº£ dá»¥ng Ä‘á»ƒ Ä‘áº·t cá»c'), { statusCode: 400 });
     }
 
@@ -417,12 +440,17 @@ async function createDepositPayment(userId, body) {
         });
 
         return {
-            message: 'Táº¡o link thanh toÃ¡n Ä‘áº·t cá»c thÃ nh cÃ´ng',
+            message: isNearlyAvailable
+                ? 'Táº¡o link thanh toÃ¡n Ä‘áº·t cá»c thÃ nh cÃ´ng (phÃ²ng sáº¯p trá»‘ng)'
+                : 'Táº¡o link thanh toÃ¡n Ä‘áº·t cá»c thÃ nh cÃ´ng',
             data: {
                 preorderId: created.preorder.id,
                 roomId,
                 depositAmount,
                 depositPercent,
+                isNearlyAvailable: Boolean(isNearlyAvailable),
+                availableFrom: nearestEndDate ? nearestEndDate.toISOString() : null,
+                daysUntilAvailable,
                 ...(depositMonths != null ? { depositMonths } : {}),
                 payment: {
                     provider: 'PAYOS',

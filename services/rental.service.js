@@ -1095,9 +1095,16 @@ async function deleteRental(rentalId, userId) {
  * Get landlord dashboard statistics
  */
 async function getLandlordDashboardStats(landlordId) {
+    const nearlyAvailableDays = Math.max(1, Number(process.env.NEARLY_AVAILABLE_DAYS || 7));
+    const now = new Date();
+    const thresholdDate = new Date(now);
+    thresholdDate.setDate(thresholdDate.getDate() + nearlyAvailableDays);
+
     const [
         totalRentals,
         totalRooms,
+        roomsByStatus,
+        nearlyAvailableRoomPeriods,
         rentalsByStatus,
         wallet,
         totalFeedback,
@@ -1111,6 +1118,33 @@ async function getLandlordDashboardStats(landlordId) {
         // Tổng số phòng trọ
         prisma.rooms.count({
             where: { rentals: { owner_id: landlordId } },
+        }),
+
+        // Trạng thái phòng trọ
+        prisma.rooms.groupBy({
+            by: ['status'],
+            where: { rentals: { owner_id: landlordId } },
+            _count: { id: true },
+        }),
+
+        // Phòng sắp trống (đang RENTED, có kỳ thuê ACTIVE và endDate trong N ngày tới)
+        prisma.roomRentalPeriod.findMany({
+            where: {
+                status: 'ACTIVE',
+                endDate: {
+                    gte: now,
+                    lte: thresholdDate,
+                },
+                room: {
+                    status: 'RENTED',
+                    rentals: {
+                        owner_id: landlordId,
+                    },
+                },
+            },
+            select: {
+                roomId: true,
+            },
         }),
         
         // Trạng thái nhà trọ
@@ -1180,6 +1214,23 @@ async function getLandlordDashboardStats(landlordId) {
         }
     });
 
+    const roomStatusMap = {
+        PENDING: 0,
+        AVAILABLE: 0,
+        RENTED: 0,
+        MAINTENANCE: 0,
+    };
+
+    roomsByStatus.forEach((item) => {
+        if (roomStatusMap.hasOwnProperty(item.status)) {
+            roomStatusMap[item.status] = item._count.id;
+        }
+    });
+
+    roomStatusMap.NEARLY_AVAILABLE = new Set(
+        nearlyAvailableRoomPeriods.map((item) => item.roomId)
+    ).size;
+
     // Format preorder status data
     const preorderStatusMap = {
         PENDING: 0,
@@ -1202,6 +1253,7 @@ async function getLandlordDashboardStats(landlordId) {
             },
             rooms: {
                 total: totalRooms,
+                byStatus: roomStatusMap,
             },
             wallet: {
                 balance: wallet ? Number(wallet.balance) : 0,
