@@ -1,4 +1,4 @@
-﻿const prisma = require('../config/prisma');
+const prisma = require('../config/prisma');
 const { getPayOSClient } = require('../config/payos');
 const vipService = require('./vip.service');
 
@@ -158,6 +158,10 @@ function generateOrderCode() {
     return Number(`${Date.now()}${Math.floor(Math.random() * 90) + 10}`);
 }
 
+function resolveRequestSourceType(preorder) {
+    return preorder?.cancel_reason === 'AUTO_FROM_FAVORITE' ? 'FAVORITE' : 'PREORDER';
+}
+
 function mapPreorderItem(p) {
     return {
         id: p.id,
@@ -169,6 +173,7 @@ function mapPreorderItem(p) {
         refundStatus: p.refund_status,
         createdAt: p.createdAt,
         cancelReason: p.cancel_reason || null,
+        sourceType: resolveRequestSourceType(p),
         user: p.user || null,
         room: p.room
             ? {
@@ -346,35 +351,81 @@ async function createDepositPayment(userId, body) {
         });
     }
 
-    const existing = await prisma.preorder.findFirst({
-        where: {
-            userId,
-            roomId,
-            status: { in: ['PENDING', 'CONFIRMED'] },
-            payment_status: { in: ['UNPAID', 'PAID'] },
-        },
-    });
-
-    if (existing) {
-        throw Object.assign(new Error('Báº¡n Ä‘Ã£ cÃ³ yÃªu cáº§u Ä‘áº·t cá»c Ä‘ang hoáº¡t Ä‘á»™ng cho phÃ²ng nÃ y'), {
-            statusCode: 409,
-        });
-    }
-
     const payos = getPayOSClient();
     const orderCode = generateOrderCode();
 
     const created = await prisma.$transaction(async (tx) => {
-        const preorder = await tx.preorder.create({
-            data: {
+        const depositLockKey = `${userId}:${roomId}`;
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${depositLockKey}))`;
+
+        const existing = await tx.preorder.findFirst({
+            where: {
                 userId,
                 roomId,
-                status: 'PENDING',
-                payment_status: 'UNPAID',
-                deposit_amount: depositAmount,
-                refund_status: 'NOT_APPLICABLE',
+                status: { in: ['PENDING', 'CONFIRMED'] },
+                payment_status: { in: ['UNPAID', 'PAID'] },
             },
         });
+
+        const canReuseFavoritePlaceholder = Boolean(
+            existing
+            && existing.status === 'PENDING'
+            && existing.payment_status === 'UNPAID'
+            && (
+                toNumber(existing.deposit_amount) <= 0
+                || existing.cancel_reason === 'AUTO_FROM_FAVORITE'
+            )
+        );
+
+        if (existing && !canReuseFavoritePlaceholder) {
+            throw Object.assign(new Error('Bạn đã có yêu cầu đặt cọc đang hoạt động cho phòng này'), {
+                statusCode: 409,
+            });
+        }
+
+        const roomNow = await tx.rooms.findUnique({
+            where: { id: roomId },
+            select: {
+                id: true,
+                status: true,
+                rentals: { select: { owner_id: true } },
+            },
+        });
+
+        if (!roomNow || roomNow.status !== 'AVAILABLE') {
+            throw Object.assign(new Error('Phòng hiện không khả dụng để đặt cọc'), {
+                statusCode: 400,
+            });
+        }
+
+        if (roomNow.rentals?.owner_id === userId) {
+            throw Object.assign(new Error('Không thể tự đặt cọc phòng của chính bạn'), {
+                statusCode: 400,
+            });
+        }
+
+        const preorder = canReuseFavoritePlaceholder
+            ? await tx.preorder.update({
+                where: { id: existing.id },
+                data: {
+                    status: 'PENDING',
+                    payment_status: 'UNPAID',
+                    deposit_amount: depositAmount,
+                    refund_status: 'NOT_APPLICABLE',
+                    // Keep origin marker so landlord can identify favorite-origin requests.
+                    cancel_reason: existing.cancel_reason || 'AUTO_FROM_FAVORITE',
+                },
+            })
+            : await tx.preorder.create({
+                data: {
+                    userId,
+                    roomId,
+                    status: 'PENDING',
+                    payment_status: 'UNPAID',
+                    deposit_amount: depositAmount,
+                    refund_status: 'NOT_APPLICABLE',
+                },
+            });
 
         const paymentOrder = await tx.payment_orders.create({
             data: {
@@ -727,8 +778,62 @@ async function getLandlordRequests(landlordId, params) {
         take: parseInt(limit),
     });
 
+    const favoritePairs = preorders
+        .filter((p) => resolveRequestSourceType(p) === 'FAVORITE')
+        .map((p) => ({ userId: p.userId, roomId: p.roomId }));
+
+    const activeFavoriteKeySet = new Set();
+    if (favoritePairs.length > 0) {
+        const favoriteRows = await prisma.favoriteRoom.findMany({
+            where: {
+                OR: favoritePairs.map((pair) => ({
+                    userId: pair.userId,
+                    roomId: pair.roomId,
+                })),
+            },
+            select: { userId: true, roomId: true },
+        });
+        for (const row of favoriteRows) {
+            activeFavoriteKeySet.add(`${row.userId}:${row.roomId}`);
+        }
+    }
+
+    const filtered = preorders.filter((p) => {
+        if (resolveRequestSourceType(p) !== 'FAVORITE') return true;
+
+        // Keep favorite-origin request visible when user still favorites the room
+        // or once they already started/finished deposit flow.
+        const key = `${p.userId}:${p.roomId}`;
+        const stillFavorited = activeFavoriteKeySet.has(key);
+        const hasDepositIntent = toNumber(p.deposit_amount) > 0 || p.payment_status === 'PAID';
+        return stillFavorited || hasDepositIntent;
+    });
+
+    const statusPriority = {
+        PENDING: 0,
+        CONFIRMED: 1,
+        EXPIRED: 2,
+        CANCELLED: 3,
+    };
+
+    const prioritized = [...filtered].sort((a, b) => {
+        const aStatusRank = statusPriority[a.status] ?? 99;
+        const bStatusRank = statusPriority[b.status] ?? 99;
+        if (aStatusRank !== bStatusRank) {
+            return aStatusRank - bStatusRank;
+        }
+
+        const aHasPreorderIntent = toNumber(a.deposit_amount) > 0 || a.payment_status === 'PAID';
+        const bHasPreorderIntent = toNumber(b.deposit_amount) > 0 || b.payment_status === 'PAID';
+        if (aHasPreorderIntent !== bHasPreorderIntent) {
+            return aHasPreorderIntent ? -1 : 1;
+        }
+
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    });
+
     return {
-        data: preorders.map(mapPreorderItem),
+        data: prioritized.map(mapPreorderItem),
     };
 }
 
@@ -804,80 +909,71 @@ async function confirmRequest(preorderId, landlordId) {
             throw Object.assign(new Error('Chá»‰ cÃ³ thá»ƒ xÃ¡c nháº­n yÃªu cáº§u Ä‘ang chá»'), { statusCode: 400 });
         }
 
-        if (preorder.payment_status !== 'PAID') {
-            throw Object.assign(new Error('Chá»‰ cÃ³ thá»ƒ xÃ¡c nháº­n yÃªu cáº§u Ä‘Ã£ thanh toÃ¡n Ä‘áº·t cá»c'), {
-                statusCode: 400,
-            });
-        }
+        const hasPaidDeposit = preorder.payment_status === 'PAID' && grossDepositAmount > 0;
+        if (hasPaidDeposit) {
+            const landlordWallet = await ensureWallet(landlordId, tx);
 
-        if (grossDepositAmount <= 0) {
-            throw Object.assign(new Error('KhÃ´ng tÃ¬m tháº¥y tiá»n cá»c há»£p lá»‡ Ä‘á»ƒ chuyá»ƒn cho chá»§ trá»'), {
-                statusCode: 400,
-            });
-        }
-
-        const landlordWallet = await ensureWallet(landlordId, tx);
-
-        const existingPayoutTxn = await tx.walletTransaction.findFirst({
-            where: {
-                walletId: landlordWallet.id,
-                transaction_type: 'PREORDER',
-                status: 'SUCCESS',
-                ref_type: 'PREORDER_PAYOUT',
-                ref_id: preorder.id,
-            },
-            select: { id: true },
-        });
-
-        if (!existingPayoutTxn) {
-            await tx.wallet.update({
-                where: { id: landlordWallet.id },
-                data: { balance: { increment: computed.payoutAmount } },
-            });
-
-            await tx.walletTransaction.create({
-                data: {
+            const existingPayoutTxn = await tx.walletTransaction.findFirst({
+                where: {
                     walletId: landlordWallet.id,
                     transaction_type: 'PREORDER',
                     status: 'SUCCESS',
-                    amount: computed.payoutAmount,
-                    description: `Nháº­n tiá»n Ä‘áº·t cá»c preorder ${preorder.id} (phÃ­ ${computed.feeAmount.toLocaleString('vi-VN')} VND)`,
                     ref_type: 'PREORDER_PAYOUT',
                     ref_id: preorder.id,
                 },
+                select: { id: true },
             });
 
-            if (computed.feeAmount > 0) {
-                const existingFee = await tx.platformLedgerEntry.findFirst({
-                    where: {
-                        entry_type: 'PREORDER_FEE',
-                        ref_type: 'PREORDER',
+            if (!existingPayoutTxn) {
+                await tx.wallet.update({
+                    where: { id: landlordWallet.id },
+                    data: { balance: { increment: computed.payoutAmount } },
+                });
+
+                await tx.walletTransaction.create({
+                    data: {
+                        walletId: landlordWallet.id,
+                        transaction_type: 'PREORDER',
+                        status: 'SUCCESS',
+                        amount: computed.payoutAmount,
+                        description: `Nháº­n tiá»n Ä‘áº·t cá»c preorder ${preorder.id} (phÃ­ ${computed.feeAmount.toLocaleString('vi-VN')} VND)`,
+                        ref_type: 'PREORDER_PAYOUT',
                         ref_id: preorder.id,
                     },
-                    select: { id: true },
                 });
-                if (!existingFee) {
-                    await tx.platformLedgerEntry.create({
-                        data: {
+
+                if (computed.feeAmount > 0) {
+                    const existingFee = await tx.platformLedgerEntry.findFirst({
+                        where: {
                             entry_type: 'PREORDER_FEE',
-                            amount: computed.feeAmount,
                             ref_type: 'PREORDER',
                             ref_id: preorder.id,
-                            created_by: landlordId,
                         },
+                        select: { id: true },
                     });
+                    if (!existingFee) {
+                        await tx.platformLedgerEntry.create({
+                            data: {
+                                entry_type: 'PREORDER_FEE',
+                                amount: computed.feeAmount,
+                                ref_type: 'PREORDER',
+                                ref_id: preorder.id,
+                                created_by: landlordId,
+                            },
+                        });
+                    }
                 }
-            }
 
-            await tx.notification.create({
-                data: {
-                    userId: landlordId,
-                    type: 'PAYMENT',
-                    status: 'UNREAD',
-                    title: 'Báº¡n nháº­n Ä‘Æ°á»£c tiá»n Ä‘áº·t cá»c',
-                    body: `VÃ­ cá»§a báº¡n Ä‘Ã£ Ä‘Æ°á»£c cá»™ng ${computed.payoutAmount.toLocaleString('vi-VN')} VND tá»« yÃªu cáº§u thuÃª ${preorder.id}.`,
-                },
-            });
+                await tx.notification.create({
+                    data: {
+                        userId: landlordId,
+                        type: 'PAYMENT',
+                        status: 'UNREAD',
+                        title: 'Báº¡n nháº­n Ä‘Æ°á»£c tiá»n Ä‘áº·t cá»c',
+                        body: `VÃ­ cá»§a báº¡n Ä‘Ã£ Ä‘Æ°á»£c cá»™ng ${computed.payoutAmount.toLocaleString('vi-VN')} VND tá»« yÃªu cáº§u thuÃª ${preorder.id}.`,
+                    },
+                });
+            }
         }
 
         const confirmed = await tx.preorder.update({
@@ -885,10 +981,10 @@ async function confirmRequest(preorderId, landlordId) {
             data: {
                 status: 'CONFIRMED',
                 refund_status: 'NOT_APPLICABLE',
-                commission_rate_bps: computed.feeBps,
-                platform_fee_amount: computed.feeAmount,
-                landlord_payout_amount: computed.payoutAmount,
-                payout_at: new Date(),
+                commission_rate_bps: hasPaidDeposit ? computed.feeBps : 0,
+                platform_fee_amount: hasPaidDeposit ? computed.feeAmount : 0,
+                landlord_payout_amount: hasPaidDeposit ? computed.payoutAmount : 0,
+                payout_at: hasPaidDeposit ? new Date() : null,
             },
         });
 

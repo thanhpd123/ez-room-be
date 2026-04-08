@@ -145,6 +145,18 @@ async function getMyBookings(req, res) {
     }
 }
 
+async function getLandlordPeerForRentalPeriod(req, res) {
+    try {
+        const result = await roomService.getLandlordPeerForRentalPeriod(
+            req.params.rentalPeriodId,
+            req.auth.user.id
+        );
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi lấy thông tin chủ nhà của kỳ thuê');
+    }
+}
+
 async function completeRentalPeriod(req, res) {
     try {
         const result = await roomService.completeRentalPeriod(
@@ -170,5 +182,6 @@ module.exports = {
     createRentalContract,
     completeRentalPeriod,
     getMyBookings,
+    getLandlordPeerForRentalPeriod,
     getRoomByIdForSearchRoomate,
 };

@@ -123,8 +123,17 @@ function computeMatchScore(room, params, preference, avgRating) {
     if (preference) {
         const budgetMin = preference.budget_min != null ? Number(preference.budget_min) : null;
         const budgetMax = preference.budget_max != null ? Number(preference.budget_max) : null;
-        if (budgetMin != null && price >= budgetMin) score += 8;
-        if (budgetMax != null && price <= budgetMax) score += 8;
+        if (budgetMin != null || budgetMax != null) {
+            const withinMin = budgetMin == null || price >= budgetMin;
+            const withinMax = budgetMax == null || price <= budgetMax;
+            if (withinMin && withinMax) {
+                score += 16;
+            } else if (!withinMin) {
+                score -= 6;
+            } else {
+                score -= 6;
+            }
+        }
         const prefsDistricts = Array.isArray(preference.preferred_districts)
             ? preference.preferred_districts
             : [];
@@ -198,8 +207,14 @@ function computeSimilarToFavoritesBonus(room, favoriteRooms) {
 
 /**
  * Room-based recommendation search
+ * @param {object|null} viewer - { userId?: string|null, isVip?: boolean } for preference scoring and VIP-only filters
  */
-async function getPublicSearch(params, userId) {
+async function getPublicSearch(params, viewer = null) {
+    const userId =
+        viewer && typeof viewer === 'object' && viewer.userId != null
+            ? viewer.userId
+            : null;
+    const isVipTenant = viewer && typeof viewer === 'object' && viewer.isVip === true;
     const {
         page = 1,
         limit = 20,
@@ -239,12 +254,38 @@ async function getPublicSearch(params, userId) {
                 : [],
     };
 
+    const usesAdvancedFilters =
+        (searchParams.minArea != null && !Number.isNaN(searchParams.minArea)) ||
+        (searchParams.maxArea != null && !Number.isNaN(searchParams.maxArea)) ||
+        (Array.isArray(searchParams.amenityIds) && searchParams.amenityIds.length > 0);
+
+    if (usesAdvancedFilters && !isVipTenant) {
+        throw Object.assign(
+            new Error('Nâng cấp VIP để lọc theo diện tích hoặc tiện ích chi tiết'),
+            { statusCode: 403, code: 'VIP_REQUIRED_FOR_ADVANCED_FILTERS' }
+        );
+    }
+
     let preference = null;
+    let favoriteRooms = [];
     if (userId) {
-        const prefs = await prisma.userPreference.findUnique({
-            where: { userId },
-        });
+        const [prefs, favoriteRows] = await Promise.all([
+            prisma.userPreference.findUnique({
+                where: { userId },
+            }),
+            prisma.favoriteRoom.findMany({
+                where: { userId },
+                include: {
+                    room: {
+                        include: {
+                            rentals: { include: { location: true } },
+                        },
+                    },
+                },
+            }),
+        ]);
         if (prefs) preference = prefs;
+        favoriteRooms = favoriteRows.map((f) => f.room).filter(Boolean);
     }
 
     searchParams.amenityIds = await resolveAmenityIds(searchParams.amenityIds);
@@ -340,7 +381,7 @@ async function getPublicSearch(params, userId) {
         const rentalBaseWhere =
             rentalBaseAnd.length === 1 ? rentalBaseAnd[0] : { AND: rentalBaseAnd };
         roomWhere = {
-            status: { in: ['AVAILABLE', 'RENTED'] },
+            status: 'AVAILABLE',
             AND: [
                 { rentals: rentalBaseWhere },
                 {
@@ -365,7 +406,7 @@ async function getPublicSearch(params, userId) {
     } else {
         const rentalWhere =
             rentalBaseAnd.length === 1 ? rentalBaseAnd[0] : { AND: rentalBaseAnd };
-        roomWhere = { status: { in: ['AVAILABLE', 'RENTED'] }, rentals: rentalWhere };
+        roomWhere = { status: 'AVAILABLE', rentals: rentalWhere };
     }
     if (
         (searchParams.minPrice != null && !Number.isNaN(searchParams.minPrice)) ||
@@ -434,7 +475,7 @@ async function getPublicSearch(params, userId) {
 
     const scored = rooms.map((room) => {
         const avgRating = ratingByRoom[room.id] ?? null;
-        const score = computeMatchScore(
+        const baseScore = computeMatchScore(
             room,
             {
                 ...searchParams,
@@ -445,6 +486,9 @@ async function getPublicSearch(params, userId) {
             preference,
             avgRating
         );
+        const favBonus =
+            favoriteRooms.length > 0 ? computeSimilarToFavoritesBonus(room, favoriteRooms) : 0;
+        const score = Math.min(100, baseScore + favBonus);
         const rental = room.rentals;
         const loc = rental?.location;
         const allRooms = rental?.rooms || [];
@@ -492,6 +536,8 @@ async function getPublicSearch(params, userId) {
             rating: avgRating != null ? Math.round(avgRating * 10) / 10 : null,
             otherRoomsInRental: otherRooms,
             isVipLandlord,
+            roomStatus: room.status,
+            available: room.status === 'AVAILABLE',
         };
     });
 
@@ -536,26 +582,82 @@ async function getRecommend(userId) {
     const favoriteRooms = favoriteRows.map((f) => f.room).filter(Boolean);
     const favoriteRoomIds = new Set(favoriteRooms.map((r) => r.id));
 
-    const rooms = await prisma.rooms.findMany({
-        where: {
-            status: 'AVAILABLE',
-            rentals: { status: 'AVAILABLE' },
-        },
-        include: {
-            rentals: {
-                include: {
-                    location: true,
-                    images: true,
-                    users: {
-                        select: { id: true, role: true, isVip: true },
-                    },
+    const rentalFilter = { status: 'AVAILABLE' };
+    const prefsDistricts = Array.isArray(preference?.preferred_districts)
+        ? preference.preferred_districts
+        : [];
+    if (prefsDistricts.length > 0) {
+        const districtTerms = [
+            ...new Set(
+                prefsDistricts
+                    .map((d) => String(d || '').trim())
+                    .filter(Boolean)
+                    .flatMap((d) => expandDistrict(d))
+            ),
+        ];
+        if (districtTerms.length > 0) {
+            rentalFilter.location = {
+                is:
+                    districtTerms.length === 1
+                        ? { district: { equals: districtTerms[0], mode: 'insensitive' } }
+                        : {
+                              OR: districtTerms.map((t) => ({
+                                  district: { equals: t, mode: 'insensitive' },
+                              })),
+                          },
+            };
+        }
+    }
+
+    const roomsWhere = {
+        status: 'AVAILABLE',
+        rentals: rentalFilter,
+    };
+    const budgetMin = preference?.budget_min != null ? Number(preference.budget_min) : null;
+    const budgetMax = preference?.budget_max != null ? Number(preference.budget_max) : null;
+    if (budgetMin != null && Number.isFinite(budgetMin)) {
+        roomsWhere.price = { ...(roomsWhere.price || {}), gte: budgetMin };
+    }
+    if (budgetMax != null && Number.isFinite(budgetMax)) {
+        roomsWhere.price = { ...(roomsWhere.price || {}), lte: budgetMax };
+    }
+
+    const recommendInclude = {
+        rentals: {
+            include: {
+                location: true,
+                images: true,
+                users: {
+                    select: { id: true, role: true, isVip: true },
                 },
             },
-            roomAmenities: { include: { amenity: true } },
-            images: true,
         },
-        take: 80,
+        roomAmenities: { include: { amenity: true } },
+        images: true,
+    };
+    const recommendOrderBy = [{ updated_at: 'desc' }, { id: 'desc' }];
+
+    let rooms = await prisma.rooms.findMany({
+        where: roomsWhere,
+        include: recommendInclude,
+        orderBy: recommendOrderBy,
+        take: 200,
     });
+
+    if (
+        rooms.length === 0 &&
+        (budgetMin != null || budgetMax != null)
+    ) {
+        rooms = await prisma.rooms.findMany({
+            where: {
+                status: 'AVAILABLE',
+                rentals: rentalFilter,
+            },
+            include: recommendInclude,
+            orderBy: recommendOrderBy,
+            take: 200,
+        });
+    }
 
     const roomIds = rooms.map((r) => r.id);
     const [ratingRows, popularityByRoom, similarUserFavorites] = await Promise.all([
@@ -645,6 +747,8 @@ async function getRecommend(userId) {
                 images: imgs.length > 0 ? imgs : [placeholderImage],
                 location: loc ? { district: loc.district, city: loc.city } : null,
                 matchScore: score,
+                roomStatus: room.status,
+                available: room.status === 'AVAILABLE',
             };
         });
 

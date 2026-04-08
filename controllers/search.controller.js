@@ -7,6 +7,7 @@ function handleError(err, res, defaultMessage) {
     return res.status(statusCode).json({
         success: false,
         message,
+        ...(err.code != null && { code: err.code }),
         ...(statusCode === 500 && { error: err.message }),
     });
 }
@@ -24,6 +25,10 @@ async function getPublicSearch(req, res) {
                 .filter(Boolean)
             : [];
 
+        const viewer = req.auth?.user
+            ? { userId: req.auth.user.id, isVip: req.auth.user.isVip === true }
+            : { userId: null, isVip: false };
+
         const result = await searchService.getPublicSearch(
             {
                 page: req.query.page,
@@ -39,7 +44,7 @@ async function getPublicSearch(req, res) {
                 maxArea: req.query.maxArea,
                 amenityIds,
             },
-            req.auth?.user?.id
+            viewer
         );
         return res.json({ success: true, ...result });
     } catch (err) {

@@ -216,10 +216,10 @@ async function syncPendingWalletTopups(userId, walletId) {
 }
 
 async function ensureWallet(userId, txClient = prisma) {
-    const existing = await txClient.wallet.findUnique({ where: { userId } });
-    if (existing) return existing;
-    return txClient.wallet.create({
-        data: {
+    return txClient.wallet.upsert({
+        where: { userId },
+        update: {},
+        create: {
             userId,
             balance: 0,
         },
