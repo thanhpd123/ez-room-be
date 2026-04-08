@@ -303,6 +303,15 @@ async function getOverview(req, res) {
     }
 }
 
+async function getKpi(req, res) {
+    try {
+        const result = await moderatorService.getKpi({ days: req.query.days });
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi lấy KPI moderator');
+    }
+}
+
 module.exports = {
     getAllUsers,
     getUserById,
@@ -327,5 +336,6 @@ module.exports = {
     getModeratorList,
     getRejectionInfo,
     getOverview,
+    getKpi,
     distributeTasks,
 };
