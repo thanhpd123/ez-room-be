@@ -111,10 +111,10 @@ async function runClipDiagnostics(prisma, options = {}) {
             const clipRows = await prisma.$queryRawUnsafe(
                 `
                 SELECT ri.room_id::text AS room_id,
-                       1 - (cv.embedding <=> '${vecStr}'::vector) AS similarity
+                       1 - (cv.embedding::vector <=> '${vecStr}'::vector) AS similarity
                 FROM clip_vectors cv
                 JOIN room_images ri ON ri.id = cv.room_image_id
-                ORDER BY cv.embedding <=> '${vecStr}'::vector
+                ORDER BY cv.embedding::vector <=> '${vecStr}'::vector
                 LIMIT 5
             `
             );

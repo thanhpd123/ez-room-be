@@ -329,9 +329,9 @@ async function getAdvancedSearch(req, res) {
                 if (queryEmbedding) {
                     const vecStr = `[${queryEmbedding.join(',')}]`;
                     const similarRows = await prisma.$queryRawUnsafe(`
-                        SELECT room_id, 1 - (embedding <=> '${vecStr}'::vector) as similarity
+                        SELECT room_id, 1 - (embedding::vector <=> '${vecStr}'::vector) as similarity
                         FROM room_text_embeddings
-                        ORDER BY embedding <=> '${vecStr}'::vector
+                        ORDER BY embedding::vector <=> '${vecStr}'::vector
                         LIMIT 200
                     `);
                     for (const row of similarRows) {
@@ -647,10 +647,10 @@ async function searchByImage(req, res) {
             const vecStr = `[${clipEmbedding.join(',')}]`;
             const clipRows = await prisma.$queryRawUnsafe(`
                 SELECT cv.room_image_id, ri.room_id,
-                       1 - (cv.embedding <=> '${vecStr}'::vector) as similarity
+                       1 - (cv.embedding::vector <=> '${vecStr}'::vector) as similarity
                 FROM clip_vectors cv
                 JOIN room_images ri ON ri.id = cv.room_image_id
-                ORDER BY cv.embedding <=> '${vecStr}'::vector
+                ORDER BY cv.embedding::vector <=> '${vecStr}'::vector
                 LIMIT 100
             `);
             for (const row of clipRows) {
@@ -1011,10 +1011,10 @@ async function searchByText(req, res) {
             const vecStr = `[${textEmbedding.join(',')}]`;
             const clipRows = await prisma.$queryRawUnsafe(`
                 SELECT cv.room_image_id, ri.room_id,
-                       1 - (cv.embedding <=> '${vecStr}'::vector) as similarity
+                       1 - (cv.embedding::vector <=> '${vecStr}'::vector) as similarity
                 FROM clip_vectors cv
                 JOIN room_images ri ON ri.id = cv.room_image_id
-                ORDER BY cv.embedding <=> '${vecStr}'::vector
+                ORDER BY cv.embedding::vector <=> '${vecStr}'::vector
                 LIMIT 100
             `);
             for (const row of clipRows) {

@@ -30,6 +30,33 @@ function formatRoomForFavorite(room) {
     };
 }
 
+async function ensureFavoriteLinkedPreorder(tx, userId, roomId) {
+    const existing = await tx.preorder.findFirst({
+        where: {
+            userId,
+            roomId,
+            status: { in: ['PENDING', 'CONFIRMED'] },
+            payment_status: { in: ['UNPAID', 'PAID'] },
+        },
+        select: { id: true },
+    });
+
+    if (existing) return existing;
+
+    return tx.preorder.create({
+        data: {
+            userId,
+            roomId,
+            status: 'PENDING',
+            payment_status: 'UNPAID',
+            deposit_amount: 0,
+            refund_status: 'NOT_APPLICABLE',
+            cancel_reason: 'AUTO_FROM_FAVORITE',
+        },
+        select: { id: true },
+    });
+}
+
 /**
  * Thêm phòng vào danh sách yêu thích
  */
@@ -42,12 +69,19 @@ async function addFavorite(userId, roomId) {
         throw Object.assign(new Error('Không tìm thấy phòng'), { statusCode: 404 });
     }
 
-    await prisma.favoriteRoom.upsert({
-        where: {
-            userId_roomId: { userId, roomId },
-        },
-        create: { userId, roomId },
-        update: {},
+    await prisma.$transaction(async (tx) => {
+        const lockKey = `${userId}:${roomId}:favorite_preorder`;
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+
+        await tx.favoriteRoom.upsert({
+            where: {
+                userId_roomId: { userId, roomId },
+            },
+            create: { userId, roomId },
+            update: {},
+        });
+
+        await ensureFavoriteLinkedPreorder(tx, userId, roomId);
     });
 
     try {
@@ -62,8 +96,31 @@ async function addFavorite(userId, roomId) {
  * Xóa phòng khỏi danh sách yêu thích
  */
 async function removeFavorite(userId, roomId) {
-    await prisma.favoriteRoom.deleteMany({
-        where: { userId, roomId },
+    await prisma.$transaction(async (tx) => {
+        await tx.favoriteRoom.deleteMany({
+            where: { userId, roomId },
+        });
+
+        // If this preorder was only auto-created from favorite and never paid,
+        // close it when user removes room from wishlist to avoid stale requests.
+        await tx.preorder.updateMany({
+            where: {
+                userId,
+                roomId,
+                status: 'PENDING',
+                payment_status: 'UNPAID',
+                cancel_reason: 'AUTO_FROM_FAVORITE',
+                OR: [
+                    { deposit_amount: null },
+                    { deposit_amount: { lte: 0 } },
+                ],
+            },
+            data: {
+                status: 'CANCELLED',
+                cancel_reason: 'FAVORITE_REMOVED',
+                refund_status: 'NOT_APPLICABLE',
+            },
+        });
     });
     return { roomId };
 }
