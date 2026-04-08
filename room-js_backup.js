@@ -13,16 +13,10 @@ const {
     createRentalContract,
     completeRentalPeriod,
     getMyBookings,
-    getLandlordPeerForRentalPeriod,
     getRoomByIdForSearchRoomate,
 } = require('../controllers/room.controller');
 
 const router = express.Router();
-
-// ============ IMPORTANT: ORDER MATTERS IN EXPRESS ============
-// More specific routes MUST come before generic routes
-// e.g. /:roomId/tenants before /:roomId
-// ============================================================
 
 /**
  * @openapi
@@ -48,21 +42,6 @@ router.get('/amenities', getAmenities);
  *         description: Danh sách đặt phòng (RoomRentalPeriod)
  */
 router.get('/my-bookings', verifyJWT, requireRole('TENANT', 'LANDLORD', 'GUEST'), getMyBookings);
-
-/**
- * @openapi
- * /rooms/rental-periods/{rentalPeriodId}/landlord-peer:
- *   get:
- *     tags: [Rooms]
- *     summary: Lấy userId chủ nhà để mở chat (tenant của kỳ thuê)
- *     security: [{ bearerAuth: [] }]
- */
-router.get(
-    '/rental-periods/:rentalPeriodId/landlord-peer',
-    verifyJWT,
-    requireRole('TENANT', 'LANDLORD', 'GUEST'),
-    getLandlordPeerForRentalPeriod
-);
 
 /**
  * @openapi
@@ -223,7 +202,23 @@ router.get('/:roomId', getRoomById);
  *       201:
  *         description: Tạo room thành công
  */
-router.post('/', verifyJWT, requireRole('LANDLORD'), createRoom);
+/**
+ * @openapi
+ * /rooms/rental-periods/{rentalPeriodId}/complete:
+ *   put:
+ *     tags: [Rooms]
+ *     summary: Landlord or Tenant hoàn tất kỳ thuê phòng
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: rentalPeriodId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Kết thúc kỳ thuê thành công
+ */
+router.put('/rental-periods/:rentalPeriodId/complete', verifyJWT, requireRole('LANDLORD', 'TENANT'), completeRentalPeriod);
 
 /**
  * @openapi
@@ -251,23 +246,7 @@ router.post('/', verifyJWT, requireRole('LANDLORD'), createRoom);
  */
 router.put('/:roomId/moderate', verifyJWT, requireRole('MODERATOR', 'ADMIN'), moderateRoom);
 
-/**
- * @openapi
- * /rooms/rental-periods/{rentalPeriodId}/complete:
- *   put:
- *     tags: [Rooms]
- *     summary: Landlord or Tenant hoàn tất kỳ thuê phòng
- *     security: [{ bearerAuth: [] }]
- *     parameters:
- *       - in: path
- *         name: rentalPeriodId
- *         required: true
- *         schema: { type: string }
- *     responses:
- *       200:
- *         description: Kết thúc kỳ thuê thành công
- */
-router.put('/rental-periods/:rentalPeriodId/complete', verifyJWT, requireRole('LANDLORD', 'TENANT'), completeRentalPeriod);
+router.post('/', verifyJWT, requireRole('LANDLORD'), createRoom);
 
 /**
  * @openapi
@@ -315,3 +294,4 @@ router.put('/:roomId', verifyJWT, requireRole('LANDLORD'), updateRoom);
 router.delete('/:roomId', verifyJWT, requireRole('LANDLORD'), deleteRoom);
 
 module.exports = router;
+

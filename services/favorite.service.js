@@ -30,6 +30,33 @@ function formatRoomForFavorite(room) {
     };
 }
 
+async function ensureFavoriteLinkedPreorder(tx, userId, roomId) {
+    const existing = await tx.preorder.findFirst({
+        where: {
+            userId,
+            roomId,
+            status: { in: ['PENDING', 'CONFIRMED'] },
+            payment_status: { in: ['UNPAID', 'PAID'] },
+        },
+        select: { id: true },
+    });
+
+    if (existing) return existing;
+
+    return tx.preorder.create({
+        data: {
+            userId,
+            roomId,
+            status: 'PENDING',
+            payment_status: 'UNPAID',
+            deposit_amount: 0,
+            refund_status: 'NOT_APPLICABLE',
+            cancel_reason: 'AUTO_FROM_FAVORITE',
+        },
+        select: { id: true },
+    });
+}
+
 /**
  * Thêm phòng vào danh sách yêu thích
  */
@@ -42,12 +69,19 @@ async function addFavorite(userId, roomId) {
         throw Object.assign(new Error('Không tìm thấy phòng'), { statusCode: 404 });
     }
 
-    await prisma.favoriteRoom.upsert({
-        where: {
-            userId_roomId: { userId, roomId },
-        },
-        create: { userId, roomId },
-        update: {},
+    await prisma.$transaction(async (tx) => {
+        const lockKey = `${userId}:${roomId}:favorite_preorder`;
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+
+        await tx.favoriteRoom.upsert({
+            where: {
+                userId_roomId: { userId, roomId },
+            },
+            create: { userId, roomId },
+            update: {},
+        });
+
+        await ensureFavoriteLinkedPreorder(tx, userId, roomId);
     });
 
     try {
@@ -62,8 +96,31 @@ async function addFavorite(userId, roomId) {
  * Xóa phòng khỏi danh sách yêu thích
  */
 async function removeFavorite(userId, roomId) {
-    await prisma.favoriteRoom.deleteMany({
-        where: { userId, roomId },
+    await prisma.$transaction(async (tx) => {
+        await tx.favoriteRoom.deleteMany({
+            where: { userId, roomId },
+        });
+
+        // If this preorder was only auto-created from favorite and never paid,
+        // close it when user removes room from wishlist to avoid stale requests.
+        await tx.preorder.updateMany({
+            where: {
+                userId,
+                roomId,
+                status: 'PENDING',
+                payment_status: 'UNPAID',
+                cancel_reason: 'AUTO_FROM_FAVORITE',
+                OR: [
+                    { deposit_amount: null },
+                    { deposit_amount: { lte: 0 } },
+                ],
+            },
+            data: {
+                status: 'CANCELLED',
+                cancel_reason: 'FAVORITE_REMOVED',
+                refund_status: 'NOT_APPLICABLE',
+            },
+        });
     });
     return { roomId };
 }
@@ -112,8 +169,10 @@ async function getFavoriteIds(userId) {
 
 /**
  * Landlord xem danh sách người wishlist theo thứ tự ưu tiên:
- * - Người có preorder hoạt động được ưu tiên trước
- * - Trong từng nhóm, first-come-first-serve theo thời gian tạo
+ * - Preorder PENDING trước người chỉ favorite
+ * - Trong preorder: đã thanh toán cọc (PAID) trước chưa thanh toán
+ * - Tiếp theo: số tiền cọc cao hơn trước
+ * - Rồi: preorder tạo sớm hơn, cuối cùng: favorite sớm hơn
  */
 async function getRoomWishersForLandlord(landlordId, roomId) {
     const room = await prisma.rooms.findUnique({
@@ -156,7 +215,7 @@ async function getRoomWishersForLandlord(landlordId, roomId) {
                     preorders: {
                         where: {
                             roomId,
-                            status: { in: ['PENDING', 'CONFIRMED'] },
+                            status: 'PENDING',
                             payment_status: { in: ['UNPAID', 'PAID'] },
                         },
                         select: {
@@ -194,13 +253,27 @@ async function getRoomWishersForLandlord(landlordId, roomId) {
             };
         })
         .sort((a, b) => {
-            if (a.hasPriorityPreorder !== b.hasPriorityPreorder) {
-                return a.hasPriorityPreorder ? -1 : 1;
+            const prA = a.preorder;
+            const prB = b.preorder;
+            const pendingA = Boolean(prA && prA.status === 'PENDING');
+            const pendingB = Boolean(prB && prB.status === 'PENDING');
+            if (pendingA !== pendingB) {
+                return pendingA ? -1 : 1;
             }
-            if (a.hasPriorityPreorder && b.hasPriorityPreorder) {
-                const aTime = a.preorder?.createdAt ? new Date(a.preorder.createdAt).getTime() : Number.MAX_SAFE_INTEGER;
-                const bTime = b.preorder?.createdAt ? new Date(b.preorder.createdAt).getTime() : Number.MAX_SAFE_INTEGER;
-                if (aTime !== bTime) return aTime - bTime;
+            if (pendingA && pendingB) {
+                const paidA = prA.paymentStatus === 'PAID' ? 1 : 0;
+                const paidB = prB.paymentStatus === 'PAID' ? 1 : 0;
+                if (paidA !== paidB) {
+                    return paidB - paidA;
+                }
+                const depA = prA.depositAmount || 0;
+                const depB = prB.depositAmount || 0;
+                if (depA !== depB) {
+                    return depB - depA;
+                }
+                const aPo = prA.createdAt ? new Date(prA.createdAt).getTime() : Number.MAX_SAFE_INTEGER;
+                const bPo = prB.createdAt ? new Date(prB.createdAt).getTime() : Number.MAX_SAFE_INTEGER;
+                if (aPo !== bPo) return aPo - bPo;
             }
             const aFav = a.favoritedAt ? new Date(a.favoritedAt).getTime() : Number.MAX_SAFE_INTEGER;
             const bFav = b.favoritedAt ? new Date(b.favoritedAt).getTime() : Number.MAX_SAFE_INTEGER;

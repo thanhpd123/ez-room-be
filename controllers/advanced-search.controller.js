@@ -255,6 +255,8 @@ function formatRoom(room, score, ratingByRoom, extra = {}) {
         matchScore: score,
         rating: avgRating != null ? Math.round(avgRating * 10) / 10 : null,
         otherRoomsInRental: otherRooms,
+        roomStatus: room.status,
+        available: room.status === 'AVAILABLE',
     };
 
     if (extra.distanceKm != null) result.distanceKm = Math.round(extra.distanceKm * 100) / 100;
@@ -327,9 +329,9 @@ async function getAdvancedSearch(req, res) {
                 if (queryEmbedding) {
                     const vecStr = `[${queryEmbedding.join(',')}]`;
                     const similarRows = await prisma.$queryRawUnsafe(`
-                        SELECT room_id, 1 - (embedding <=> '${vecStr}'::vector) as similarity
+                        SELECT room_id, 1 - (embedding::vector <=> '${vecStr}'::vector) as similarity
                         FROM room_text_embeddings
-                        ORDER BY embedding <=> '${vecStr}'::vector
+                        ORDER BY embedding::vector <=> '${vecStr}'::vector
                         LIMIT 200
                     `);
                     for (const row of similarRows) {
@@ -391,7 +393,7 @@ async function getAdvancedSearch(req, res) {
         if (q.length > 0) {
             const rentalBaseWhere = rentalBaseAnd.length === 1 ? rentalBaseAnd[0] : { AND: rentalBaseAnd };
             roomWhere = {
-                status: { in: ['AVAILABLE', 'RENTED'] },
+                status: 'AVAILABLE',
                 AND: [
                     { rentals: rentalBaseWhere },
                     {
@@ -407,7 +409,7 @@ async function getAdvancedSearch(req, res) {
             };
         } else {
             const rentalWhere = rentalBaseAnd.length === 1 ? rentalBaseAnd[0] : { AND: rentalBaseAnd };
-            roomWhere = { rentals: rentalWhere, status: { in: ['AVAILABLE', 'RENTED'] } };
+            roomWhere = { rentals: rentalWhere, status: 'AVAILABLE' };
         }
         if ((minPriceFilter != null && !Number.isNaN(minPriceFilter)) || (maxPriceFilter != null && !Number.isNaN(maxPriceFilter))) {
             roomWhere.price = {};
@@ -645,10 +647,10 @@ async function searchByImage(req, res) {
             const vecStr = `[${clipEmbedding.join(',')}]`;
             const clipRows = await prisma.$queryRawUnsafe(`
                 SELECT cv.room_image_id, ri.room_id,
-                       1 - (cv.embedding <=> '${vecStr}'::vector) as similarity
+                       1 - (cv.embedding::vector <=> '${vecStr}'::vector) as similarity
                 FROM clip_vectors cv
                 JOIN room_images ri ON ri.id = cv.room_image_id
-                ORDER BY cv.embedding <=> '${vecStr}'::vector
+                ORDER BY cv.embedding::vector <=> '${vecStr}'::vector
                 LIMIT 100
             `);
             for (const row of clipRows) {
@@ -1009,10 +1011,10 @@ async function searchByText(req, res) {
             const vecStr = `[${textEmbedding.join(',')}]`;
             const clipRows = await prisma.$queryRawUnsafe(`
                 SELECT cv.room_image_id, ri.room_id,
-                       1 - (cv.embedding <=> '${vecStr}'::vector) as similarity
+                       1 - (cv.embedding::vector <=> '${vecStr}'::vector) as similarity
                 FROM clip_vectors cv
                 JOIN room_images ri ON ri.id = cv.room_image_id
-                ORDER BY cv.embedding <=> '${vecStr}'::vector
+                ORDER BY cv.embedding::vector <=> '${vecStr}'::vector
                 LIMIT 100
             `);
             for (const row of clipRows) {
