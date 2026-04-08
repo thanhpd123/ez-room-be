@@ -112,8 +112,10 @@ async function getFavoriteIds(userId) {
 
 /**
  * Landlord xem danh sách người wishlist theo thứ tự ưu tiên:
- * - Người có preorder hoạt động được ưu tiên trước
- * - Trong từng nhóm, first-come-first-serve theo thời gian tạo
+ * - Preorder PENDING trước người chỉ favorite
+ * - Trong preorder: đã thanh toán cọc (PAID) trước chưa thanh toán
+ * - Tiếp theo: số tiền cọc cao hơn trước
+ * - Rồi: preorder tạo sớm hơn, cuối cùng: favorite sớm hơn
  */
 async function getRoomWishersForLandlord(landlordId, roomId) {
     const room = await prisma.rooms.findUnique({
@@ -156,7 +158,7 @@ async function getRoomWishersForLandlord(landlordId, roomId) {
                     preorders: {
                         where: {
                             roomId,
-                            status: { in: ['PENDING', 'CONFIRMED'] },
+                            status: 'PENDING',
                             payment_status: { in: ['UNPAID', 'PAID'] },
                         },
                         select: {
@@ -194,13 +196,27 @@ async function getRoomWishersForLandlord(landlordId, roomId) {
             };
         })
         .sort((a, b) => {
-            if (a.hasPriorityPreorder !== b.hasPriorityPreorder) {
-                return a.hasPriorityPreorder ? -1 : 1;
+            const prA = a.preorder;
+            const prB = b.preorder;
+            const pendingA = Boolean(prA && prA.status === 'PENDING');
+            const pendingB = Boolean(prB && prB.status === 'PENDING');
+            if (pendingA !== pendingB) {
+                return pendingA ? -1 : 1;
             }
-            if (a.hasPriorityPreorder && b.hasPriorityPreorder) {
-                const aTime = a.preorder?.createdAt ? new Date(a.preorder.createdAt).getTime() : Number.MAX_SAFE_INTEGER;
-                const bTime = b.preorder?.createdAt ? new Date(b.preorder.createdAt).getTime() : Number.MAX_SAFE_INTEGER;
-                if (aTime !== bTime) return aTime - bTime;
+            if (pendingA && pendingB) {
+                const paidA = prA.paymentStatus === 'PAID' ? 1 : 0;
+                const paidB = prB.paymentStatus === 'PAID' ? 1 : 0;
+                if (paidA !== paidB) {
+                    return paidB - paidA;
+                }
+                const depA = prA.depositAmount || 0;
+                const depB = prB.depositAmount || 0;
+                if (depA !== depB) {
+                    return depB - depA;
+                }
+                const aPo = prA.createdAt ? new Date(prA.createdAt).getTime() : Number.MAX_SAFE_INTEGER;
+                const bPo = prB.createdAt ? new Date(prB.createdAt).getTime() : Number.MAX_SAFE_INTEGER;
+                if (aPo !== bPo) return aPo - bPo;
             }
             const aFav = a.favoritedAt ? new Date(a.favoritedAt).getTime() : Number.MAX_SAFE_INTEGER;
             const bFav = b.favoritedAt ? new Date(b.favoritedAt).getTime() : Number.MAX_SAFE_INTEGER;

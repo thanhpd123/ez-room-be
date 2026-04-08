@@ -255,6 +255,8 @@ function formatRoom(room, score, ratingByRoom, extra = {}) {
         matchScore: score,
         rating: avgRating != null ? Math.round(avgRating * 10) / 10 : null,
         otherRoomsInRental: otherRooms,
+        roomStatus: room.status,
+        available: room.status === 'AVAILABLE',
     };
 
     if (extra.distanceKm != null) result.distanceKm = Math.round(extra.distanceKm * 100) / 100;
@@ -391,7 +393,7 @@ async function getAdvancedSearch(req, res) {
         if (q.length > 0) {
             const rentalBaseWhere = rentalBaseAnd.length === 1 ? rentalBaseAnd[0] : { AND: rentalBaseAnd };
             roomWhere = {
-                status: { in: ['AVAILABLE', 'RENTED'] },
+                status: 'AVAILABLE',
                 AND: [
                     { rentals: rentalBaseWhere },
                     {
@@ -407,7 +409,7 @@ async function getAdvancedSearch(req, res) {
             };
         } else {
             const rentalWhere = rentalBaseAnd.length === 1 ? rentalBaseAnd[0] : { AND: rentalBaseAnd };
-            roomWhere = { rentals: rentalWhere, status: { in: ['AVAILABLE', 'RENTED'] } };
+            roomWhere = { rentals: rentalWhere, status: 'AVAILABLE' };
         }
         if ((minPriceFilter != null && !Number.isNaN(minPriceFilter)) || (maxPriceFilter != null && !Number.isNaN(maxPriceFilter))) {
             roomWhere.price = {};

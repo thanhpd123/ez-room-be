@@ -33,6 +33,7 @@ async function getRooms(req, res) {
             maxPrice: req.query.maxPrice,
             status: req.query.status,
             includeAllStatuses: req.query.includeAllStatuses,
+            sort: req.query.sort,
             page: req.query.page,
             limit: req.query.limit,
         });
@@ -144,6 +145,18 @@ async function getMyBookings(req, res) {
     }
 }
 
+async function getLandlordPeerForRentalPeriod(req, res) {
+    try {
+        const result = await roomService.getLandlordPeerForRentalPeriod(
+            req.auth.user.id,
+            req.params.rentalPeriodId
+        );
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Không lấy được thông tin chủ nhà');
+    }
+}
+
 module.exports = {
     createRoom,
     getRooms,
@@ -156,5 +169,6 @@ module.exports = {
     searchTenants,
     createRentalContract,
     getMyBookings,
+    getLandlordPeerForRentalPeriod,
     getRoomByIdForSearchRoomate,
 };

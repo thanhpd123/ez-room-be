@@ -12,6 +12,7 @@ const {
     searchTenants,
     createRentalContract,
     getMyBookings,
+    getLandlordPeerForRentalPeriod,
     getRoomByIdForSearchRoomate,
 } = require('../controllers/room.controller');
 
@@ -41,6 +42,21 @@ router.get('/amenities', getAmenities);
  *         description: Danh sách đặt phòng (RoomRentalPeriod)
  */
 router.get('/my-bookings', verifyJWT, requireRole('TENANT', 'LANDLORD', 'GUEST'), getMyBookings);
+
+/**
+ * @openapi
+ * /rooms/rental-periods/{rentalPeriodId}/landlord-peer:
+ *   get:
+ *     tags: [Rooms]
+ *     summary: Lấy userId chủ nhà để mở chat (tenant của kỳ thuê)
+ *     security: [{ bearerAuth: [] }]
+ */
+router.get(
+    '/rental-periods/:rentalPeriodId/landlord-peer',
+    verifyJWT,
+    requireRole('TENANT', 'LANDLORD', 'GUEST'),
+    getLandlordPeerForRentalPeriod
+);
 
 /**
  * @openapi

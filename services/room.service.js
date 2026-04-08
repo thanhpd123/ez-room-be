@@ -4,7 +4,7 @@ const feedbackConfig = require('../config/feedback.config');
 const { mapFeToDb, mapDbToFe } = require('../utils/room-type-mapper');
 const { sendEmail } = require('../utils/email');
 
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5174';
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
 const AMENITIES_CACHE_KEY = 'rooms:amenities';
 const FREE_TIER_LANDLORD_MAX_ROOMS = Math.max(
     1,
@@ -63,17 +63,20 @@ async function notifyFavoritersRoomAvailable(room) {
 
     for (const fav of favoriters) {
         const user = fav.user;
-        if (user && user.email) {
+        if (!user?.id) continue;
+
+        await prisma.notification.create({
+            data: {
+                userId: user.id,
+                type: 'FAVORITE',
+                title: `Phòng "${roomTitle}" đã có sẵn`,
+                body: `Phòng bạn đã lưu tại ${address} hiện đã có sẵn.`,
+                status: 'UNREAD',
+            },
+        });
+
+        if (user.email) {
             await sendEmail(user.email, subject, text, html);
-            await prisma.notification.create({
-                data: {
-                    userId: user.id,
-                    type: 'FAVORITE',
-                    title: `Phòng "${roomTitle}" đã có sẵn`,
-                    body: `Phòng bạn đã lưu tại ${address} hiện đã có sẵn.`,
-                    status: 'UNREAD',
-                },
-            });
         }
     }
 }
@@ -172,6 +175,14 @@ async function createRoom(userId, body, authUser = null) {
     return { message: 'Tạo phòng thành công', data: formatRoomResponse(room) };
 }
 
+function normalizePublicRoomsSort(sortRaw) {
+    const s = String(sortRaw || '').toLowerCase().trim();
+    if (s === 'price_asc' || s === 'price-low' || s === 'cheap') return 'price_asc';
+    if (s === 'price_desc' || s === 'price-high' || s === 'expensive') return 'price_desc';
+    if (s === 'recommended' || s === 'popular') return 'recommended';
+    return 'newest';
+}
+
 async function getRooms(params) {
     const {
         rentalId,
@@ -181,12 +192,14 @@ async function getRooms(params) {
         maxPrice,
         status,
         includeAllStatuses,
+        sort: sortParam,
         page = 1,
         limit = 20,
     } = params;
     const pageNum = Math.max(1, parseInt(page));
     const pageSize = Math.min(100, Math.max(1, parseInt(limit)));
     const skip = (pageNum - 1) * pageSize;
+    const sortMode = normalizePublicRoomsSort(sortParam);
 
     const where = {};
     const filterRentalId = rentalId || rental_id;
@@ -207,12 +220,23 @@ async function getRooms(params) {
         if (maxPrice) where.price.lte = parseFloat(maxPrice);
     }
 
+    let orderBy;
+    if (sortMode === 'price_asc') {
+        orderBy = { price: 'asc' };
+    } else if (sortMode === 'price_desc') {
+        orderBy = { price: 'desc' };
+    } else if (sortMode === 'recommended') {
+        orderBy = [{ search_count: 'desc' }, { created_at: 'desc' }];
+    } else {
+        orderBy = { created_at: 'desc' };
+    }
+
     const [rooms, total] = await Promise.all([
         prisma.rooms.findMany({
             where,
             skip,
             take: pageSize,
-            orderBy: { created_at: 'desc' },
+            orderBy,
             include: {
                 images: true,
                 roomAmenities: { include: { amenity: true } },
@@ -613,53 +637,62 @@ async function createRentalContract(roomId, userId, body) {
             throw Object.assign(new Error('Ngày kết thúc không hợp lệ'), { statusCode: 400 });
         }
     }
-
-    const room = await prisma.rooms.findUnique({
-        where: { id: roomId },
-        include: { rentals: { select: { owner_id: true, title: true } } },
-    });
-
-    if (!room) {
-        throw Object.assign(new Error('Không tìm thấy phòng'), { statusCode: 404 });
-    }
-
-    if (room.rentals.owner_id !== userId) {
-        throw Object.assign(
-            new Error('Bạn không có quyền tạo hợp đồng cho phòng này'),
-            { statusCode: 403 }
-        );
-    }
-
-    if (room.status === 'RENTED') {
-        throw Object.assign(new Error('Phòng đã được thuê'), { statusCode: 400 });
-    }
-
-    const tenant = await prisma.user.findUnique({
-        where: { id: tenantId },
-        select: { id: true, status: true, fullName: true },
-    });
-
-    if (!tenant) {
-        throw Object.assign(new Error('Người dùng không tồn tại'), { statusCode: 404 });
-    }
-
-    if (tenant.status === 'SUSPENDED' || tenant.status === 'BANNED') {
-        throw Object.assign(new Error('Người dùng không hợp lệ'), { statusCode: 400 });
-    }
-
-    const existingActive = await prisma.roomRentalPeriod.findFirst({
-        where: {
-            roomId,
-            userId: tenantId,
-            status: 'ACTIVE',
-        },
-    });
-
-    if (existingActive) {
-        throw Object.assign(new Error('Người này đang thuê phòng này rồi'), { statusCode: 400 });
-    }
-
     const result = await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${roomId}))`;
+
+        const room = await tx.rooms.findUnique({
+            where: { id: roomId },
+            include: { rentals: { select: { owner_id: true, title: true } } },
+        });
+
+        if (!room) {
+            throw Object.assign(new Error('Không tìm thấy phòng'), { statusCode: 404 });
+        }
+
+        if (!room.rentals || room.rentals.owner_id !== userId) {
+            throw Object.assign(
+                new Error('Bạn không có quyền tạo hợp đồng cho phòng này'),
+                { statusCode: 403 }
+            );
+        }
+
+        if (room.status === 'MAINTENANCE' || room.status === 'PENDING') {
+            throw Object.assign(new Error('Phòng chưa sẵn sàng để cho thuê'), { statusCode: 400 });
+        }
+
+        const activeContractsCount = await tx.roomRentalPeriod.count({
+            where: { roomId, status: 'ACTIVE' },
+        });
+
+        if (activeContractsCount >= (room.max_people || 1)) {
+            throw Object.assign(new Error(`Phòng đã đạt số người ở tối đa (${room.max_people} người)`), { statusCode: 400 });
+        }
+
+        const tenant = await tx.user.findUnique({
+            where: { id: tenantId },
+            select: { id: true, status: true, fullName: true },
+        });
+
+        if (!tenant) {
+            throw Object.assign(new Error('Người dùng không tồn tại'), { statusCode: 404 });
+        }
+
+        if (tenant.status === 'SUSPENDED' || tenant.status === 'BANNED') {
+            throw Object.assign(new Error('Người dùng không hợp lệ'), { statusCode: 400 });
+        }
+
+        const existingActive = await tx.roomRentalPeriod.findFirst({
+            where: {
+                roomId,
+                userId: tenantId,
+                status: 'ACTIVE',
+            },
+        });
+
+        if (existingActive) {
+            throw Object.assign(new Error('Người này đang thuê phòng này rồi'), { statusCode: 400 });
+        }
+
         const period = await tx.roomRentalPeriod.create({
             data: {
                 roomId,
@@ -789,16 +822,47 @@ async function getMyBookings(userId) {
     if (rentalIds.length > 0) {
         const rentals = await prisma.rental.findMany({
             where: { id: { in: rentalIds } },
-            include: { users: { select: { fullName: true } } },
+            include: { users: { select: { id: true, fullName: true } } },
         });
-        const landlordMap = new Map(rentals.map((r) => [r.id, r.users?.fullName || 'Chủ nhà']));
+        const landlordNameMap = new Map(rentals.map((r) => [r.id, r.users?.fullName || 'Chủ nhà']));
+        const landlordIdMap = new Map(rentals.map((r) => [r.id, r.users?.id || null]));
         periods.forEach((p, i) => {
             const rid = p.room?.rentals?.id;
-            if (rid) bookings[i].landlordName = landlordMap.get(rid) || 'Chủ nhà';
+            if (rid) {
+                bookings[i].landlordName = landlordNameMap.get(rid) || 'Chủ nhà';
+                const lid = landlordIdMap.get(rid);
+                if (lid) bookings[i].landlordId = lid;
+            }
         });
     }
 
     return { data: bookings };
+}
+
+/**
+ * Landlord user id for chat: current user must be the tenant on this rental period.
+ */
+async function getLandlordPeerForRentalPeriod(tenantUserId, rentalPeriodId) {
+    const period = await prisma.roomRentalPeriod.findFirst({
+        where: { id: rentalPeriodId, userId: tenantUserId },
+        include: {
+            room: {
+                include: {
+                    rentals: { select: { owner_id: true } },
+                },
+            },
+        },
+    });
+    if (!period) {
+        throw Object.assign(new Error('Không tìm thấy kỳ thuê hoặc bạn không có quyền xem'), {
+            statusCode: 404,
+        });
+    }
+    const landlordId = period.room?.rentals?.owner_id;
+    if (!landlordId) {
+        throw Object.assign(new Error('Không xác định được chủ nhà'), { statusCode: 404 });
+    }
+    return { data: { landlordId } };
 }
 
 async function getRoomByIdForSearchRoomate(roomId, userId = null) {
@@ -881,5 +945,6 @@ module.exports = {
     searchTenants,
     createRentalContract,
     getMyBookings,
+    getLandlordPeerForRentalPeriod,
     getRoomByIdForSearchRoomate,
 };

@@ -252,4 +252,40 @@ async function optionalJWT(req, res, next) {
     }
 }
 
-module.exports = { verifyJWT, requireRole, optionalJWT };
+/**
+ * Resolve a Bearer token to an active app user id (Supabase OAuth JWT or backend JWT).
+ * Used by Socket.io so realtime auth matches REST verifyJWT behavior.
+ */
+async function resolveUserIdFromBearerToken(token) {
+    if (!token || typeof token !== 'string') return null;
+
+    if (supabase) {
+        try {
+            const {
+                data: { user: supaUser },
+                error,
+            } = await supabase.auth.getUser(token);
+            if (!error && supaUser) {
+                const email = (supaUser.email || '').toLowerCase();
+                const dbUser = await prisma.user.findUnique({ where: { email } });
+                if (dbUser && dbUser.status === 'ACTIVE') return dbUser.id;
+            }
+        } catch {
+            // fall through to backend JWT
+        }
+    }
+
+    try {
+        const payload = jwt.verify(token, getJwtSecret());
+        if (payload.type && payload.type !== 'access') return null;
+        const userId = payload.userId || payload.sub;
+        if (!userId) return null;
+        const dbUser = await prisma.user.findUnique({ where: { id: userId } });
+        if (!dbUser || dbUser.status !== 'ACTIVE') return null;
+        return dbUser.id;
+    } catch {
+        return null;
+    }
+}
+
+module.exports = { verifyJWT, requireRole, optionalJWT, resolveUserIdFromBearerToken };

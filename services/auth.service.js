@@ -17,7 +17,7 @@ if (!JWT_SECRET) {
 }
 const ACCESS_TOKEN_EXPIRES_IN = process.env.JWT_EXPIRES_IN || process.env.ACCESS_TOKEN_EXPIRES_IN || '15m';
 const REFRESH_TOKEN_EXPIRES_IN = process.env.REFRESH_TOKEN_EXPIRES_IN || '7d';
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5174';
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
 const RESET_TOKEN_EXPIRY = '1h';
 const EMAIL_VERIFY_EXPIRY = '24h';
 
