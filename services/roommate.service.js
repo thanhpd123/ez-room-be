@@ -3,10 +3,6 @@ const prisma = require('../config/prisma');
 const strEq = (a, b) =>
     a && b && String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
 
-/**
- * Tokenize a text string into meaningful words for comparison.
- * Splits on commas, spaces, and common delimiters; filters short/stop words.
- */
 function tokenize(text) {
     if (!text) return [];
     return String(text)
@@ -17,82 +13,54 @@ function tokenize(text) {
         .filter((w) => w.length > 1);
 }
 
-/**
- * Check how many of a user's deal-breaker keywords are violated
- * by the other user's actual lifestyle habits.
- * Returns number of violations (0 = no conflict).
- */
 function countDealBreakerViolations(dealBreakerText, otherLifestyle) {
     if (!dealBreakerText || !otherLifestyle) return 0;
     const db = String(dealBreakerText).trim().toLowerCase();
     if (!db) return 0;
-
     let violations = 0;
-
-    // Smoking-related deal-breakers
-    if (/hút thuốc|thuốc lá|smoking|khói thuốc/.test(db) && otherLifestyle.smoking)
-        violations++;
-
-    // Drinking-related deal-breakers
-    if (/rượu|bia|uống rượu|drinking|nhậu/.test(db) && otherLifestyle.drinking)
-        violations++;
-
-    // Cleanliness-related deal-breakers
+    if (/hút thuốc|thuốc lá|smoking|khói thuốc/.test(db) && otherLifestyle.smoking) violations++;
+    if (/rượu|bia|uống rượu|drinking|nhậu/.test(db) && otherLifestyle.drinking) violations++;
     if (/dơ|bẩn|không sạch|ở bẩn|mất vệ sinh/.test(db)) {
         const low = String(otherLifestyle.cleanliness || '').trim().toLowerCase();
         if (low === 'bình thường' || low === 'không quan tâm') violations++;
     }
-
-    // Noise-related deal-breakers
     if (/ồn|ồn ào|tiếng ồn|noise|gây ồn/.test(db)) {
         const low = String(otherLifestyle.noise_tolerance || '').trim().toLowerCase();
         if (low === 'cao') violations++;
     }
-
-    // Pet-related deal-breakers
-    if (/thú cưng|chó|mèo|pet|nuôi/.test(db) && otherLifestyle.pets_allowed)
-        violations++;
-
-    // Guest-related deal-breakers
+    if (/thú cưng|chó|mèo|pet|nuôi/.test(db) && otherLifestyle.pets_allowed) violations++;
     if (/khách|đưa người lạ|dẫn bạn|guest/.test(db)) {
         const low = String(otherLifestyle.guest_frequency || '').trim().toLowerCase();
         if (low === 'thường xuyên') violations++;
     }
-
-    // Late night / sleep related deal-breakers
     if (/thức khuya|về khuya|ngủ muộn|khuya/.test(db)) {
         const low = String(otherLifestyle.sleep_schedule || '').trim().toLowerCase();
         if (low.includes('sau 0h') || low.includes('khuya')) violations++;
     }
-
     return violations;
 }
 
 /**
- * Compute lifestyle + preference compatibility score (0–100)
+ * Compute lifestyle compatibility score (0–100)
  *
- * Scoring breakdown (visible UI fields only):
- *   Thói quen       – smoking(10), drinking(8), pets_allowed(10) .............. 28 pts
- *   Sinh hoạt        – sleep_schedule(10), cleanliness(10),
- *                      noise_tolerance(8), guest_frequency(6) ................ 34 pts
- *   Tính cách        – personalityType(6) ..................................... 6 pts
- *   ★ Sở thích       – interests overlap .................................... 15 pts
- *   ★ Điều không chấp nhận – deal_breakers similarity + cross-check ........ 15 pts
- *   Khu vực + loại phòng ................................................... 20 pts
- *   Gender boost (outside this function) .................................... +12
+ * Scoring breakdown:
+ *   Thói quen  – smoking(10), drinking(8), pets_allowed(10), wfh(6) ........ 34 pts
+ *   Sinh hoạt  – sleep_schedule(10), cleanliness(10),
+ *                noise_tolerance(8), guest_frequency(6),
+ *                personalityType(6), social_level(6) ........................ 46 pts
+ *   Sở thích   – interests overlap ....................................... 15 pts
  */
 function computeLifestyleScore(myLifestyle, candidateLifestyle, myPrefs, candidatePrefs) {
     let score = 0;
     let maxPossible = 0;
     let totalPenalties = 0;
 
-    // ── Core Lifestyle Matching ──
     if (myLifestyle && candidateLifestyle) {
-        // Boolean habit matching
         const boolPairs = [
             [myLifestyle.smoking, candidateLifestyle.smoking, 10, 'smoking'],
             [myLifestyle.drinking, candidateLifestyle.drinking, 8, 'drinking'],
             [myLifestyle.pets_allowed, candidateLifestyle.pets_allowed, 10, 'pets'],
+            [myLifestyle.work_from_home, candidateLifestyle.work_from_home, 6, 'wfh'],
         ];
         boolPairs.forEach(([a, b, pts, type]) => {
             maxPossible += pts;
@@ -104,13 +72,13 @@ function computeLifestyleScore(myLifestyle, candidateLifestyle, myPrefs, candida
             }
         });
 
-        // String-match daily-life factors
         const strPairs = [
             [myLifestyle.sleep_schedule, candidateLifestyle.sleep_schedule, 10, 'sleep'],
             [myLifestyle.cleanliness, candidateLifestyle.cleanliness, 10, 'cleanliness'],
             [myLifestyle.noise_tolerance, candidateLifestyle.noise_tolerance, 8, 'noise'],
             [myLifestyle.guest_frequency, candidateLifestyle.guest_frequency, 6, 'guest'],
             [myLifestyle.personalityType, candidateLifestyle.personalityType, 6, 'personality'],
+            [myLifestyle.social_level, candidateLifestyle.social_level, 6, 'social'],
         ];
         strPairs.forEach(([a, b, pts, type]) => {
             maxPossible += pts;
@@ -123,13 +91,11 @@ function computeLifestyleScore(myLifestyle, candidateLifestyle, myPrefs, candida
             }
         });
 
-        // ── ★ Interests overlap (15 pts) ──
         const myInterests = Array.isArray(myLifestyle.interests) ? myLifestyle.interests : [];
         const candInterests = Array.isArray(candidateLifestyle.interests) ? candidateLifestyle.interests : [];
         if (myInterests.length > 0 || candInterests.length > 0) {
             maxPossible += 15;
             if (myInterests.length > 0 && candInterests.length > 0) {
-                // Word-level overlap across all interest items
                 const myTokens = new Set(myInterests.flatMap((s) => tokenize(s)));
                 const candTokens = new Set(candInterests.flatMap((s) => tokenize(s)));
                 let overlapCount = 0;
@@ -141,65 +107,6 @@ function computeLifestyleScore(myLifestyle, candidateLifestyle, myPrefs, candida
                     score += Math.round(15 * (overlapCount / unionSize));
                 }
             }
-            // else: one side empty → 0 points but counted in maxPossible
-        }
-
-        // ── ★ Deal-breakers (15 pts total) ──
-        const myDB = String(myLifestyle.deal_breakers || '').trim();
-        const candDB = String(candidateLifestyle.deal_breakers || '').trim();
-        const hasAnyDB = myDB.length > 0 || candDB.length > 0;
-
-        if (hasAnyDB) {
-            // Part A (7 pts): Similarity – both users share the same deal-breakers = aligned values
-            maxPossible += 7;
-            if (myDB && candDB) {
-                const myWords = tokenize(myDB);
-                const candWords = tokenize(candDB);
-                const mySet = new Set(myWords);
-                const overlapCount = candWords.filter((w) => mySet.has(w)).length;
-                const unionSize = new Set([...myWords, ...candWords]).size;
-                if (unionSize > 0) {
-                    score += Math.round(7 * (overlapCount / unionSize));
-                }
-            }
-
-            // Part B (8 pts): Cross-check – penalize if candidate violates my deal-breakers or vice versa
-            maxPossible += 8;
-            const myViolations = countDealBreakerViolations(myDB, candidateLifestyle);
-            const candViolations = countDealBreakerViolations(candDB, myLifestyle);
-            const totalViolations = myViolations + candViolations;
-            // Each violation costs 3 pts, max penalty = 8
-            score += Math.max(0, 8 - totalViolations * 3);
-        }
-    }
-
-    // ── Room Preference Matching (20 pts) ──
-    if (myPrefs && candidatePrefs) {
-        const myDistricts = Array.isArray(myPrefs.preferred_districts)
-            ? myPrefs.preferred_districts
-            : [];
-        const candDistricts = Array.isArray(candidatePrefs.preferred_districts)
-            ? candidatePrefs.preferred_districts
-            : [];
-        if (myDistricts.length > 0 && candDistricts.length > 0) {
-            const districtOverlap =
-                myDistricts.some((d) =>
-                    candDistricts.some((c) =>
-                        String(c).toLowerCase().includes(String(d).toLowerCase())
-                    )
-                ) ||
-                candDistricts.some((d) =>
-                    myDistricts.some((c) =>
-                        String(c).toLowerCase().includes(String(d).toLowerCase())
-                    )
-                );
-            maxPossible += 12;
-            if (districtOverlap) score += 12;
-        }
-
-        if (myPrefs.room_type && candidatePrefs.room_type) {
-            maxPossible += 8;
-            if (myPrefs.room_type === candidatePrefs.room_type) score += 8;
         }
     }
 
@@ -208,34 +115,162 @@ function computeLifestyleScore(myLifestyle, candidateLifestyle, myPrefs, candida
     return Math.min(100, Math.max(0, computedPercentage - totalPenalties));
 }
 
+// ─── Collaborative Filtering helpers ─────────────────────────────────────────
+
+/**
+ * Build roommate interaction matrix from RoommateMatch table.
+ * PENDING: one-way (requester → target)
+ * ACCEPTED: two-way
+ * Returns Map<userId, Set<userId>>
+ */
+async function buildRoommateInteractionMatrix() {
+    const matches = await prisma.roommateMatch.findMany({
+        where: { status: { in: ['PENDING', 'ACCEPTED'] } },
+        select: { requester_id: true, target_id: true, status: true },
+    });
+    const matrix = new Map();
+    const addEdge = (from, to) => {
+        if (!matrix.has(from)) matrix.set(from, new Set());
+        matrix.get(from).add(to);
+    };
+    for (const m of matches) {
+        addEdge(m.requester_id, m.target_id);
+        if (m.status === 'ACCEPTED') addEdge(m.target_id, m.requester_id);
+    }
+    return matrix;
+}
+
+/**
+ * Build room favorite matrix from FavoriteRoom table.
+ * Returns Map<userId, Set<roomId>>
+ */
+async function buildRoomFavMatrix() {
+    const favs = await prisma.favoriteRoom.findMany({
+        select: { userId: true, roomId: true },
+    });
+    const matrix = new Map();
+    for (const f of favs) {
+        if (!matrix.has(f.userId)) matrix.set(f.userId, new Set());
+        matrix.get(f.userId).add(f.roomId);
+    }
+    return matrix;
+}
+
+/**
+ * Jaccard similarity between two Sets.
+ * Returns number in [0.0, 1.0]
+ */
+function jaccardSimilarity(setA, setB) {
+    if (!setA || !setB || setA.size === 0 || setB.size === 0) return 0;
+    let intersection = 0;
+    for (const item of setA) {
+        if (setB.has(item)) intersection++;
+    }
+    const union = setA.size + setB.size - intersection;
+    return union === 0 ? 0 : intersection / union;
+}
+
+/**
+ * Compute CF boost for a (userId, candidateId) pair using full CF algorithm.
+ * roommateSim = max(directJaccard, maxNeighborJaccard)
+ * roomFavSim  = jaccard(myFavSet, candFavSet)
+ * combinedSim = min(1.0, 0.6 * roommateSim + 0.4 * roomFavSim)
+ * cfBoost     = round(15 * combinedSim)  → [0, 15]
+ */
+function computeCFBoost(userId, candidateId, roommateMatrix, roomFavMatrix) {
+    const myRoommateSet = roommateMatrix.get(userId) || new Set();
+    const candRoommateSet = roommateMatrix.get(candidateId) || new Set();
+    const myFavSet = roomFavMatrix.get(userId) || new Set();
+    const candFavSet = roomFavMatrix.get(candidateId) || new Set();
+
+    // Cold start: no data at all
+    if (myRoommateSet.size === 0 && myFavSet.size === 0) return 0;
+
+    // Direct jaccard between user and candidate
+    const directJaccard = jaccardSimilarity(myRoommateSet, candRoommateSet);
+
+    // Neighbor-based: find max jaccard between any neighbor of userId and candidateId
+    let maxNeighborJaccard = 0;
+    for (const [neighborId, neighborSet] of roommateMatrix) {
+        if (neighborId === userId || neighborId === candidateId) continue;
+        if (!myRoommateSet.has(neighborId)) continue; // only neighbors of userId
+        const sim = jaccardSimilarity(candRoommateSet, neighborSet);
+        if (sim > maxNeighborJaccard) maxNeighborJaccard = sim;
+    }
+
+    const roommateSim = Math.max(directJaccard, maxNeighborJaccard);
+    const roomFavSim = jaccardSimilarity(myFavSet, candFavSet);
+    const combinedSim = Math.min(1.0, 0.6 * roommateSim + 0.4 * roomFavSim);
+    return Math.round(15 * combinedSim);
+}
+
+/**
+ * Compute experience boost from roommate ratings for a list of candidate IDs.
+ * experienceBoost = clamp(round(10 * (avgRating - 1) / 4), 0, 10)
+ * wouldLiveAgainRate = round(countTrue / total * 100), null if no ratings
+ * Returns Map<candidateId, { avgRating, experienceBoost, wouldLiveAgainRate }>
+ */
+async function computeExperienceData(candidateIds) {
+    if (!candidateIds || candidateIds.length === 0) return new Map();
+
+    const ratings = await prisma.roommateRating.findMany({
+        where: { target_id: { in: candidateIds } },
+        select: { target_id: true, overall_rating: true, would_live_again: true },
+    });
+
+    const grouped = new Map();
+    for (const r of ratings) {
+        if (!grouped.has(r.target_id)) grouped.set(r.target_id, []);
+        grouped.get(r.target_id).push(r);
+    }
+
+    const result = new Map();
+    for (const [targetId, list] of grouped) {
+        const total = list.length;
+        const avgRating = list.reduce((sum, r) => sum + r.overall_rating, 0) / total;
+        const experienceBoost = Math.min(10, Math.max(0, Math.round(10 * (avgRating - 1) / 4)));
+        const countTrue = list.filter((r) => r.would_live_again === true).length;
+        const wouldLiveAgainRate = total > 0 ? Math.round((countTrue / total) * 100) : null;
+        result.set(targetId, { avgRating, experienceBoost, wouldLiveAgainRate });
+    }
+    return result;
+}
+
+// ─── Core suggestion logic ────────────────────────────────────────────────────
+
 /**
  * Lấy gợi ý roommate
+ * matchScore = min(100, lifestyleScore + cfBoost + experienceBoost)
  */
 async function getSuggestions(userId, params) {
     const limit = Math.min(50, Math.max(1, parseInt(params.limit) || 20));
 
     const me = await prisma.user.findUnique({
         where: { id: userId },
-        include: {
-            lifestyleProfile: true,
-            preference: true,
-        },
+        include: { lifestyleProfile: true, preference: true },
     });
     if (!me) {
         throw Object.assign(new Error('User not found'), { statusCode: 404 });
     }
 
-    const existingMatchUserIds = await prisma.roommateMatch.findMany({
-        where: {
-            OR: [{ requester_id: userId }, { target_id: userId }],
-            status: { notIn: ['BLOCKED'] },
-        },
-        select: { requester_id: true, target_id: true },
+    const existingMatches = await prisma.roommateMatch.findMany({
+        where: { OR: [{ requester_id: userId }, { target_id: userId }] },
+        select: { requester_id: true, target_id: true, status: true },
     });
+
+    const matchStatusMap = new Map();
+    existingMatches.forEach((m) => {
+        const otherId = m.requester_id === userId ? m.target_id : m.requester_id;
+        matchStatusMap.set(otherId, m.status);
+    });
+
+    // Exclude self and BLOCKED users only
     const excludeIds = new Set([userId]);
-    existingMatchUserIds.forEach((m) => {
-        excludeIds.add(m.requester_id);
-        excludeIds.add(m.target_id);
+    existingMatches.forEach((m) => {
+        if (m.status === 'BLOCKED') {
+            const otherId = m.requester_id === userId ? m.target_id : m.requester_id;
+            excludeIds.add(otherId);
+        }
     });
 
     const genderNorm = (g) => {
@@ -258,31 +293,36 @@ async function getSuggestions(userId, params) {
             status: 'ACTIVE',
             role: 'TENANT',
         },
-        include: {
-            lifestyleProfile: true,
-            preference: true,
-        },
+        include: { lifestyleProfile: true, preference: true },
     });
 
     if (hasUsableGender && (myGenderNorm === 'nam' || myGenderNorm === 'nữ')) {
-        candidates = candidates.filter((u) => {
-            const candNorm = genderNorm(u.gender);
-            return candNorm === myGenderNorm;
-        });
+        candidates = candidates.filter((u) => genderNorm(u.gender) === myGenderNorm);
     }
+
+    const candidateIds = candidates.map((u) => u.id);
+
+    // Load all CF and experience data in parallel (single batch per source)
+    const [roommateMatrix, roomFavMatrix, experienceMap] = await Promise.all([
+        buildRoommateInteractionMatrix().catch(() => new Map()),
+        buildRoomFavMatrix().catch(() => new Map()),
+        computeExperienceData(candidateIds).catch(() => new Map()),
+    ]);
 
     const scored = candidates.map((u) => {
         const candidateGenderNorm = genderNorm(u.gender);
-        const isSameGender =
-            hasUsableGender &&
-            candidateGenderNorm &&
-            candidateGenderNorm === myGenderNorm;
-        const baseScore = computeLifestyleScore(
+        const isSameGender = hasUsableGender && candidateGenderNorm === myGenderNorm;
+
+        const lifestyleScore = computeLifestyleScore(
             me.lifestyleProfile,
             u.lifestyleProfile,
             me.preference,
             u.preference
         );
+        const cfBoost = computeCFBoost(userId, u.id, roommateMatrix, roomFavMatrix);
+        const expData = experienceMap.get(u.id) || { experienceBoost: 0, wouldLiveAgainRate: null };
+        const matchScore = Math.min(100, lifestyleScore + cfBoost + expData.experienceBoost);
+
         return {
             user: {
                 id: u.id,
@@ -315,35 +355,32 @@ async function getSuggestions(userId, params) {
                       preferredLocation: u.preference.preferredLocation || null,
                   }
                 : null,
-            matchScore: Math.min(100, baseScore),
+            matchScore,
+            cfScore: cfBoost,
+            experienceScore: expData.experienceBoost,
+            wouldLiveAgainRate: expData.wouldLiveAgainRate,
             isSameGender,
+            matchStatus: matchStatusMap.get(u.id) || null,
         };
     });
 
     scored.sort((a, b) => b.matchScore - a.matchScore);
-    const data = scored.slice(0, limit);
-
     return {
-        data,
+        data: scored.slice(0, limit),
         message: hasUsableGender
             ? undefined
             : 'Bạn chưa cập nhật giới tính, đang gợi ý roommate từ toàn bộ tenant theo điểm phù hợp.',
     };
 }
 
-/**
- * Gửi lời mời roommate
- */
+// ─── Match management ─────────────────────────────────────────────────────────
+
 async function sendRequest(requesterId, targetId) {
     if (requesterId === targetId) {
-        throw Object.assign(new Error('Không thể gửi lời mời cho chính mình'), {
-            statusCode: 400,
-        });
+        throw Object.assign(new Error('Không thể gửi lời mời cho chính mình'), { statusCode: 400 });
     }
 
-    const target = await prisma.user.findUnique({
-        where: { id: targetId },
-    });
+    const target = await prisma.user.findUnique({ where: { id: targetId } });
     if (!target || target.status !== 'ACTIVE' || target.role !== 'TENANT') {
         throw Object.assign(
             new Error('Người dùng không tồn tại hoặc không phải tenant'),
@@ -352,42 +389,29 @@ async function sendRequest(requesterId, targetId) {
     }
 
     const existing = await prisma.roommateMatch.findUnique({
-        where: {
-            requester_id_target_id: { requester_id: requesterId, target_id: targetId },
-        },
+        where: { requester_id_target_id: { requester_id: requesterId, target_id: targetId } },
     });
     if (existing) {
-        if (existing.status === 'PENDING') {
+        if (existing.status === 'PENDING')
             throw Object.assign(new Error('Bạn đã gửi lời mời trước đó'), { statusCode: 400 });
-        }
-        if (existing.status === 'ACCEPTED') {
+        if (existing.status === 'ACCEPTED')
             throw Object.assign(new Error('Hai bạn đã là match'), { statusCode: 400 });
-        }
-        if (existing.status === 'REJECTED' || existing.status === 'BLOCKED') {
+        if (existing.status === 'REJECTED' || existing.status === 'BLOCKED')
             throw Object.assign(new Error('Không thể gửi lời mời'), { statusCode: 400 });
-        }
     }
 
     const reverse = await prisma.roommateMatch.findUnique({
-        where: {
-            requester_id_target_id: { requester_id: targetId, target_id: requesterId },
-        },
+        where: { requester_id_target_id: { requester_id: targetId, target_id: requesterId } },
     });
     if (reverse && reverse.status === 'PENDING') {
         throw Object.assign(
-            new Error(
-                'Người này đã gửi lời mời cho bạn. Hãy xem trong "Lời mời nhận được" và chấp nhận.'
-            ),
+            new Error('Người này đã gửi lời mời cho bạn. Hãy xem trong "Lời mời nhận được" và chấp nhận.'),
             { statusCode: 400 }
         );
     }
 
     const match = await prisma.roommateMatch.create({
-        data: {
-            requester_id: requesterId,
-            target_id: targetId,
-            status: 'PENDING',
-        },
+        data: { requester_id: requesterId, target_id: targetId, status: 'PENDING' },
     });
 
     return {
@@ -401,21 +425,14 @@ async function sendRequest(requesterId, targetId) {
     };
 }
 
-/**
- * Lấy danh sách match
- */
 async function getMyMatches(userId) {
     const matches = await prisma.roommateMatch.findMany({
-        where: {
-            OR: [{ requester_id: userId }, { target_id: userId }],
-        },
+        where: { OR: [{ requester_id: userId }, { target_id: userId }] },
         orderBy: { created_at: 'desc' },
     });
 
     const otherIds = [
-        ...new Set(
-            matches.map((m) => (m.requester_id === userId ? m.target_id : m.requester_id))
-        ),
+        ...new Set(matches.map((m) => (m.requester_id === userId ? m.target_id : m.requester_id))),
     ];
     const users =
         otherIds.length > 0
@@ -426,28 +443,21 @@ async function getMyMatches(userId) {
             : [];
     const userMap = new Map(users.map((u) => [u.id, u]));
 
-    // Look up ROOMMATE_INVITE notifications to find roomId for each match
-    // Notifications are sent to the target user with roomId embedded in body
     const allUserIds = [...new Set([userId, ...otherIds])];
-    const inviteNotifs = allUserIds.length > 0
-        ? await prisma.notification.findMany({
-              where: {
-                  userId: { in: allUserIds },
-                  type: 'ROOMMATE_INVITE',
-              },
-              orderBy: { createdAt: 'desc' },
-              select: { userId: true, body: true, createdAt: true },
-          })
-        : [];
+    const inviteNotifs =
+        allUserIds.length > 0
+            ? await prisma.notification.findMany({
+                  where: { userId: { in: allUserIds }, type: 'ROOMMATE_INVITE' },
+                  orderBy: { createdAt: 'desc' },
+                  select: { userId: true, body: true, createdAt: true },
+              })
+            : [];
 
-    // Build a map: targetUserId -> roomId (from the latest invite notification)
     const roomIdByUser = new Map();
     for (const n of inviteNotifs) {
         if (!roomIdByUser.has(n.userId) && n.body) {
-            const match = n.body.match(/\|\|ROOM_ID:([a-f0-9-]+)\|\|/i);
-            if (match) {
-                roomIdByUser.set(n.userId, match[1]);
-            }
+            const m = n.body.match(/\|\|ROOM_ID:([a-f0-9-]+)\|\|/i);
+            if (m) roomIdByUser.set(n.userId, m[1]);
         }
     }
 
@@ -455,7 +465,6 @@ async function getMyMatches(userId) {
         const isRequester = m.requester_id === userId;
         const otherId = isRequester ? m.target_id : m.requester_id;
         const other = userMap.get(otherId) || null;
-        // roomId: check if the current user received an invite, or if the other user received one
         const roomId = roomIdByUser.get(userId) || roomIdByUser.get(otherId) || null;
         return {
             id: m.id,
@@ -464,12 +473,7 @@ async function getMyMatches(userId) {
             isRequester,
             roomId,
             otherUser: other
-                ? {
-                      id: other.id,
-                      fullName: other.fullName,
-                      avatarUrl: other.avatarUrl,
-                      gender: other.gender,
-                  }
+                ? { id: other.id, fullName: other.fullName, avatarUrl: other.avatarUrl, gender: other.gender }
                 : null,
         };
     });
@@ -477,49 +481,28 @@ async function getMyMatches(userId) {
     return { data: list };
 }
 
-/**
- * Cập nhật trạng thái match
- */
 async function updateMatchStatus(userId, matchId, body) {
     const { status } = body;
-
     if (!status || !['ACCEPTED', 'REJECTED'].includes(status)) {
-        throw Object.assign(
-            new Error('status phải là ACCEPTED hoặc REJECTED'),
-            { statusCode: 400 }
-        );
+        throw Object.assign(new Error('status phải là ACCEPTED hoặc REJECTED'), { statusCode: 400 });
     }
 
-    const match = await prisma.roommateMatch.findUnique({
-        where: { id: matchId },
-    });
-    if (!match) {
-        throw Object.assign(new Error('Không tìm thấy lời mời'), { statusCode: 404 });
-    }
-    if (match.target_id !== userId) {
-        throw Object.assign(
-            new Error('Chỉ người nhận mới có thể chấp nhận/từ chối'),
-            { statusCode: 403 }
-        );
-    }
-    if (match.status !== 'PENDING') {
+    const match = await prisma.roommateMatch.findUnique({ where: { id: matchId } });
+    if (!match) throw Object.assign(new Error('Không tìm thấy lời mời'), { statusCode: 404 });
+    if (match.target_id !== userId)
+        throw Object.assign(new Error('Chỉ người nhận mới có thể chấp nhận/từ chối'), { statusCode: 403 });
+    if (match.status !== 'PENDING')
         throw Object.assign(new Error('Lời mời đã được xử lý'), { statusCode: 400 });
-    }
 
-    const updated = await prisma.roommateMatch.update({
-        where: { id: matchId },
-        data: { status },
-    });
-
+    const updated = await prisma.roommateMatch.update({ where: { id: matchId }, data: { status } });
     return {
         message: status === 'ACCEPTED' ? 'Đã chấp nhận lời mời' : 'Đã từ chối lời mời',
         data: { id: updated.id, status: updated.status },
     };
 }
 
-/**
- * Lấy public profile của một user (dùng cho roommate view)
- */
+// ─── Profile & Room helpers ───────────────────────────────────────────────────
+
 async function getPublicProfile(userId) {
     const user = await prisma.user.findUnique({
         where: { id: userId },
@@ -546,9 +529,7 @@ async function getPublicProfile(userId) {
         },
     });
 
-    if (!user) {
-        throw Object.assign(new Error('Không tìm thấy người dùng'), { statusCode: 404 });
-    }
+    if (!user) throw Object.assign(new Error('Không tìm thấy người dùng'), { statusCode: 404 });
 
     const lp = user.lifestyleProfile;
     return {
@@ -603,9 +584,6 @@ async function getPublicProfile(userId) {
 
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
 
-/**
- * Lấy danh sách phòng đang thuê (ACTIVE) của user
- */
 async function getMyActiveRooms(userId) {
     const periods = await prisma.roomRentalPeriod.findMany({
         where: { userId, status: 'ACTIVE' },
@@ -613,12 +591,7 @@ async function getMyActiveRooms(userId) {
             room: {
                 include: {
                     images: { take: 1 },
-                    rentals: {
-                        include: {
-                            location: true,
-                            images: { take: 1 },
-                        },
-                    },
+                    rentals: { include: { location: true, images: { take: 1 } } },
                 },
             },
         },
@@ -630,9 +603,7 @@ async function getMyActiveRooms(userId) {
             const room = p.room;
             const rental = room?.rentals;
             const loc = rental?.location;
-            const address = loc
-                ? [loc.address, loc.district, loc.city].filter(Boolean).join(', ')
-                : '';
+            const address = loc ? [loc.address, loc.district, loc.city].filter(Boolean).join(', ') : '';
             return {
                 rentalPeriodId: p.id,
                 roomId: room?.id,
@@ -648,16 +619,11 @@ async function getMyActiveRooms(userId) {
     };
 }
 
-/**
- * Mời roommate đã chấp nhận kết bạn vào phòng đang thuê
- * → Tạo notification + gửi email cho target user
- */
 async function inviteRoommate(inviterId, targetUserId, roomId) {
     if (inviterId === targetUserId) {
         throw Object.assign(new Error('Không thể mời chính mình'), { statusCode: 400 });
     }
 
-    // 1. Kiểm tra hai người đã ACCEPTED match
     const match = await prisma.roommateMatch.findFirst({
         where: {
             OR: [
@@ -674,7 +640,6 @@ async function inviteRoommate(inviterId, targetUserId, roomId) {
         );
     }
 
-    // 2. Kiểm tra inviter đang thuê phòng này (ACTIVE)
     const rentalPeriod = await prisma.roomRentalPeriod.findFirst({
         where: { userId: inviterId, roomId, status: 'ACTIVE' },
     });
@@ -685,27 +650,21 @@ async function inviteRoommate(inviterId, targetUserId, roomId) {
         );
     }
 
-    // 3. Lấy thông tin phòng
     const room = await prisma.rooms.findUnique({
         where: { id: roomId },
         include: {
             images: { take: 1 },
-            rentals: {
-                include: {
-                    location: true,
-                    images: { take: 1 },
-                },
-            },
+            rentals: { include: { location: true, images: { take: 1 } } },
         },
     });
-    if (!room) {
-        throw Object.assign(new Error('Không tìm thấy phòng'), { statusCode: 404 });
-    }
+    if (!room) throw Object.assign(new Error('Không tìm thấy phòng'), { statusCode: 404 });
 
-    // 4. Lấy thông tin cả 2 user
     const [inviter, targetUser] = await Promise.all([
         prisma.user.findUnique({ where: { id: inviterId }, select: { id: true, fullName: true } }),
-        prisma.user.findUnique({ where: { id: targetUserId }, select: { id: true, fullName: true, email: true, status: true } }),
+        prisma.user.findUnique({
+            where: { id: targetUserId },
+            select: { id: true, fullName: true, email: true, status: true },
+        }),
     ]);
     if (!targetUser || targetUser.status !== 'ACTIVE') {
         throw Object.assign(new Error('Người dùng không tồn tại hoặc không hoạt động'), { statusCode: 404 });
@@ -718,7 +677,6 @@ async function inviteRoommate(inviterId, targetUserId, roomId) {
     const price = room.price ? Number(room.price).toLocaleString('vi-VN') + ' VNĐ/tháng' : '';
     const roomUrl = `${FRONTEND_URL.replace(/\/$/, '')}/room/${room.id}`;
 
-    // 5. Tạo notification trên hệ thống (roomId embedded in body for FE parsing)
     const notifBody = `${inviter.fullName} mời bạn ở ghép phòng "${roomTitle}" tại ${address}. Giá: ${price}. Xem chi tiết phòng để quyết định.||ROOM_ID:${room.id}||`;
     await prisma.notification.create({
         data: {
@@ -730,7 +688,6 @@ async function inviteRoommate(inviterId, targetUserId, roomId) {
         },
     });
 
-    // 6. Gửi email
     const { sendEmail } = require('../utils/email');
     const subject = `EZRoom – ${inviter.fullName} mời bạn ở ghép phòng "${roomTitle}"`;
     const text = `Chào ${targetUser.fullName},\n\n${inviter.fullName} mời bạn ở ghép phòng "${roomTitle}".\n\nĐịa chỉ: ${address}\nGiá: ${price}\n\nXem chi tiết phòng: ${roomUrl}\n\n— EZRoom`;
@@ -753,32 +710,17 @@ async function inviteRoommate(inviterId, targetUserId, roomId) {
         console.error('Send roommate invite email error:', err)
     );
 
-    return {
-        message: `Đã gửi lời mời ở ghép đến ${targetUser.fullName}`,
-    };
+    return { message: `Đã gửi lời mời ở ghép đến ${targetUser.fullName}` };
 }
 
-/**
- * Tìm người dùng đang tìm phòng nhiều nhất ở khu vực X.
- *
- * Dựa trên HÀNH VI THỰC TẾ:
- *   1. FavoriteRoom  – user đã lưu phòng ở khu vực đó
- *   2. Preorder      – user đã đặt cọc phòng ở khu vực đó
- *   3. RoomRentalPeriod – user đã/đang thuê phòng ở khu vực đó
- *
- * Mỗi hành vi = 1 điểm activity. Xếp hạng user theo tổng điểm giảm dần.
- * Trả về kèm lifestyle + preference + matchScore so với user hiện tại.
- */
+// ─── Area search ──────────────────────────────────────────────────────────────
+
 async function getTopSearchersInArea(currentUserId, areaQuery, limit = 10) {
     const area = (areaQuery || '').trim();
     if (!area || area.length < 1) {
         throw Object.assign(new Error('Vui lòng nhập khu vực'), { statusCode: 400 });
     }
 
-    const areaLower = area.toLowerCase();
-    const areaPattern = `%${areaLower}%`;
-
-    // 1. Tìm tất cả roomIds thuộc khu vực khớp (district, city, address, hoặc title của rental)
     const roomsInArea = await prisma.rooms.findMany({
         where: {
             rentals: {
@@ -812,28 +754,17 @@ async function getTopSearchersInArea(currentUserId, areaQuery, limit = 10) {
         return { data: [], area, totalRoomsInArea: 0 };
     }
 
-    // 2. Đếm activity per user dựa trên HÀNH VI TÌM KIẾM THỰC SỰ:
-    //    - VIEW      ×1 : bấm vào xem chi tiết phòng (user_room_interactions)
-    //    - FAVORITE  ×3 : lưu/yêu thích phòng (FavoriteRoom)
-    //    - PREORDER  ×5 : đặt cọc phòng (Preorder)
-    //    (Bỏ RoomRentalPeriod – người đã ký hợp đồng không phải đang tìm phòng)
     const [viewCounts, favCounts, preorderCounts] = await Promise.all([
-        // Lượt xem phòng thực sự (click vào trang chi tiết)
         prisma.user_room_interactions.groupBy({
             by: ['user_id'],
-            where: {
-                room_id: { in: roomIdsInArea },
-                interaction_type: 'VIEW',
-            },
+            where: { room_id: { in: roomIdsInArea }, interaction_type: 'VIEW' },
             _count: { user_id: true },
         }),
-        // Lưu phòng yêu thích
         prisma.favoriteRoom.groupBy({
             by: ['userId'],
             where: { roomId: { in: roomIdsInArea } },
             _count: { userId: true },
         }),
-        // Đặt cọc phòng
         prisma.preorder.groupBy({
             by: ['userId'],
             where: { roomId: { in: roomIdsInArea } },
@@ -841,69 +772,51 @@ async function getTopSearchersInArea(currentUserId, areaQuery, limit = 10) {
         }),
     ]);
 
-    // 3. Gộp activity score per user
-    const activityMap = new Map(); // userId → { views, fav, preorder, total }
+    const activityMap = new Map();
     for (const row of viewCounts) {
         const uid = row.user_id;
         if (!activityMap.has(uid)) activityMap.set(uid, { views: 0, fav: 0, preorder: 0, total: 0 });
         const entry = activityMap.get(uid);
         entry.views = row._count.user_id;
-        entry.total += row._count.user_id * 1; // VIEW ×1
+        entry.total += row._count.user_id * 1;
     }
     for (const row of favCounts) {
         const uid = row.userId;
         if (!activityMap.has(uid)) activityMap.set(uid, { views: 0, fav: 0, preorder: 0, total: 0 });
         const entry = activityMap.get(uid);
         entry.fav = row._count.userId;
-        entry.total += row._count.userId * 3; // FAVORITE ×3
+        entry.total += row._count.userId * 3;
     }
     for (const row of preorderCounts) {
         const uid = row.userId;
         if (!activityMap.has(uid)) activityMap.set(uid, { views: 0, fav: 0, preorder: 0, total: 0 });
         const entry = activityMap.get(uid);
         entry.preorder = row._count.userId;
-        entry.total += row._count.userId * 5; // PREORDER ×5
+        entry.total += row._count.userId * 5;
     }
 
-    // Loại bỏ chính mình
     activityMap.delete(currentUserId);
-
     if (activityMap.size === 0) {
         return { data: [], area, totalRoomsInArea: roomIdsInArea.length };
     }
 
-    // 4. Sắp xếp theo activity giảm dần, lấy top
     const sortedUserIds = [...activityMap.entries()]
         .sort((a, b) => b[1].total - a[1].total)
         .slice(0, Math.min(50, limit))
         .map(([uid]) => uid);
 
-    // 5. Load user info + lifestyle + preference
     const [users, currentUser] = await Promise.all([
         prisma.user.findMany({
-            where: {
-                id: { in: sortedUserIds },
-                status: 'ACTIVE',
-                role: 'TENANT',
-            },
-            include: {
-                lifestyleProfile: true,
-                preference: true,
-            },
+            where: { id: { in: sortedUserIds }, status: 'ACTIVE', role: 'TENANT' },
+            include: { lifestyleProfile: true, preference: true },
         }),
         prisma.user.findUnique({
             where: { id: currentUserId },
-            include: {
-                lifestyleProfile: true,
-                preference: true,
-            },
+            include: { lifestyleProfile: true, preference: true },
         }),
     ]);
 
-    // Map users by id for ordering
     const userMap = new Map(users.map((u) => [u.id, u]));
-
-    // 6. Build response with matchScore
     const genderNorm = (g) => {
         if (!g) return null;
         const s = String(g).trim().toLowerCase();
@@ -919,11 +832,9 @@ async function getTopSearchersInArea(currentUserId, areaQuery, limit = 10) {
         .map((uid) => {
             const u = userMap.get(uid);
             if (!u) return null;
-
             const activity = activityMap.get(uid);
             const candidateGenderNorm = genderNorm(u.gender);
             const isSameGender = hasUsableGender && candidateGenderNorm === myGenderNorm;
-
             const baseScore = currentUser
                 ? computeLifestyleScore(
                       currentUser.lifestyleProfile,
@@ -932,15 +843,8 @@ async function getTopSearchersInArea(currentUserId, areaQuery, limit = 10) {
                       u.preference
                   )
                 : 0;
-            const genderBoost = isSameGender ? 12 : 0;
-
             return {
-                user: {
-                    id: u.id,
-                    fullName: u.fullName,
-                    avatarUrl: u.avatarUrl,
-                    gender: u.gender,
-                },
+                user: { id: u.id, fullName: u.fullName, avatarUrl: u.avatarUrl, gender: u.gender },
                 lifestyle: u.lifestyleProfile
                     ? {
                           smoking: u.lifestyleProfile.smoking,
@@ -964,7 +868,7 @@ async function getTopSearchersInArea(currentUserId, areaQuery, limit = 10) {
                           preferredLocation: u.preference.preferredLocation || null,
                       }
                     : null,
-                matchScore: Math.min(100, baseScore + genderBoost),
+                matchScore: Math.min(100, baseScore),
                 isSameGender,
                 activityInArea: {
                     views: activity.views,
@@ -977,14 +881,10 @@ async function getTopSearchersInArea(currentUserId, areaQuery, limit = 10) {
         .filter(Boolean)
         .slice(0, limit);
 
-    return {
-        data,
-        area,
-        totalRoomsInArea: roomIdsInArea.length,
-    };
+    return { data, area, totalRoomsInArea: roomIdsInArea.length };
 }
 
-// ─── Roommate Rating helpers ─────────────────────────────────────────────────
+// ─── Roommate Rating ──────────────────────────────────────────────────────────
 
 function periodsOverlap(startA, endA, startB, endB) {
     const endAEff = endA || new Date('9999-12-31');
@@ -993,10 +893,10 @@ function periodsOverlap(startA, endA, startB, endB) {
 }
 
 async function createRoommateRating(reviewerId, body) {
-    const { targetId, rentalPeriodId, overallRating, comment } = body;
+    const { targetId, rentalPeriodId, overallRating, wouldLiveAgain, comment } = body;
 
-    if (!targetId || !rentalPeriodId || !overallRating) {
-        const err = new Error('Thiếu thông tin bắt buộc');
+    if (!targetId || !rentalPeriodId || overallRating == null || wouldLiveAgain == null) {
+        const err = new Error('Thiếu thông tin bắt buộc (targetId, rentalPeriodId, overallRating, wouldLiveAgain)');
         err.statusCode = 400;
         throw err;
     }
@@ -1005,11 +905,21 @@ async function createRoommateRating(reviewerId, body) {
         err.statusCode = 400;
         throw err;
     }
+    if (typeof wouldLiveAgain !== 'boolean') {
+        const err = new Error('wouldLiveAgain phải là true hoặc false');
+        err.statusCode = 400;
+        throw err;
+    }
 
-    // Kiểm tra RoomRentalPeriod chung
     const [reviewerPeriods, targetPeriods] = await Promise.all([
-        prisma.roomRentalPeriod.findMany({ where: { userId: reviewerId }, select: { id: true, roomId: true, startDate: true, endDate: true } }),
-        prisma.roomRentalPeriod.findMany({ where: { userId: targetId }, select: { id: true, roomId: true, startDate: true, endDate: true } }),
+        prisma.roomRentalPeriod.findMany({
+            where: { userId: reviewerId },
+            select: { id: true, roomId: true, startDate: true, endDate: true },
+        }),
+        prisma.roomRentalPeriod.findMany({
+            where: { userId: targetId },
+            select: { id: true, roomId: true, startDate: true, endDate: true },
+        }),
     ]);
 
     const hasSharedPeriod = reviewerPeriods.some((rp) =>
@@ -1017,19 +927,18 @@ async function createRoommateRating(reviewerId, body) {
             (tp) => tp.roomId === rp.roomId && periodsOverlap(rp.startDate, rp.endDate, tp.startDate, tp.endDate)
         )
     );
-
     if (!hasSharedPeriod) {
         const err = new Error('Bạn chưa từng ở cùng người này');
         err.statusCode = 403;
         throw err;
     }
 
-    // Kiểm tra unique
-    const existing = await prisma.roommateRating.findFirst({
-        where: { reviewer_id: reviewerId, target_id: targetId, rental_period_id: rentalPeriodId },
+    // Enforce: chỉ được đánh giá 1 lần duy nhất cho mỗi target
+    const existingAny = await prisma.roommateRating.findFirst({
+        where: { reviewer_id: reviewerId, target_id: targetId },
     });
-    if (existing) {
-        const err = new Error('Bạn đã đánh giá người này cho kỳ thuê này');
+    if (existingAny) {
+        const err = new Error('Bạn đã đánh giá người này rồi');
         err.statusCode = 409;
         throw err;
     }
@@ -1040,6 +949,7 @@ async function createRoommateRating(reviewerId, body) {
             target_id: targetId,
             rental_period_id: rentalPeriodId,
             overall_rating: overallRating,
+            would_live_again: wouldLiveAgain,
             comment: comment || null,
         },
     });
@@ -1049,8 +959,14 @@ async function createRoommateRating(reviewerId, body) {
 
 async function checkRoommateRating(reviewerId, targetId, rentalPeriodId) {
     const existing = await prisma.roommateRating.findFirst({
-        where: { reviewer_id: reviewerId, target_id: targetId, rental_period_id: rentalPeriodId },
-        select: { id: true, overall_rating: true, comment: true, created_at: true },
+        where: { reviewer_id: reviewerId, target_id: targetId },
+        select: {
+            id: true,
+            overall_rating: true,
+            would_live_again: true,
+            comment: true,
+            created_at: true,
+        },
     });
     return { data: existing || null };
 }
@@ -1067,4 +983,10 @@ module.exports = {
     getTopSearchersInArea,
     createRoommateRating,
     checkRoommateRating,
+    // helpers exported for testing
+    jaccardSimilarity,
+    computeCFBoost,
+    computeExperienceData,
+    buildRoommateInteractionMatrix,
+    buildRoomFavMatrix,
 };

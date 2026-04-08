@@ -142,17 +142,19 @@ async function createRental(ownerId, body, files = {}) {
             }
 
             // Save uploaded document paths to rental_documents table
-            for (const doc of uploadedDocuments) {
-                // Create document record first to get its ID
+            for (let i = 0; i < uploadedDocuments.length; i++) {
+                const doc = uploadedDocuments[i];
+                const VALID_TYPES = ['CCCD', 'SO_DO', 'GPKD', 'HOP_DONG', 'OTHER'];
+                const rawType = (files.documentTypes?.[i] ?? 'OTHER').toUpperCase();
+                const docType = VALID_TYPES.includes(rawType) ? rawType : 'OTHER';
                 await tx.rental_documents.create({
                     data: {
                         rental_id: created.id,
-                        document_type: 'OTHER',
+                        document_type: docType,
                         image_url: doc.path,
                         status: 'PENDING',
                     },
                 });
-                // Note: Access logging will be done separately when moderator views documents
             }
 
             // Add to moderation queue

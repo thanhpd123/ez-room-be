@@ -37,6 +37,14 @@ async function createRental(req, res) {
             f.mimetype.startsWith('image/')  // Allow images as documents too
         );
 
+        // Extract document_type array from FormData (parallel array to files)
+        const rawDocumentTypes = req.body.document_type;
+        const documentTypes = Array.isArray(rawDocumentTypes)
+            ? rawDocumentTypes
+            : rawDocumentTypes
+            ? [rawDocumentTypes]
+            : [];
+
         // Extract JSON image URLs from FormData
         let imageUrls = [];
         if (req.body.images) {
@@ -56,6 +64,7 @@ async function createRental(req, res) {
         const result = await rentalService.createRental(req.auth.user.id, req.body, {
             // Files from multipart - only documents, no separate imageFiles
             documentFiles,
+            documentTypes,
             // URLs from FormData (JSON string)
             imageUrls,
         });
