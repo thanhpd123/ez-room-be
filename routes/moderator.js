@@ -23,6 +23,8 @@ const {
     getQueueStatusForTarget,
     getModeratorList,
     getRejectionInfo,
+    getOverview,
+    distributeTasks,
 } = require('../controllers/moderator.controller');
 
 const router = express.Router();
@@ -30,6 +32,19 @@ const router = express.Router();
 // Tất cả routes yêu cầu: đăng nhập + role MODERATOR hoặc ADMIN
 router.use(verifyJWT);
 router.use(requireRole('MODERATOR', 'ADMIN'));
+
+/**
+ * @openapi
+ * /moderator/overview:
+ *   get:
+ *     tags: [Moderator]
+ *     summary: Tổng quan số lượng mục cần duyệt và đã duyệt
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200:
+ *         description: Overview stats
+ */
+router.get('/overview', getOverview);
 
 /**
  * @openapi
@@ -69,6 +84,28 @@ router.get('/logs', getModeratorLogs);
  *         description: Danh sách queue
  */
 router.get('/queue', getModerationQueue);
+
+/**
+ * @openapi
+ * /moderator/queue/auto-assign:
+ *   post:
+ *     tags: [Moderator]
+ *     summary: Tự động phân bổ/nhận nhiều mục trong hàng đợi cùng lúc
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               count:
+ *                 type: integer
+ *                 description: Số lượng task muốn nhận (mặc định 5)
+ *     responses:
+ *       200:
+ *         description: Đã chia task thành công
+ */
+router.post('/queue/distribute', distributeTasks);
 
 /**
  * @openapi

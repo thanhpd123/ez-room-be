@@ -33,7 +33,6 @@ async function getRooms(req, res) {
             maxPrice: req.query.maxPrice,
             status: req.query.status,
             includeAllStatuses: req.query.includeAllStatuses,
-            sort: req.query.sort,
             page: req.query.page,
             limit: req.query.limit,
         });
@@ -45,7 +44,8 @@ async function getRooms(req, res) {
 
 async function getRoomById(req, res) {
     try {
-        const result = await roomService.getRoomById(req.params.roomId);
+        const userId = req.auth?.user?.id || null;
+        const result = await roomService.getRoomById(req.params.roomId, userId);
         return res.json({ success: true, ...result });
     } catch (err) {
         return handleError(err, res, 'Lỗi khi lấy chi tiết phòng');
@@ -145,15 +145,15 @@ async function getMyBookings(req, res) {
     }
 }
 
-async function getLandlordPeerForRentalPeriod(req, res) {
+async function completeRentalPeriod(req, res) {
     try {
-        const result = await roomService.getLandlordPeerForRentalPeriod(
-            req.auth.user.id,
-            req.params.rentalPeriodId
+        const result = await roomService.completeRentalPeriod(
+            req.params.rentalPeriodId,
+            req.auth.user.id
         );
         return res.json({ success: true, ...result });
     } catch (err) {
-        return handleError(err, res, 'Không lấy được thông tin chủ nhà');
+        return handleError(err, res, 'Lỗi khi kết thúc kỳ thuê');
     }
 }
 
@@ -168,7 +168,7 @@ module.exports = {
     getRoomTenants,
     searchTenants,
     createRentalContract,
+    completeRentalPeriod,
     getMyBookings,
-    getLandlordPeerForRentalPeriod,
     getRoomByIdForSearchRoomate,
 };

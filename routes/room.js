@@ -11,12 +11,18 @@ const {
     getRoomTenants,
     searchTenants,
     createRentalContract,
+    completeRentalPeriod,
     getMyBookings,
     getLandlordPeerForRentalPeriod,
     getRoomByIdForSearchRoomate,
 } = require('../controllers/room.controller');
 
 const router = express.Router();
+
+// ============ IMPORTANT: ORDER MATTERS IN EXPRESS ============
+// More specific routes MUST come before generic routes
+// e.g. /:roomId/tenants before /:roomId
+// ============================================================
 
 /**
  * @openapi
@@ -156,6 +162,23 @@ router.post('/:roomId/contracts', verifyJWT, requireRole('LANDLORD'), createRent
 
 /**
  * @openapi
+ * /rooms/{roomId}/search-roommate:
+ *   get:
+ *     tags: [Rooms]
+ *     summary: Lấy chi tiết phòng trọ phục vụ tracking cho Search Roommate
+ *     parameters:
+ *       - in: path
+ *         name: roomId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Chi tiết phòng
+ */
+router.get('/:roomId/search-roommate', optionalJWT, getRoomByIdForSearchRoomate);
+
+/**
+ * @openapi
  * /rooms/{roomId}:
  *   get:
  *     tags: [Rooms]
@@ -172,23 +195,6 @@ router.post('/:roomId/contracts', verifyJWT, requireRole('LANDLORD'), createRent
  *         description: Không tìm thấy phòng
  */
 router.get('/:roomId', getRoomById);
-
-/**
- * @openapi
- * /rooms/{roomId}/search-roommate:
- *   get:
- *     tags: [Rooms]
- *     summary: Lấy chi tiết phòng trọ phục vụ tracking cho Search Roommate
- *     parameters:
- *       - in: path
- *         name: roomId
- *         required: true
- *         schema: { type: string }
- *     responses:
- *       200:
- *         description: Chi tiết phòng
- */
-router.get('/:roomId/search-roommate', optionalJWT, getRoomByIdForSearchRoomate);
 
 /**
  * @openapi
@@ -247,6 +253,24 @@ router.put('/:roomId/moderate', verifyJWT, requireRole('MODERATOR', 'ADMIN'), mo
 
 /**
  * @openapi
+ * /rooms/rental-periods/{rentalPeriodId}/complete:
+ *   put:
+ *     tags: [Rooms]
+ *     summary: Landlord or Tenant hoàn tất kỳ thuê phòng
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: rentalPeriodId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Kết thúc kỳ thuê thành công
+ */
+router.put('/rental-periods/:rentalPeriodId/complete', verifyJWT, requireRole('LANDLORD', 'TENANT'), completeRentalPeriod);
+
+/**
+ * @openapi
  * /rooms/{roomId}:
  *   put:
  *     tags: [Rooms]
@@ -291,4 +315,3 @@ router.put('/:roomId', verifyJWT, requireRole('LANDLORD'), updateRoom);
 router.delete('/:roomId', verifyJWT, requireRole('LANDLORD'), deleteRoom);
 
 module.exports = router;
-

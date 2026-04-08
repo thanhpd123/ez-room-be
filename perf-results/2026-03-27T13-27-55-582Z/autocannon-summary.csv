@@ -1,0 +1,4 @@
+name,requestsAverage,requestsP99,latencyAverageMs,latencyP95Ms,latencyP99Ms,throughputAverageBps,throughputAverageKbps,errorRate,totalRequests,totalErrors,non2xx,durationSeconds
+public-rentals-load20,26.89,30,743.46,0,1993,139350.94,136.08490234375,0.04277743335399876,1613,0,69,60.43
+public-search-load20,9.04,18,2180.57,0,3836,59689.25,58.290283203125,0.12361623616236163,542,0,67,60.44
+rooms-list-load20,14.9,19,1335.81,0,2405,199322.94,194.65130859375,0.06935123042505593,894,0,62,60.52

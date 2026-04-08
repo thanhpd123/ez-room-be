@@ -11,7 +11,7 @@ datasource db {
 model User {
   id                                                       String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   fullName                                                 String                   @map("full_name") @db.VarChar(100)
-  email                                                    String                   @unique @db.Citext
+  email                                                    String                   @unique
   password_hash                                            String
   phone                                                    String?                  @db.VarChar(20)
   avatarUrl                                                String?                  @map("avatar_url")
@@ -22,7 +22,6 @@ model User {
   isVip                                                    Boolean?                 @default(false) @map("is_vip")
   gender                                                   String?                  @db.VarChar(20)
   vip_expires_at                                           DateTime?                @db.Timestamp(6)
-  ai_chat_sessions                                         ai_chat_sessions[]
   blogPosts                                                BlogPost[]
   document_access_logs                                     document_access_log[]
   favoriteRooms                                            FavoriteRoom[]
@@ -52,12 +51,27 @@ model User {
   searchPrompts                                            SearchPrompt[]
   system_setting_audits_updated                            SystemSettingAudit[]     @relation("SystemSettingAuditUpdatedBy")
   system_settings_updated                                  SystemSetting[]          @relation("SystemSettingUpdatedBy")
+  tenant_reviews_tenant_reviews_reviewed_byTousers         tenant_reviews[]         @relation("tenant_reviews_reviewed_byTousers")
+  tenant_reviews_tenant_reviews_reviewee_idTousers         tenant_reviews[]         @relation("tenant_reviews_reviewee_idTousers")
+  tenant_reviews_tenant_reviews_reviewer_idTousers         tenant_reviews[]         @relation("tenant_reviews_reviewer_idTousers")
   preference                                               UserPreference?
   user_room_interactions                                   user_room_interactions[]
   user_vip_purchases                                       user_vip_purchases[]
   user_warnings_user_warnings_issued_byTousers             user_warnings[]          @relation("user_warnings_issued_byTousers")
   user_warnings_user_warnings_user_idTousers               user_warnings[]          @relation("user_warnings_user_idTousers")
   wallet                                                   Wallet?
+  refreshTokens                                            RefreshToken[]
+  document_access_logs                                     document_access_log[]
+  blogPosts                                                BlogPost[]
+  tenant_reviews_as_reviewer                               tenant_review[]          @relation("tenant_review_reviewer")
+  tenant_reviews_as_reviewee                               tenant_review[]          @relation("tenant_review_reviewee")
+  tenant_reviews_as_moderator                              tenant_review[]          @relation("tenant_review_reviewed_by")
+
+  system_settings_updated        SystemSetting[]      @relation("SystemSettingUpdatedBy")
+  system_setting_audits_updated  SystemSettingAudit[] @relation("SystemSettingAuditUpdatedBy")
+  platform_ledger_entries_created PlatformLedgerEntry[] @relation("PlatformLedgerCreatedBy")
+  ratingsGiven                                             RoommateRating[] @relation("RatingReviewer")
+  ratingsReceived                                          RoommateRating[] @relation("RatingTarget")
 
   @@index([role], map: "idx_users_role")
   @@map("users")
@@ -271,21 +285,24 @@ model RoomAmenity {
 }
 
 model RoomRentalPeriod {
-  id          String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  roomId      String                    @map("room_id") @db.Uuid
-  startDate   DateTime                  @map("start_date") @db.Date
-  endDate     DateTime?                 @map("end_date") @db.Date
-  createdAt   DateTime?                 @default(now()) @map("created_at") @db.Timestamp(6)
-  userId      String                    @map("user_id") @db.Uuid
-  actualPrice Decimal                   @map("actual_price") @db.Decimal(12, 2)
-  deposit     Decimal?                  @default(0) @db.Decimal(12, 2)
-  status      rental_period_status_enum @default(ACTIVE)
-  updatedAt   DateTime?                 @updatedAt @map("updated_at") @db.Timestamp(6)
-  preorder_id String?                   @unique @db.Uuid
-  feedback    feedback[]
-  preorders   Preorder?                 @relation(fields: [preorder_id], references: [id], onUpdate: NoAction)
-  room        rooms                     @relation(fields: [roomId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  tenant      User                      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  id             String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  roomId         String                    @map("room_id") @db.Uuid
+  startDate      DateTime                  @map("start_date") @db.Date
+  endDate        DateTime?                 @map("end_date") @db.Date
+  createdAt      DateTime?                 @default(now()) @map("created_at") @db.Timestamp(6)
+  userId         String                    @map("user_id") @db.Uuid
+  actualPrice    Decimal                   @map("actual_price") @db.Decimal(12, 2)
+  deposit        Decimal?                  @default(0) @db.Decimal(12, 2)
+  status         rental_period_status_enum @default(ACTIVE)
+  updatedAt      DateTime?                 @updatedAt @map("updated_at") @db.Timestamp(6)
+  preorder_id    String?                   @unique @db.Uuid
+  feedback       feedback[]
+  tenantReviews  tenant_review[]
+  tenant_reviews tenant_reviews[]
+  RoommateRatings RoommateRating[]
+  preorders      Preorder?                 @relation(fields: [preorder_id], references: [id], onUpdate: NoAction)
+  room           rooms                     @relation(fields: [roomId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenant         User                      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([status], map: "idx_room_rental_periods_status")
   @@index([userId], map: "idx_room_rental_periods_user_id")
@@ -424,16 +441,15 @@ model SearchPrompt {
 }
 
 model ClipVector {
-  id            String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  room_image_id String                @db.Uuid
-  model         embedding_model_enum? @default(CLIP)
-  embedding     Unsupported("vector")
-  createdAt     DateTime?             @default(now()) @map("created_at") @db.Timestamp(6)
-  model_version String?               @default("ViT-B/16") @db.VarChar(50)
-  dimensions    Int?                  @default(512)
-  room_images   RoomImage             @relation(fields: [room_image_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  id            String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  room_image_id String                 @db.Uuid
+  model         embedding_model_enum?  @default(CLIP)
+  embedding     Unsupported("vector")?
+  createdAt     DateTime?              @default(now()) @map("created_at") @db.Timestamp(6)
+  model_version String?                @default("ViT-B/32") @db.VarChar(50)
+  dimensions    Int?                   @default(512)
+  room_images   RoomImage              @relation(fields: [room_image_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
-  @@index([embedding], map: "idx_clip_vectors_embedding")
   @@map("clip_vectors")
 }
 
@@ -474,6 +490,37 @@ model feedback {
   @@index([rental_period_id], map: "idx_feedback_rental_period")
   @@index([target_type, target_id], map: "idx_feedback_target")
   @@index([status], map: "idx_feedback_status")
+}
+
+model tenant_review {
+  id                              String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  rental_period_id                String                @db.Uuid
+  reviewer_id                     String                @db.Uuid
+  reviewee_id                     String                @db.Uuid
+  rating                          Int?
+  payment_punctuality_rating      Int?                  @map("payment_punctuality_rating")
+  property_care_rating            Int?                  @map("property_care_rating")
+  communication_rating            Int?                  @map("communication_rating")
+  comment                         String?
+  landlord_reply                  String?
+  replied_at                      DateTime?             @db.Timestamptz(6)
+  status                          feedback_status_enum? @default(PENDING)
+  reviewed_by                     String?               @db.Uuid
+  reviewed_at                     DateTime?             @db.Timestamptz(6)
+  moderator_note                  String?
+  created_at                      DateTime?             @default(now()) @db.Timestamp(6)
+  updated_at                      DateTime?             @updatedAt @db.Timestamp(6)
+  room_rental_periods             RoomRentalPeriod?     @relation(fields: [rental_period_id], references: [id], onUpdate: NoAction)
+  reviewer                        User                  @relation("tenant_review_reviewer", fields: [reviewer_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  reviewee                        User                  @relation("tenant_review_reviewee", fields: [reviewee_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  reviewer_moderator              User?                 @relation("tenant_review_reviewed_by", fields: [reviewed_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([reviewer_id, rental_period_id], map: "uq_tenant_review_reviewer_rental")
+  @@index([rental_period_id], map: "idx_tenant_review_rental_period")
+  @@index([reviewee_id], map: "idx_tenant_review_reviewee")
+  @@index([status], map: "idx_tenant_review_status")
+  @@index([created_at], map: "idx_tenant_review_created")
+  @@map("tenant_reviews")
 }
 
 /// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
@@ -605,7 +652,7 @@ model room_text_embeddings {
   id         String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   room_id    String                @unique @db.Uuid
   model      embedding_model_enum? @default(OPENAI)
-  embedding  Unsupported("vector")
+  embedding  String?
   content    String
   created_at DateTime?             @default(now()) @db.Timestamp(6)
   updated_at DateTime?             @db.Timestamp(6)
@@ -756,19 +803,54 @@ model BlogPostTag {
 }
 
 /// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
-model ai_chat_sessions {
-  id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  user_id            String   @db.Uuid
-  messages           Json     @default("[]")
-  extracted_criteria Json?
-  status             String   @default("active") @db.VarChar(20)
-  round_count        Int      @default(0)
-  created_at         DateTime @default(now()) @db.Timestamp(6)
-  updated_at         DateTime @db.Timestamp(6)
-  users              User     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+model tenant_reviews {
+  id                                      String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  rental_period_id                        String                @db.Uuid
+  reviewer_id                             String                @db.Uuid
+  reviewee_id                             String                @db.Uuid
+  rating                                  Int?
+  payment_punctuality_rating              Int?
+  property_care_rating                    Int?
+  communication_rating                    Int?
+  comment                                 String?
+  landlord_reply                          String?
+  replied_at                              DateTime?             @db.Timestamptz(6)
+  status                                  feedback_status_enum? @default(PENDING)
+  reviewed_by                             String?               @db.Uuid
+  reviewed_at                             DateTime?             @db.Timestamptz(6)
+  moderator_note                          String?
+  created_at                              DateTime?             @default(now()) @db.Timestamp(6)
+  updated_at                              DateTime?             @db.Timestamp(6)
+  room_rental_periods                     RoomRentalPeriod      @relation(fields: [rental_period_id], references: [id], onUpdate: NoAction)
+  users_tenant_reviews_reviewed_byTousers User?                 @relation("tenant_reviews_reviewed_byTousers", fields: [reviewed_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users_tenant_reviews_reviewee_idTousers User                  @relation("tenant_reviews_reviewee_idTousers", fields: [reviewee_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users_tenant_reviews_reviewer_idTousers User                  @relation("tenant_reviews_reviewer_idTousers", fields: [reviewer_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
-  @@index([status], map: "idx_ai_chat_sessions_status")
-  @@index([user_id], map: "idx_ai_chat_sessions_user")
+  @@unique([reviewer_id, rental_period_id], map: "uq_tenant_review_reviewer_rental")
+  @@index([created_at], map: "idx_tenant_review_created")
+  @@index([rental_period_id], map: "idx_tenant_review_rental_period")
+  @@index([reviewee_id], map: "idx_tenant_review_reviewee")
+  @@index([status], map: "idx_tenant_review_status")
+}
+
+model RoommateRating {
+  id                   String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  reviewer_id          String           @db.Uuid
+  target_id            String           @db.Uuid
+  rental_period_id     String           @db.Uuid
+  overall_rating       Int
+  comment              String?
+  created_at           DateTime?        @default(now()) @db.Timestamp(6)
+  updated_at           DateTime?        @updatedAt @db.Timestamp(6)
+
+  reviewer             User             @relation("RatingReviewer", fields: [reviewer_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  target               User             @relation("RatingTarget", fields: [target_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  rentalPeriod         RoomRentalPeriod @relation(fields: [rental_period_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([reviewer_id, target_id, rental_period_id])
+  @@index([target_id], map: "idx_roommate_ratings_target")
+  @@index([reviewer_id], map: "idx_roommate_ratings_reviewer")
+  @@map("roommate_ratings")
 }
 
 enum embedding_model_enum {

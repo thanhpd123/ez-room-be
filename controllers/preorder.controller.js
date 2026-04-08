@@ -129,10 +129,13 @@ async function cancelUnpaidPreorder(req, res) {
 
 async function verifyPreorderPayment(req, res) {
     try {
+        const preorderId = req.params.preorderId || req.query.preorderId;
         const result = await preorderService.verifyPreorderPayment(
             req.auth.user.id,
-            req.params.preorderId,
-            req.query.orderCode
+            {
+                preorderId,
+                orderCode: req.query.orderCode,
+            }
         );
         return res.status(200).json({
             success: true,

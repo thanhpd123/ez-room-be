@@ -156,14 +156,13 @@ async function createRental(ownerId, body, files = {}) {
             }
 
             // Add to moderation queue
-            await tx.moderation_queue.create({
-                data: {
-                    target_type: 'RENTAL',
-                    target_id: created.id,
-                    priority: 'NORMAL',
-                    category: 'NEW_LISTING',
-                    source: 'SYSTEM',
-                },
+            const moderatorService = require('./moderator.service');
+            await moderatorService.autoAssignNewTask(tx, {
+                target_type: 'RENTAL',
+                target_id: created.id,
+                priority: 'NORMAL',
+                category: 'NEW_LISTING',
+                source: 'SYSTEM',
             });
 
             return created;
@@ -988,14 +987,13 @@ async function updateRental(rentalId, userId, body) {
 
         // Resubmit hoặc edit bài đã duyệt: tạo mục mới trong moderation queue
         if (needsModeration) {
-            await tx.moderation_queue.create({
-                data: {
-                    target_type: 'RENTAL',
-                    target_id: rentalId,
-                    priority: 'NORMAL',
-                    category: 'NEW_LISTING',
-                    source: 'SYSTEM',
-                },
+            const moderatorService = require('./moderator.service');
+            await moderatorService.autoAssignNewTask(tx, {
+                target_type: 'RENTAL',
+                target_id: rentalId,
+                priority: 'NORMAL',
+                category: 'NEW_LISTING',
+                source: 'SYSTEM',
             });
         }
 

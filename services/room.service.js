@@ -4,7 +4,7 @@ const feedbackConfig = require('../config/feedback.config');
 const { mapFeToDb, mapDbToFe } = require('../utils/room-type-mapper');
 const { sendEmail } = require('../utils/email');
 
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5174';
 const AMENITIES_CACHE_KEY = 'rooms:amenities';
 const FREE_TIER_LANDLORD_MAX_ROOMS = Math.max(
     1,
@@ -63,20 +63,17 @@ async function notifyFavoritersRoomAvailable(room) {
 
     for (const fav of favoriters) {
         const user = fav.user;
-        if (!user?.id) continue;
-
-        await prisma.notification.create({
-            data: {
-                userId: user.id,
-                type: 'FAVORITE',
-                title: `Phòng "${roomTitle}" đã có sẵn`,
-                body: `Phòng bạn đã lưu tại ${address} hiện đã có sẵn.`,
-                status: 'UNREAD',
-            },
-        });
-
-        if (user.email) {
+        if (user && user.email) {
             await sendEmail(user.email, subject, text, html);
+            await prisma.notification.create({
+                data: {
+                    userId: user.id,
+                    type: 'FAVORITE',
+                    title: `Phòng "${roomTitle}" đã có sẵn`,
+                    body: `Phòng bạn đã lưu tại ${address} hiện đã có sẵn.`,
+                    status: 'UNREAD',
+                },
+            });
         }
     }
 }
@@ -84,6 +81,46 @@ async function notifyFavoritersRoomAvailable(room) {
 function mapRentalPeriodStatus(s) {
     const m = { ACTIVE: 'active', COMPLETED: 'completed', CANCELLED: 'cancelled', OVERDUE: 'active' };
     return m[s] || 'active';
+}
+
+async function reconcileRoomOccupancyStatus(roomId) {
+    const endOfToday = new Date();
+    endOfToday.setHours(23, 59, 59, 999);
+
+    await prisma.$transaction(async (tx) => {
+        // Auto-complete expired ACTIVE rental periods for this room.
+        await tx.roomRentalPeriod.updateMany({
+            where: {
+                roomId,
+                status: 'ACTIVE',
+                endDate: { lte: endOfToday },
+            },
+            data: {
+                status: 'COMPLETED',
+                updatedAt: new Date(),
+            },
+        });
+
+        const activeCount = await tx.roomRentalPeriod.count({
+            where: {
+                roomId,
+                status: 'ACTIVE',
+            },
+        });
+
+        if (activeCount === 0) {
+            await tx.rooms.updateMany({
+                where: {
+                    id: roomId,
+                    status: 'RENTED',
+                },
+                data: {
+                    status: 'AVAILABLE',
+                    updated_at: new Date(),
+                },
+            });
+        }
+    });
 }
 
 async function createRoom(userId, body, authUser = null) {
@@ -160,27 +197,18 @@ async function createRoom(userId, body, authUser = null) {
                 roomAmenities: { include: { amenity: true } },
             },
         });
-        await tx.moderation_queue.create({
-            data: {
-                target_type: 'ROOM',
-                target_id: created.id,
-                priority: vipLandlord ? 'HIGH' : 'NORMAL',
-                category: 'NEW_LISTING',
-                source: 'SYSTEM',
-            },
+        const moderatorService = require('./moderator.service');
+        await moderatorService.autoAssignNewTask(tx, {
+            target_type: 'ROOM',
+            target_id: created.id,
+            priority: vipLandlord ? 'HIGH' : 'NORMAL',
+            category: 'NEW_LISTING',
+            source: 'SYSTEM',
         });
         return created;
     });
 
     return { message: 'Tạo phòng thành công', data: formatRoomResponse(room) };
-}
-
-function normalizePublicRoomsSort(sortRaw) {
-    const s = String(sortRaw || '').toLowerCase().trim();
-    if (s === 'price_asc' || s === 'price-low' || s === 'cheap') return 'price_asc';
-    if (s === 'price_desc' || s === 'price-high' || s === 'expensive') return 'price_desc';
-    if (s === 'recommended' || s === 'popular') return 'recommended';
-    return 'newest';
 }
 
 async function getRooms(params) {
@@ -192,14 +220,12 @@ async function getRooms(params) {
         maxPrice,
         status,
         includeAllStatuses,
-        sort: sortParam,
         page = 1,
         limit = 20,
     } = params;
     const pageNum = Math.max(1, parseInt(page));
     const pageSize = Math.min(100, Math.max(1, parseInt(limit)));
     const skip = (pageNum - 1) * pageSize;
-    const sortMode = normalizePublicRoomsSort(sortParam);
 
     const where = {};
     const filterRentalId = rentalId || rental_id;
@@ -220,23 +246,12 @@ async function getRooms(params) {
         if (maxPrice) where.price.lte = parseFloat(maxPrice);
     }
 
-    let orderBy;
-    if (sortMode === 'price_asc') {
-        orderBy = { price: 'asc' };
-    } else if (sortMode === 'price_desc') {
-        orderBy = { price: 'desc' };
-    } else if (sortMode === 'recommended') {
-        orderBy = [{ search_count: 'desc' }, { created_at: 'desc' }];
-    } else {
-        orderBy = { created_at: 'desc' };
-    }
-
     const [rooms, total] = await Promise.all([
         prisma.rooms.findMany({
             where,
             skip,
             take: pageSize,
-            orderBy,
+            orderBy: { created_at: 'desc' },
             include: {
                 images: true,
                 roomAmenities: { include: { amenity: true } },
@@ -268,7 +283,9 @@ async function getRooms(params) {
     };
 }
 
-async function getRoomById(roomId) {
+async function getRoomById(roomId, userId = null) {
+    await reconcileRoomOccupancyStatus(roomId);
+
     const room = await prisma.rooms.findUnique({
         where: { id: roomId },
         include: {
@@ -300,17 +317,6 @@ async function getRoomById(roomId) {
         where: { id: roomId },
         data: { search_count: { increment: 1 } },
     }).catch(err => console.error('Error incrementing search_count:', err));
-
-    // Track per-user VIEW interaction (used for area-based roommate ranking)
-    if (userId) {
-        prisma.user_room_interactions.create({
-            data: {
-                user_id: userId,
-                room_id: roomId,
-                interaction_type: 'VIEW',
-            },
-        }).catch(err => console.error('Error tracking room view:', err));
-    }
 
     return {
         data: {
@@ -410,14 +416,13 @@ async function updateRoom(roomId, userId, body) {
 
         // Resubmit hoặc edit bài đã duyệt: tạo mục mới trong moderation queue
         if (needsModeration) {
-            await tx.moderation_queue.create({
-                data: {
-                    target_type: 'ROOM',
-                    target_id: roomId,
-                    priority: 'NORMAL',
-                    category: 'NEW_LISTING',
-                    source: 'SYSTEM',
-                },
+            const moderatorService = require('./moderator.service');
+            await moderatorService.autoAssignNewTask(tx, {
+                target_type: 'ROOM',
+                target_id: roomId,
+                priority: 'NORMAL',
+                category: 'NEW_LISTING',
+                source: 'SYSTEM',
             });
         }
 
@@ -511,7 +516,7 @@ async function getRoomTenants(roomId, userId) {
 
     const [rentalPeriods, preorders] = await Promise.all([
         prisma.roomRentalPeriod.findMany({
-            where: { roomId },
+            where: { roomId, status: 'ACTIVE' },
             include: {
                 tenant: {
                     select: {
@@ -637,62 +642,61 @@ async function createRentalContract(roomId, userId, body) {
             throw Object.assign(new Error('Ngày kết thúc không hợp lệ'), { statusCode: 400 });
         }
     }
+
+    const room = await prisma.rooms.findUnique({
+        where: { id: roomId },
+        include: { rentals: { select: { owner_id: true, title: true } } },
+    });
+
+    if (!room) {
+        throw Object.assign(new Error('Không tìm thấy phòng'), { statusCode: 404 });
+    }
+
+    if (room.rentals.owner_id !== userId) {
+        throw Object.assign(
+            new Error('Bạn không có quyền tạo hợp đồng cho phòng này'),
+            { statusCode: 403 }
+        );
+    }
+
+    if (room.status === 'MAINTENANCE' || room.status === 'PENDING') {
+        throw Object.assign(new Error('Phòng chưa sẵn sàng để cho thuê'), { statusCode: 400 });
+    }
+
+    const activeContractsCount = await prisma.roomRentalPeriod.count({
+        where: { roomId, status: 'ACTIVE' },
+    });
+
+    if (activeContractsCount >= (room.max_people || 1)) {
+        throw Object.assign(new Error(`Phòng đã đạt số người ở tối đa (${room.max_people} người)`), { statusCode: 400 });
+    }
+
+    const tenant = await prisma.user.findUnique({
+        where: { id: tenantId },
+        select: { id: true, status: true, fullName: true },
+    });
+
+    if (!tenant) {
+        throw Object.assign(new Error('Người dùng không tồn tại'), { statusCode: 404 });
+    }
+
+    if (tenant.status === 'SUSPENDED' || tenant.status === 'BANNED') {
+        throw Object.assign(new Error('Người dùng không hợp lệ'), { statusCode: 400 });
+    }
+
+    const existingActive = await prisma.roomRentalPeriod.findFirst({
+        where: {
+            roomId,
+            userId: tenantId,
+            status: 'ACTIVE',
+        },
+    });
+
+    if (existingActive) {
+        throw Object.assign(new Error('Người này đang thuê phòng này rồi'), { statusCode: 400 });
+    }
+
     const result = await prisma.$transaction(async (tx) => {
-        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${roomId}))`;
-
-        const room = await tx.rooms.findUnique({
-            where: { id: roomId },
-            include: { rentals: { select: { owner_id: true, title: true } } },
-        });
-
-        if (!room) {
-            throw Object.assign(new Error('Không tìm thấy phòng'), { statusCode: 404 });
-        }
-
-        if (!room.rentals || room.rentals.owner_id !== userId) {
-            throw Object.assign(
-                new Error('Bạn không có quyền tạo hợp đồng cho phòng này'),
-                { statusCode: 403 }
-            );
-        }
-
-        if (room.status === 'MAINTENANCE' || room.status === 'PENDING') {
-            throw Object.assign(new Error('Phòng chưa sẵn sàng để cho thuê'), { statusCode: 400 });
-        }
-
-        const activeContractsCount = await tx.roomRentalPeriod.count({
-            where: { roomId, status: 'ACTIVE' },
-        });
-
-        if (activeContractsCount >= (room.max_people || 1)) {
-            throw Object.assign(new Error(`Phòng đã đạt số người ở tối đa (${room.max_people} người)`), { statusCode: 400 });
-        }
-
-        const tenant = await tx.user.findUnique({
-            where: { id: tenantId },
-            select: { id: true, status: true, fullName: true },
-        });
-
-        if (!tenant) {
-            throw Object.assign(new Error('Người dùng không tồn tại'), { statusCode: 404 });
-        }
-
-        if (tenant.status === 'SUSPENDED' || tenant.status === 'BANNED') {
-            throw Object.assign(new Error('Người dùng không hợp lệ'), { statusCode: 400 });
-        }
-
-        const existingActive = await tx.roomRentalPeriod.findFirst({
-            where: {
-                roomId,
-                userId: tenantId,
-                status: 'ACTIVE',
-            },
-        });
-
-        if (existingActive) {
-            throw Object.assign(new Error('Người này đang thuê phòng này rồi'), { statusCode: 400 });
-        }
-
         const period = await tx.roomRentalPeriod.create({
             data: {
                 roomId,
@@ -716,10 +720,13 @@ async function createRentalContract(roomId, userId, body) {
             },
         });
 
-        await tx.rooms.update({
-            where: { id: roomId },
-            data: { status: 'RENTED' },
-        });
+        const newCount = activeContractsCount + 1;
+        if (newCount >= (room.max_people || 1)) {
+            await tx.rooms.update({
+                where: { id: roomId },
+                data: { status: 'RENTED' },
+            });
+        }
 
         const roomTitle = room.room_name || room.rentals?.title || 'Phòng trọ';
         await tx.notification.create({
@@ -822,50 +829,61 @@ async function getMyBookings(userId) {
     if (rentalIds.length > 0) {
         const rentals = await prisma.rental.findMany({
             where: { id: { in: rentalIds } },
-            include: { users: { select: { id: true, fullName: true } } },
+            include: { users: { select: { fullName: true } } },
         });
-        const landlordNameMap = new Map(rentals.map((r) => [r.id, r.users?.fullName || 'Chủ nhà']));
-        const landlordIdMap = new Map(rentals.map((r) => [r.id, r.users?.id || null]));
+        const landlordMap = new Map(rentals.map((r) => [r.id, r.users?.fullName || 'Chủ nhà']));
         periods.forEach((p, i) => {
             const rid = p.room?.rentals?.id;
-            if (rid) {
-                bookings[i].landlordName = landlordNameMap.get(rid) || 'Chủ nhà';
-                const lid = landlordIdMap.get(rid);
-                if (lid) bookings[i].landlordId = lid;
-            }
+            if (rid) bookings[i].landlordName = landlordMap.get(rid) || 'Chủ nhà';
+        });
+    }
+
+    // Fetch roommates: other active tenants in the same rooms
+    const roomIds = [...new Set(periods.map((p) => p.room?.id).filter(Boolean))];
+    if (roomIds.length > 0) {
+        const otherPeriods = await prisma.roomRentalPeriod.findMany({
+            where: {
+                roomId: { in: roomIds },
+                status: 'ACTIVE',
+                userId: { not: userId },
+            },
+            include: {
+                tenant: {
+                    select: {
+                        id: true,
+                        fullName: true,
+                        email: true,
+                        phone: true,
+                        avatarUrl: true,
+                    },
+                },
+            },
+        });
+        // Group roommates by roomId
+        const roommatesByRoom = new Map();
+        for (const op of otherPeriods) {
+            const list = roommatesByRoom.get(op.roomId) || [];
+            list.push({
+                id: op.tenant.id,
+                fullName: op.tenant.fullName,
+                email: op.tenant.email || null,
+                phone: op.tenant.phone || null,
+                avatarUrl: op.tenant.avatarUrl || null,
+            });
+            roommatesByRoom.set(op.roomId, list);
+        }
+        // Attach to bookings
+        bookings.forEach((b, i) => {
+            b.roommates = roommatesByRoom.get(b.roomId) || [];
         });
     }
 
     return { data: bookings };
 }
 
-/**
- * Landlord user id for chat: current user must be the tenant on this rental period.
- */
-async function getLandlordPeerForRentalPeriod(tenantUserId, rentalPeriodId) {
-    const period = await prisma.roomRentalPeriod.findFirst({
-        where: { id: rentalPeriodId, userId: tenantUserId },
-        include: {
-            room: {
-                include: {
-                    rentals: { select: { owner_id: true } },
-                },
-            },
-        },
-    });
-    if (!period) {
-        throw Object.assign(new Error('Không tìm thấy kỳ thuê hoặc bạn không có quyền xem'), {
-            statusCode: 404,
-        });
-    }
-    const landlordId = period.room?.rentals?.owner_id;
-    if (!landlordId) {
-        throw Object.assign(new Error('Không xác định được chủ nhà'), { statusCode: 404 });
-    }
-    return { data: { landlordId } };
-}
-
 async function getRoomByIdForSearchRoomate(roomId, userId = null) {
+    await reconcileRoomOccupancyStatus(roomId);
+
     const room = await prisma.rooms.findUnique({
         where: { id: roomId },
         include: {
@@ -933,6 +951,124 @@ async function getRoomByIdForSearchRoomate(roomId, userId = null) {
     };
 }
 
+async function completeRentalPeriod(rentalPeriodId, userId) {
+    const rentalPeriod = await prisma.roomRentalPeriod.findUnique({
+        where: { id: rentalPeriodId },
+        include: {
+            room: {
+                include: {
+                    rentals: true,
+                },
+            },
+            tenant: {
+                select: {
+                    id: true,
+                    fullName: true,
+                    email: true,
+                },
+            },
+        },
+    });
+
+    if (!rentalPeriod) {
+        throw Object.assign(new Error('Không tìm thấy kỳ thuê'), { statusCode: 404 });
+    }
+
+    // Allow landlord or the tenant to complete a rental period
+    const landlordId = rentalPeriod.room.rentals?.owner_id;
+    if (landlordId !== userId && rentalPeriod.userId !== userId) {
+        throw Object.assign(
+            new Error('Bạn không có quyền kết thúc kỳ thuê này'),
+            { statusCode: 403 }
+        );
+    }
+
+    if (rentalPeriod.status !== 'ACTIVE') {
+        throw Object.assign(
+            new Error('Chỉ có thể kết thúc kỳ thuê đang hoạt động'),
+            { statusCode: 400 }
+        );
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+        // Update rental period status to COMPLETED
+        const updated = await tx.roomRentalPeriod.update({
+            where: { id: rentalPeriodId },
+            data: {
+                status: 'COMPLETED',
+                updatedAt: new Date(),
+            },
+            include: {
+                tenant: {
+                    select: {
+                        id: true,
+                        fullName: true,
+                        email: true,
+                    },
+                },
+            },
+        });
+
+        // Check if there are other ACTIVE rental periods for this room
+        const otherActivePeriods = await tx.roomRentalPeriod.count({
+            where: {
+                roomId: rentalPeriod.roomId,
+                status: 'ACTIVE',
+            },
+        });
+
+        // If no other active periods, set room back to AVAILABLE
+        if (otherActivePeriods === 0 && rentalPeriod.room.status === 'RENTED') {
+            await tx.rooms.update({
+                where: { id: rentalPeriod.roomId },
+                data: {
+                    status: 'AVAILABLE',
+                    updated_at: new Date(),
+                },
+            });
+        }
+
+        // Create notification for tenant
+        await tx.notification.create({
+            data: {
+                userId: rentalPeriod.userId,
+                type: 'RENTAL_COMPLETED',
+                title: 'Hợp đồng thuê phòng đã kết thúc',
+                body: `Kỳ thuê phòng của bạn đã được kết thúc. Cảm ơn bạn đã sử dụng dịch vụ của chúng tôi.`,
+                status: 'UNREAD',
+            },
+        });
+
+        // Create notification for landlord
+        const landlord = rentalPeriod.room.rentals;
+        if (landlord?.owner_id) {
+            await tx.notification.create({
+                data: {
+                    userId: landlord.owner_id,
+                    type: 'ROOM_AVAILABLE',
+                    title: 'Phòng của bạn đã trở lại trạng thái có sẵn',
+                    body: `Kỳ thuê phòng "${rentalPeriod.room.room_name || 'Phòng trọ'}" đã kết thúc. Phòng này bây giờ có sẵn để cho thuê.`,
+                    status: 'UNREAD',
+                },
+            });
+        }
+
+        return updated;
+    });
+
+    return {
+        message: 'Kết thúc kỳ thuê thành công',
+        data: {
+            id: result.id,
+            roomId: result.roomId,
+            tenant: result.tenant,
+            startDate: result.startDate,
+            endDate: result.endDate,
+            status: result.status,
+        },
+    };
+}
+
 module.exports = {
     createRoom,
     getRooms,
@@ -944,7 +1080,7 @@ module.exports = {
     getRoomTenants,
     searchTenants,
     createRentalContract,
+    completeRentalPeriod,
     getMyBookings,
-    getLandlordPeerForRentalPeriod,
     getRoomByIdForSearchRoomate,
 };

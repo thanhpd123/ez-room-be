@@ -758,7 +758,7 @@ async function getModeratorList() {
 // ═══════════════════ Moderation Queue ═══════════════════
 
 async function getModerationQueue(params) {
-    const { page = 1, limit = 20, status, priority, category, assignedTo } = params;
+    const { page = 1, limit = 20, status, priority, category, assignedTo, sortBy = 'asc' } = params;
     const pageNum = Math.max(1, parseInt(page));
     const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
     const skip = (pageNum - 1) * limitNum;
@@ -768,6 +768,8 @@ async function getModerationQueue(params) {
     if (priority && VALID_QUEUE_PRIORITIES.includes(priority.toUpperCase())) where.priority = priority.toUpperCase();
     if (category && VALID_QUEUE_CATEGORIES.includes(category)) where.category = category;
     if (assignedTo) where.assigned_to = assignedTo;
+    
+    const sortDirection = sortBy === 'desc' ? 'desc' : 'asc';
 
     const [items, total] = await Promise.all([
         prisma.moderation_queue.findMany({
@@ -775,7 +777,7 @@ async function getModerationQueue(params) {
             orderBy: [
                 { status: 'asc' },
                 { priority: 'desc' },
-                { created_at: 'asc' },
+                { created_at: sortDirection },
             ],
             skip,
             take: limitNum,
@@ -835,6 +837,63 @@ async function assignQueueItem(id, assignTo) {
     });
 
     return { message: 'Đã nhận task thành công', data: updated };
+}
+
+async function autoAssignNewTask(tx, data) {
+    // Lấy danh sách moderator
+    const moderators = await tx.user.findMany({
+        where: { role: 'MODERATOR' },
+        select: { id: true },
+        orderBy: { id: 'asc' },
+    });
+
+    if (moderators.length === 0) {
+        // Không có moderator nào, cứ đẩy vào queue mở
+        return await tx.moderation_queue.create({ data });
+    }
+
+    // Tìm xem task gần nhất đã giao là giao cho ai
+    const lastAssigned = await tx.moderation_queue.findFirst({
+        where: { assigned_to: { not: null } },
+        orderBy: { created_at: 'desc' }
+    });
+
+    let nextModId = moderators[0].id;
+    if (lastAssigned && lastAssigned.assigned_to) {
+        const lastIndex = moderators.findIndex(m => m.id === lastAssigned.assigned_to);
+        if (lastIndex !== -1) {
+            nextModId = moderators[(lastIndex + 1) % moderators.length].id;
+        }
+    }
+
+    // Tự động gán luôn cho người tiếp theo
+    const task = await tx.moderation_queue.create({
+        data: {
+            ...data,
+            assigned_to: nextModId,
+            assigned_at: new Date(),
+            status: 'IN_PROGRESS',
+        }
+    });
+
+    await tx.moderator_logs.create({
+        data: {
+            moderator_id: nextModId,
+            target_type: 'QUEUE',
+            target_id: task.id,
+            action: 'CLAIM',
+            previous_status: 'OPEN',
+            new_status: 'IN_PROGRESS',
+            metadata: {
+                queue_target_type: task.target_type,
+                queue_target_id: task.target_id,
+                queue_category: task.category,
+                auto_assigned: true
+            },
+        },
+    });
+
+    return task;
 }
 
 async function releaseQueueItem(id, moderatorId) {
@@ -1378,6 +1437,47 @@ async function getLatestRejection(targetType, targetId) {
     };
 }
 
+async function getOverview() {
+    const [
+        openQueueCount,
+        pendingRentalCount,
+        pendingRoomPostCount,
+        openReportCount,
+        flaggedReviewCount,
+        resolvedReportCount,
+        approvedRentalCount,
+        approvedRoomPostCount,
+        approvedReviewCount,
+        rejectedReviewCount
+    ] = await Promise.all([
+        prisma.moderation_queue.count({ where: { status: 'OPEN' } }),
+        prisma.rental.count({ where: { status: { in: ['PENDING', 'HIDDEN'] } } }),
+        prisma.rooms.count({ where: { status: 'PENDING' } }),
+        prisma.report.count({ where: { status: 'PENDING' } }),
+        prisma.feedback.count({ where: { status: 'PENDING' } }),
+        prisma.report.count({ where: { status: { in: ['APPROVED', 'REJECTED'] } } }),
+        prisma.rental.count({ where: { status: { notIn: ['PENDING', 'HIDDEN', 'VIOLATE'] } } }),
+        prisma.rooms.count({ where: { status: { notIn: ['PENDING', 'MAINTENANCE'] } } }),
+        prisma.feedback.count({ where: { status: 'APPROVED' } }),
+        prisma.feedback.count({ where: { status: { in: ['REJECTED', 'HIDDEN'] } } })
+    ]);
+
+    return {
+        data: {
+            openQueueCount,
+            pendingRentalCount,
+            pendingRoomPostCount,
+            openReportCount,
+            flaggedReviewCount,
+            resolvedReportCount,
+            approvedRentalCount,
+            approvedRoomPostCount,
+            approvedReviewCount,
+            rejectedReviewCount
+        }
+    };
+}
+
 module.exports = {
     getAllUsers,
     getUserById,
@@ -1401,4 +1501,6 @@ module.exports = {
     getQueueStatusForTarget,
     getModeratorList,
     getLatestRejection,
+    getOverview,
+    autoAssignNewTask,
 };
