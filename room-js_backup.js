@@ -18,11 +18,6 @@ const {
 
 const router = express.Router();
 
-// ============ IMPORTANT: ORDER MATTERS IN EXPRESS ============
-// More specific routes MUST come before generic routes
-// e.g. /:roomId/tenants before /:roomId
-// ============================================================
-
 /**
  * @openapi
  * /rooms/amenities:
@@ -207,7 +202,23 @@ router.get('/:roomId', getRoomById);
  *       201:
  *         description: Tạo room thành công
  */
-router.post('/', verifyJWT, requireRole('LANDLORD'), createRoom);
+/**
+ * @openapi
+ * /rooms/rental-periods/{rentalPeriodId}/complete:
+ *   put:
+ *     tags: [Rooms]
+ *     summary: Landlord or Tenant hoàn tất kỳ thuê phòng
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: rentalPeriodId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Kết thúc kỳ thuê thành công
+ */
+router.put('/rental-periods/:rentalPeriodId/complete', verifyJWT, requireRole('LANDLORD', 'TENANT'), completeRentalPeriod);
 
 /**
  * @openapi
@@ -235,23 +246,7 @@ router.post('/', verifyJWT, requireRole('LANDLORD'), createRoom);
  */
 router.put('/:roomId/moderate', verifyJWT, requireRole('MODERATOR', 'ADMIN'), moderateRoom);
 
-/**
- * @openapi
- * /rooms/rental-periods/{rentalPeriodId}/complete:
- *   put:
- *     tags: [Rooms]
- *     summary: Landlord or Tenant hoàn tất kỳ thuê phòng
- *     security: [{ bearerAuth: [] }]
- *     parameters:
- *       - in: path
- *         name: rentalPeriodId
- *         required: true
- *         schema: { type: string }
- *     responses:
- *       200:
- *         description: Kết thúc kỳ thuê thành công
- */
-router.put('/rental-periods/:rentalPeriodId/complete', verifyJWT, requireRole('LANDLORD', 'TENANT'), completeRentalPeriod);
+router.post('/', verifyJWT, requireRole('LANDLORD'), createRoom);
 
 /**
  * @openapi
@@ -299,3 +294,4 @@ router.put('/:roomId', verifyJWT, requireRole('LANDLORD'), updateRoom);
 router.delete('/:roomId', verifyJWT, requireRole('LANDLORD'), deleteRoom);
 
 module.exports = router;
+

@@ -44,7 +44,8 @@ async function getRooms(req, res) {
 
 async function getRoomById(req, res) {
     try {
-        const result = await roomService.getRoomById(req.params.roomId);
+        const userId = req.auth?.user?.id || null;
+        const result = await roomService.getRoomById(req.params.roomId, userId);
         return res.json({ success: true, ...result });
     } catch (err) {
         return handleError(err, res, 'Lỗi khi lấy chi tiết phòng');
@@ -144,6 +145,18 @@ async function getMyBookings(req, res) {
     }
 }
 
+async function completeRentalPeriod(req, res) {
+    try {
+        const result = await roomService.completeRentalPeriod(
+            req.params.rentalPeriodId,
+            req.auth.user.id
+        );
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi kết thúc kỳ thuê');
+    }
+}
+
 module.exports = {
     createRoom,
     getRooms,
@@ -155,6 +168,7 @@ module.exports = {
     getRoomTenants,
     searchTenants,
     createRentalContract,
+    completeRentalPeriod,
     getMyBookings,
     getRoomByIdForSearchRoomate,
 };

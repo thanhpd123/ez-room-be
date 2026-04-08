@@ -60,6 +60,16 @@ model User {
   user_warnings_user_warnings_issued_byTousers             user_warnings[]          @relation("user_warnings_issued_byTousers")
   user_warnings_user_warnings_user_idTousers               user_warnings[]          @relation("user_warnings_user_idTousers")
   wallet                                                   Wallet?
+  refreshTokens                                            RefreshToken[]
+  document_access_logs                                     document_access_log[]
+  blogPosts                                                BlogPost[]
+  tenant_reviews_as_reviewer                               tenant_review[]          @relation("tenant_review_reviewer")
+  tenant_reviews_as_reviewee                               tenant_review[]          @relation("tenant_review_reviewee")
+  tenant_reviews_as_moderator                              tenant_review[]          @relation("tenant_review_reviewed_by")
+
+  system_settings_updated        SystemSetting[]      @relation("SystemSettingUpdatedBy")
+  system_setting_audits_updated  SystemSettingAudit[] @relation("SystemSettingAuditUpdatedBy")
+  platform_ledger_entries_created PlatformLedgerEntry[] @relation("PlatformLedgerCreatedBy")
   ratingsGiven                                             RoommateRating[] @relation("RatingReviewer")
   ratingsReceived                                          RoommateRating[] @relation("RatingTarget")
 
@@ -286,12 +296,13 @@ model RoomRentalPeriod {
   status         rental_period_status_enum @default(ACTIVE)
   updatedAt      DateTime?                 @updatedAt @map("updated_at") @db.Timestamp(6)
   preorder_id    String?                   @unique @db.Uuid
-  feedback         feedback[]
-  preorders        Preorder?                 @relation(fields: [preorder_id], references: [id], onUpdate: NoAction)
-  room             rooms                     @relation(fields: [roomId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  tenant           User                      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  tenant_reviews   tenant_reviews[]
-  RoommateRatings  RoommateRating[]
+  feedback       feedback[]
+  tenantReviews  tenant_review[]
+  tenant_reviews tenant_reviews[]
+  RoommateRatings RoommateRating[]
+  preorders      Preorder?                 @relation(fields: [preorder_id], references: [id], onUpdate: NoAction)
+  room           rooms                     @relation(fields: [roomId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenant         User                      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([status], map: "idx_room_rental_periods_status")
   @@index([userId], map: "idx_room_rental_periods_user_id")
@@ -479,6 +490,37 @@ model feedback {
   @@index([rental_period_id], map: "idx_feedback_rental_period")
   @@index([target_type, target_id], map: "idx_feedback_target")
   @@index([status], map: "idx_feedback_status")
+}
+
+model tenant_review {
+  id                              String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  rental_period_id                String                @db.Uuid
+  reviewer_id                     String                @db.Uuid
+  reviewee_id                     String                @db.Uuid
+  rating                          Int?
+  payment_punctuality_rating      Int?                  @map("payment_punctuality_rating")
+  property_care_rating            Int?                  @map("property_care_rating")
+  communication_rating            Int?                  @map("communication_rating")
+  comment                         String?
+  landlord_reply                  String?
+  replied_at                      DateTime?             @db.Timestamptz(6)
+  status                          feedback_status_enum? @default(PENDING)
+  reviewed_by                     String?               @db.Uuid
+  reviewed_at                     DateTime?             @db.Timestamptz(6)
+  moderator_note                  String?
+  created_at                      DateTime?             @default(now()) @db.Timestamp(6)
+  updated_at                      DateTime?             @updatedAt @db.Timestamp(6)
+  room_rental_periods             RoomRentalPeriod?     @relation(fields: [rental_period_id], references: [id], onUpdate: NoAction)
+  reviewer                        User                  @relation("tenant_review_reviewer", fields: [reviewer_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  reviewee                        User                  @relation("tenant_review_reviewee", fields: [reviewee_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  reviewer_moderator              User?                 @relation("tenant_review_reviewed_by", fields: [reviewed_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([reviewer_id, rental_period_id], map: "uq_tenant_review_reviewer_rental")
+  @@index([rental_period_id], map: "idx_tenant_review_rental_period")
+  @@index([reviewee_id], map: "idx_tenant_review_reviewee")
+  @@index([status], map: "idx_tenant_review_status")
+  @@index([created_at], map: "idx_tenant_review_created")
+  @@map("tenant_reviews")
 }
 
 /// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
