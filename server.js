@@ -1,6 +1,8 @@
 const express = require('express');
+const http = require('http');
 const cors = require('cors');
 const swaggerUi = require('swagger-ui-express');
+const { Server: SocketServer } = require('socket.io');
 require('dotenv').config();
 
 const swaggerSpec = require('./config/swagger');
@@ -28,11 +30,22 @@ const tenantReviewRoutes = require('./routes/tenant-review');
 const documentRoutes = require('./routes/document');
 const vipRoutes = require('./routes/vip');
 const notificationRoutes = require('./routes/notification');
+const { isSupabaseConfigured } = require('./config/supabase-helpers');
+const { resolveUserIdFromBearerToken } = require('./middleware/auth');
+const {
+    setIo,
+    markOnline,
+    markOffline,
+    isOnline,
+    getOnlineUserIds,
+    emitToUser,
+} = require('./utils/socket-manager');
 const { startPreorderPayoutReconciliationJob } = require('./services/preorder-reconciliation.service');
 const { startStaleCron } = require('./cron/release-stale-tasks');
 const { startCompleteRentalCron } = require('./cron/complete-rental-periods');
 
 const app = express();
+const httpServer = http.createServer(app);
 const PORT = process.env.PORT || 3000;
 
 // Middleware – allow frontend origin for auth (Bearer token)
@@ -48,11 +61,90 @@ const corsOrigin = process.env.CORS_ORIGIN
 app.use(cors({
     origin: (origin, cb) => {
         if (!origin || corsOrigin.includes(origin)) cb(null, true);
-        else cb(null, corsOrigin[0]);
+        else cb(null, false);
     },
     credentials: true,
 }));
 
+// ── Socket.io setup ──────────────────────────────────────────────────────────
+const io = new SocketServer(httpServer, {
+    cors: { origin: corsOrigin, credentials: true },
+    transports: ['websocket', 'polling'],
+});
+setIo(io);
+
+// Auth: same resolution as REST verifyJWT (backend JWT or Supabase session token)
+io.use(async (socket, next) => {
+    const token =
+        socket.handshake?.auth?.token
+        || socket.handshake?.headers?.authorization?.replace(/^Bearer\s+/i, '');
+    if (!token) return next(new Error('Unauthorized'));
+    try {
+        const userId = await resolveUserIdFromBearerToken(token);
+        if (!userId) return next(new Error('Unauthorized'));
+        socket.userId = userId;
+        next();
+    } catch {
+        return next(new Error('Unauthorized'));
+    }
+});
+
+io.on('connection', (socket) => {
+    const userId = socket.userId;
+    markOnline(userId, socket.id);
+
+    // Tell this socket which users are currently online
+    socket.emit('online_users', getOnlineUserIds());
+
+    // Tell everyone else this user came online
+    socket.broadcast.emit('presence', { userId, online: true });
+
+    // Typing indicators — only if the users have an existing message thread (either direction).
+    socket.on('typing', async ({ toUserId }) => {
+        if (!toUserId || String(toUserId) === String(userId)) return;
+        try {
+            const pair = await prisma.message.findFirst({
+                where: {
+                    OR: [
+                        { senderId: userId, receiverId: toUserId },
+                        { senderId: toUserId, receiverId: userId },
+                    ],
+                },
+                select: { id: true },
+            });
+            if (!pair) return;
+            emitToUser(toUserId, 'typing', { fromUserId: userId });
+        } catch {
+            /* ignore */
+        }
+    });
+    socket.on('stop_typing', async ({ toUserId }) => {
+        if (!toUserId || String(toUserId) === String(userId)) return;
+        try {
+            const pair = await prisma.message.findFirst({
+                where: {
+                    OR: [
+                        { senderId: userId, receiverId: toUserId },
+                        { senderId: toUserId, receiverId: userId },
+                    ],
+                },
+                select: { id: true },
+            });
+            if (!pair) return;
+            emitToUser(toUserId, 'stop_typing', { fromUserId: userId });
+        } catch {
+            /* ignore */
+        }
+    });
+
+    socket.on('disconnect', () => {
+        markOffline(userId, socket.id);
+        if (!isOnline(userId)) {
+            socket.broadcast.emit('presence', { userId, online: false });
+        }
+    });
+});
+// ─────────────────────────────────────────────────────────────────────────────
 // Routes - Rental routes MUST come BEFORE global JSON parser to allow multer to handle multipart
 app.use('/rentals', rentalRoutes);
 
@@ -98,52 +190,61 @@ app.get('/', (req, res) => {
     res.json({ message: 'EZ-Room API is running!' });
 });
 
-// Test Prisma connection (requires DATABASE_URL and migrated DB)
-app.get('/test-prisma', async (req, res) => {
-    try {
-        await prisma.$connect();
-        const count = await prisma.user.count();
-        res.json({
-            success: true,
-            message: 'Prisma connected successfully!',
-            usersCount: count,
-        });
-    } catch (err) {
-        res.status(500).json({
-            success: false,
-            message: 'Prisma connection or query failed (run db:migrate or db:push?)',
-            error: err.message,
-        });
-    }
-});
+// Dev-only DB diagnostics (enable in production with ENABLE_API_DIAGNOSTICS=true)
+const allowApiDiagnostics =
+    process.env.NODE_ENV !== 'production' || process.env.ENABLE_API_DIAGNOSTICS === 'true';
 
-// Test Supabase connection
-app.get('/test-db', async (req, res) => {
-    try {
-        // Try to query any table or just check connection
-        const { data, error } = await supabase.from('users').select('*').limit(1);
-
-        if (error) {
-            return res.status(500).json({
+if (allowApiDiagnostics) {
+    app.get('/test-prisma', async (req, res) => {
+        try {
+            await prisma.$connect();
+            const count = await prisma.user.count();
+            res.json({
+                success: true,
+                message: 'Prisma connected successfully!',
+                usersCount: count,
+            });
+        } catch (err) {
+            res.status(500).json({
                 success: false,
-                message: 'Supabase connection failed',
-                error: error.message
+                message: 'Prisma connection or query failed (run db:migrate or db:push?)',
+                error: err.message,
             });
         }
+    });
 
-        res.json({
-            success: true,
-            message: 'Supabase connected successfully!',
-            data
-        });
-    } catch (err) {
-        res.status(500).json({
-            success: false,
-            message: 'Error connecting to Supabase',
-            error: err.message
-        });
-    }
-});
+    app.get('/test-db', async (req, res) => {
+        try {
+            if (!isSupabaseConfigured() || !supabase) {
+                return res.status(503).json({
+                    success: false,
+                    message: 'Supabase chưa cấu hình. Thêm SUPABASE_URL và SUPABASE_SERVICE_ROLE_KEY vào .env',
+                });
+            }
+            const { data, error } = await supabase.from('users').select('*').limit(1);
+
+            if (error) {
+                return res.status(500).json({
+                    success: false,
+                    message: 'Supabase connection failed',
+                    error: error.message,
+                });
+            }
+
+            res.json({
+                success: true,
+                message: 'Supabase connected successfully!',
+                data,
+            });
+        } catch (err) {
+            res.status(500).json({
+                success: false,
+                message: 'Error connecting to Supabase',
+                error: err.message,
+            });
+        }
+    });
+}
 
 // Error handler (e.g. multer fileFilter, Cloudinary errors)
 app.use((err, req, res, next) => {
@@ -155,7 +256,7 @@ app.use((err, req, res, next) => {
     });
 });
 
-app.listen(PORT, () => {
+httpServer.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
     startPreorderPayoutReconciliationJob();
     startStaleCron();

@@ -921,6 +921,46 @@ async function getMyBookings(userId) {
     return { data: bookings };
 }
 
+async function getLandlordPeerForRentalPeriod(rentalPeriodId, userId) {
+    const period = await prisma.roomRentalPeriod.findUnique({
+        where: { id: rentalPeriodId },
+        select: {
+            id: true,
+            userId: true,
+            room: {
+                select: {
+                    rentals: {
+                        select: {
+                            owner_id: true,
+                        },
+                    },
+                },
+            },
+        },
+    });
+
+    if (!period) {
+        throw Object.assign(new Error('Không tìm thấy kỳ thuê'), { statusCode: 404 });
+    }
+
+    const landlordId = period.room?.rentals?.owner_id || null;
+    if (!landlordId) {
+        throw Object.assign(new Error('Không tìm thấy chủ nhà cho kỳ thuê này'), { statusCode: 404 });
+    }
+
+    const isTenant = period.userId === userId;
+    const isLandlord = landlordId === userId;
+    if (!isTenant && !isLandlord) {
+        throw Object.assign(new Error('Bạn không có quyền truy cập kỳ thuê này'), { statusCode: 403 });
+    }
+
+    return {
+        data: {
+            landlordId,
+        },
+    };
+}
+
 async function getRoomByIdForSearchRoomate(roomId, userId = null) {
     await reconcileRoomOccupancyStatus(roomId);
 
@@ -1128,5 +1168,6 @@ module.exports = {
     createRentalContract,
     completeRentalPeriod,
     getMyBookings,
+    getLandlordPeerForRentalPeriod,
     getRoomByIdForSearchRoomate,
 };
