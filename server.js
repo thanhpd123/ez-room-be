@@ -1,5 +1,5 @@
-const express = require('express');
 const http = require('http');
+const express = require('express');
 const cors = require('cors');
 const swaggerUi = require('swagger-ui-express');
 const { Server: SocketServer } = require('socket.io');
@@ -7,6 +7,7 @@ require('dotenv').config();
 
 const swaggerSpec = require('./config/swagger');
 const supabase = require('./config/supabase');
+const { isSupabaseConfigured } = require('./config/supabase-helpers');
 const prisma = require('./config/prisma');
 const authRoutes = require('./routes/auth');
 const adminRoutes = require('./routes/admin');
@@ -22,27 +23,20 @@ const favoriteRoutes = require('./routes/favorite');
 const roommateRoutes = require('./routes/roommate');
 const messageRoutes = require('./routes/message');
 const walletRoutes = require('./routes/wallet');
+const verificationRoutes = require('./routes/verification');
 const moderatorRoutes = require('./routes/moderator');
 const reportRoutes = require('./routes/report');
 const preorderRoutes = require('./routes/preorder');
 const feedbackRoutes = require('./routes/feedback');
 const tenantReviewRoutes = require('./routes/tenant-review');
+const interactionRoutes = require('./routes/interactions');
 const documentRoutes = require('./routes/document');
 const vipRoutes = require('./routes/vip');
 const notificationRoutes = require('./routes/notification');
-const { isSupabaseConfigured } = require('./config/supabase-helpers');
-const { resolveUserIdFromBearerToken } = require('./middleware/auth');
-const {
-    setIo,
-    markOnline,
-    markOffline,
-    isOnline,
-    getOnlineUserIds,
-    emitToUser,
-} = require('./utils/socket-manager');
+const translateRoutes = require('./routes/translate');
 const { startPreorderPayoutReconciliationJob } = require('./services/preorder-reconciliation.service');
 const { startStaleCron } = require('./cron/release-stale-tasks');
-const { startCompleteRentalCron } = require('./cron/complete-rental-periods');
+const { setIo, markOnline, markOffline, emitToUser, getOnlineUserIds, isOnline } = require('./utils/socket-manager');
 
 const app = express();
 const httpServer = http.createServer(app);
@@ -74,10 +68,9 @@ const io = new SocketServer(httpServer, {
 setIo(io);
 
 // Auth: same resolution as REST verifyJWT (backend JWT or Supabase session token)
+const { resolveUserIdFromBearerToken } = require('./middleware/auth');
 io.use(async (socket, next) => {
-    const token =
-        socket.handshake?.auth?.token
-        || socket.handshake?.headers?.authorization?.replace(/^Bearer\s+/i, '');
+    const token = socket.handshake.auth?.token;
     if (!token) return next(new Error('Unauthorized'));
     try {
         const userId = await resolveUserIdFromBearerToken(token);
@@ -145,6 +138,7 @@ io.on('connection', (socket) => {
     });
 });
 // ─────────────────────────────────────────────────────────────────────────────
+
 // Routes - Rental routes MUST come BEFORE global JSON parser to allow multer to handle multipart
 app.use('/rentals', rentalRoutes);
 
@@ -176,14 +170,17 @@ app.use('/favorites', favoriteRoutes);
 app.use('/roommate', roommateRoutes);
 app.use('/messages', messageRoutes);
 app.use('/wallet', walletRoutes);
+app.use('/verifications', verificationRoutes);
 app.use('/moderator', moderatorRoutes);
 app.use('/reports', reportRoutes);
 app.use('/preorders', preorderRoutes);
 app.use('/feedback', feedbackRoutes);
 app.use('/tenant-reviews', tenantReviewRoutes);
+app.use('/interactions', interactionRoutes);
 app.use('/documents', documentRoutes);
 app.use('/vip', vipRoutes);
 app.use('/notifications', notificationRoutes);
+app.use('/translate', translateRoutes);
 
 // Test route
 app.get('/', (req, res) => {
@@ -260,5 +257,14 @@ httpServer.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
     startPreorderPayoutReconciliationJob();
     startStaleCron();
-    startCompleteRentalCron();
+
+    // Pre-load AI models in background (non-blocking)
+    const { preloadEmbedding } = require('./utils/embedding');
+    const { preloadCLIP } = require('./utils/clip');
+    preloadEmbedding().then((ok) => {
+        if (ok) console.log('[Embedding] Model ready for smart search');
+    });
+    preloadCLIP().then((ok) => {
+        if (ok) console.log('[CLIP] Model ready for image search');
+    });
 });

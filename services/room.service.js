@@ -571,7 +571,11 @@ async function getRoomTenants(roomId, userId) {
             orderBy: { startDate: 'desc' },
         }),
         prisma.preorder.findMany({
-            where: { roomId },
+            where: {
+                roomId,
+                status: { in: ['PENDING', 'CONFIRMED'] },
+                payment_status: { in: ['UNPAID', 'PAID'] },
+            },
             include: {
                 user: {
                     select: {
