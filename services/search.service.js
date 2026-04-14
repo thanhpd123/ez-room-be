@@ -12,6 +12,7 @@ const placeholderImage = 'https://images.unsplash.com/photo-1522708323590-d24dbb
 const VIP_LANDLORD_SEARCH_BOOST = Number(process.env.VIP_LANDLORD_SEARCH_BOOST || 8);
 const SEARCH_FREE_TIER_MIN_RATIO = Number(process.env.SEARCH_FREE_TIER_MIN_RATIO || 0.2);
 const SEARCH_FREE_TIER_MIN_TOP_SLOTS = Number(process.env.SEARCH_FREE_TIER_MIN_TOP_SLOTS || 2);
+const NEARLY_AVAILABLE_DAYS = Math.max(1, Number(process.env.NEARLY_AVAILABLE_DAYS || 7));
 
 function applyFairnessGuard(scored) {
     if (!Array.isArray(scored) || scored.length === 0) return scored;
@@ -450,6 +451,12 @@ async function getPublicSearch(params, viewer = null) {
                     },
                 },
             },
+            rentalPeriods: {
+                where: { status: 'ACTIVE' },
+                select: { endDate: true },
+                orderBy: { endDate: 'asc' },
+                take: 1,
+            },
             roomAmenities: { include: { amenity: true } },
             images: true,
         },
@@ -501,6 +508,19 @@ async function getPublicSearch(params, viewer = null) {
         const owner = rental?.users || null;
         const isVipLandlord = owner?.role === 'LANDLORD' && owner?.isVip === true;
 
+        const nearestEndDate = room.rentalPeriods?.[0]?.endDate
+            ? new Date(room.rentalPeriods[0].endDate)
+            : null;
+        const daysUntilAvailable = nearestEndDate
+            ? Math.ceil((nearestEndDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+            : null;
+        const isNearlyAvailable =
+            room.status === 'RENTED' &&
+            nearestEndDate &&
+            daysUntilAvailable != null &&
+            daysUntilAvailable >= 0 &&
+            daysUntilAvailable <= NEARLY_AVAILABLE_DAYS;
+
         const boostedScore = isVipLandlord
             ? Math.min(100, score + VIP_LANDLORD_SEARCH_BOOST)
             : score;
@@ -532,6 +552,10 @@ async function getPublicSearch(params, viewer = null) {
             location: loc
                 ? { district: loc.district, city: loc.city, address: loc.address }
                 : null,
+            available: room.status === 'AVAILABLE' || Boolean(isNearlyAvailable),
+            isNearlyAvailable: Boolean(isNearlyAvailable),
+            availableFrom: nearestEndDate ? nearestEndDate.toISOString() : null,
+            daysUntilAvailable,
             matchScore: Math.round(boostedScore * 10) / 10,
             rating: avgRating != null ? Math.round(avgRating * 10) / 10 : null,
             otherRoomsInRental: otherRooms,

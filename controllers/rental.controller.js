@@ -37,6 +37,14 @@ async function createRental(req, res) {
             f.mimetype.startsWith('image/')  // Allow images as documents too
         );
 
+        // Extract document_type array from FormData (parallel array to files)
+        const rawDocumentTypes = req.body.document_type;
+        const documentTypes = Array.isArray(rawDocumentTypes)
+            ? rawDocumentTypes
+            : rawDocumentTypes
+            ? [rawDocumentTypes]
+            : [];
+
         // Extract JSON image URLs from FormData
         let imageUrls = [];
         if (req.body.images) {
@@ -56,6 +64,7 @@ async function createRental(req, res) {
         const result = await rentalService.createRental(req.auth.user.id, req.body, {
             // Files from multipart - only documents, no separate imageFiles
             documentFiles,
+            documentTypes,
             // URLs from FormData (JSON string)
             imageUrls,
         });
@@ -193,10 +202,52 @@ async function getLandlordProfile(req, res) {
 
 async function updateRental(req, res) {
     try {
+        const uploadedFiles = req.files || [];
+        const documentFiles = uploadedFiles.filter(f => 
+            f.mimetype === 'application/pdf' || 
+            f.mimetype.startsWith('image/')
+        );
+
+        const rawDocumentTypes = req.body.document_type;
+        const documentTypes = Array.isArray(rawDocumentTypes)
+            ? rawDocumentTypes
+            : rawDocumentTypes
+            ? [rawDocumentTypes]
+            : [];
+
+        let imageUrls = [];
+        if (req.body.images) {
+            try {
+                const parsed = JSON.parse(req.body.images);
+                imageUrls = Array.isArray(parsed) ? parsed : [];
+            } catch (e) {
+                console.warn('Failed to parse images JSON:', e);
+            }
+        }
+
+        // Add imageUrls back to body for backward compatibility or simple extraction
+        req.body.images = imageUrls;
+
+        // Ensure resubmit flag is parsed correctly if it comes from FormData
+        if (req.body.resubmit !== undefined) {
+            req.body.resubmit = req.body.resubmit === 'true' || req.body.resubmit === true;
+        }
+
+        let deletedDocuments = [];
+        if (req.body.deleted_documents) {
+            try {
+                deletedDocuments = JSON.parse(req.body.deleted_documents);
+            } catch (e) {
+                console.warn('Failed to parse deleted_documents JSON:', e);
+            }
+        }
+        req.body.deleted_documents = deletedDocuments;
+
         const result = await rentalService.updateRental(
             req.params.rentalId,
             req.auth.user.id,
-            req.body
+            req.body,
+            { documentFiles, documentTypes }
         );
         return res.json({ success: true, ...result });
     } catch (err) {
@@ -254,6 +305,16 @@ async function getRentalDocumentsForModeration(req, res) {
     }
 }
 
+async function getLandlordRentalDocuments(req, res) {
+    try {
+        const { rentalId } = req.params;
+        const result = await rentalService.getLandlordRentalDocuments(rentalId, req.auth.user.id);
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi khi lấy tài liệu của bài đăng');
+    }
+}
+
 module.exports = {
     createRental,
     getRentals,
@@ -261,6 +322,7 @@ module.exports = {
     getMyRentals,
     getRentalsForModeration,
     getRentalDocumentsForModeration,
+    getLandlordRentalDocuments,
     updateRentalStatus,
     updateRental,
     deleteRental,

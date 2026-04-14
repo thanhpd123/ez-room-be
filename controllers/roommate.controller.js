@@ -143,6 +143,15 @@ async function checkRoommateRating(req, res) {
     }
 }
 
+async function getPeopleYouMayKnow(req, res) {
+    try {
+        const result = await roommateService.getPeopleYouMayKnow(req.auth.user.id);
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        return handleError(err, res, 'Lỗi tải gợi ý "Có thể bạn biết"');
+    }
+}
+
 module.exports = {
     getSuggestions,
     sendRequest,
@@ -155,5 +164,6 @@ module.exports = {
     searchByArea,
     createRoommateRating,
     checkRoommateRating,
+    getPeopleYouMayKnow,
 };
 

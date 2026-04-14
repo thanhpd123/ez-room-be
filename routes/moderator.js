@@ -24,6 +24,7 @@ const {
     getModeratorList,
     getRejectionInfo,
     getOverview,
+    getKpi,
     distributeTasks,
 } = require('../controllers/moderator.controller');
 
@@ -45,6 +46,7 @@ router.use(requireRole('MODERATOR', 'ADMIN'));
  *         description: Overview stats
  */
 router.get('/overview', getOverview);
+router.get('/kpi', getKpi);
 
 /**
  * @openapi

@@ -142,17 +142,19 @@ async function createRental(ownerId, body, files = {}) {
             }
 
             // Save uploaded document paths to rental_documents table
-            for (const doc of uploadedDocuments) {
-                // Create document record first to get its ID
+            for (let i = 0; i < uploadedDocuments.length; i++) {
+                const doc = uploadedDocuments[i];
+                const VALID_TYPES = ['CCCD', 'SO_DO', 'GPKD', 'HOP_DONG', 'OTHER'];
+                const rawType = (files.documentTypes?.[i] ?? 'OTHER').toUpperCase();
+                const docType = VALID_TYPES.includes(rawType) ? rawType : 'OTHER';
                 await tx.rental_documents.create({
                     data: {
                         rental_id: created.id,
-                        document_type: 'OTHER',
+                        document_type: docType,
                         image_url: doc.path,
                         status: 'PENDING',
                     },
                 });
-                // Note: Access logging will be done separately when moderator views documents
             }
 
             // Add to moderation queue
@@ -901,8 +903,8 @@ async function getLandlordProfile(userId) {
     };
 }
 
-async function updateRental(rentalId, userId, body) {
-    const { title, description, address, district, city, images, status, resubmit } = body;
+async function updateRental(rentalId, userId, body, files = {}) {
+    const { title, description, address, district, city, images, status, resubmit, deleted_documents } = body;
 
     const allowedStatuses = ['AVAILABLE', 'UNAVAILABLE', 'HIDDEN'];
     if (status && !allowedStatuses.includes(status)) {
@@ -961,11 +963,39 @@ async function updateRental(rentalId, userId, body) {
         }
     }
 
+    // UPLOAD DOCUMENTS
+    const uploadedDocuments = [];
+    if (files.documentFiles && files.documentFiles.length > 0) {
+        console.log(`📤 Uploading ${files.documentFiles.length} document file(s) for update`);
+        for (const docFile of files.documentFiles) {
+            try {
+                const sanitizedName = docFile.originalname
+                    .replace(/[^\w.-]/g, '')
+                    .substring(0, 200);
+                const fileName = `temp/documents/${Date.now()}_${sanitizedName}`;
+                
+                const { data, error: uploadError } = await supabase.storage
+                    .from('rental-documents')
+                    .upload(fileName, docFile.buffer, {
+                        contentType: docFile.mimetype,
+                        cacheControl: '0',
+                    });
+
+                if (uploadError) throw uploadError;
+                if (data) Object.assign(uploadedDocuments, [...uploadedDocuments, { path: data.path, name: docFile.originalname }]);
+            } catch (err) {
+                console.error('❌ Document upload error during update:', err.message);
+                throw err;
+            }
+        }
+    }
+
     // Xác định status mới: resubmit hoặc edit bài đã duyệt → PENDING
     const needsModeration = isResubmit || isEditApproved;
     const newStatus = needsModeration ? 'PENDING' : status;
 
-    const result = await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(
+        async (tx) => {
         await tx.rental.update({
             where: { id: rentalId },
             data: {
@@ -985,6 +1015,38 @@ async function updateRental(rentalId, userId, body) {
             }
         }
 
+        // Delete documents marked for removal
+        if (deleted_documents && deleted_documents.length > 0) {
+            await tx.rental_documents.deleteMany({
+                where: {
+                    id: { in: deleted_documents },
+                    rental_id: rentalId
+                }
+            });
+        }
+
+        // Save uploaded document paths to rental_documents table
+        if (uploadedDocuments.length > 0) {
+            // Optional: We can delete old documents here if we want to replace them completely. 
+            // For now, we append them or maybe the landlord just uploads missing ones.
+            // But if it's a completely new submission, we COULD delete old ones.
+            // Let's NOT delete so we don't accidentally wipe approved docs if they just upload 1 new thing.
+            for (let i = 0; i < uploadedDocuments.length; i++) {
+                const doc = uploadedDocuments[i];
+                const VALID_TYPES = ['CCCD', 'SO_DO', 'GPKD', 'HOP_DONG', 'OTHER'];
+                const rawType = (files.documentTypes?.[i] ?? 'OTHER').toUpperCase();
+                const docType = VALID_TYPES.includes(rawType) ? rawType : 'OTHER';
+                await tx.rental_documents.create({
+                    data: {
+                        rental_id: rentalId,
+                        document_type: docType,
+                        image_url: doc.path,
+                        status: 'PENDING',
+                    },
+                });
+            }
+        }
+
         // Resubmit hoặc edit bài đã duyệt: tạo mục mới trong moderation queue
         if (needsModeration) {
             const moderatorService = require('./moderator.service');
@@ -999,9 +1061,11 @@ async function updateRental(rentalId, userId, body) {
 
         return tx.rental.findUnique({
             where: { id: rentalId },
-            include: { location: true, images: true },
+            include: { location: true, images: true, rental_documents: true },
         });
-    });
+    },
+    { timeout: 10000 }
+    );
 
     const message = isResubmit
         ? 'Đã gửi lại bài đăng để duyệt'
@@ -1095,9 +1159,16 @@ async function deleteRental(rentalId, userId) {
  * Get landlord dashboard statistics
  */
 async function getLandlordDashboardStats(landlordId) {
+    const nearlyAvailableDays = Math.max(1, Number(process.env.NEARLY_AVAILABLE_DAYS || 7));
+    const now = new Date();
+    const thresholdDate = new Date(now);
+    thresholdDate.setDate(thresholdDate.getDate() + nearlyAvailableDays);
+
     const [
         totalRentals,
         totalRooms,
+        roomsByStatus,
+        nearlyAvailableRoomPeriods,
         rentalsByStatus,
         wallet,
         totalFeedback,
@@ -1111,6 +1182,33 @@ async function getLandlordDashboardStats(landlordId) {
         // Tổng số phòng trọ
         prisma.rooms.count({
             where: { rentals: { owner_id: landlordId } },
+        }),
+
+        // Trạng thái phòng trọ
+        prisma.rooms.groupBy({
+            by: ['status'],
+            where: { rentals: { owner_id: landlordId } },
+            _count: { id: true },
+        }),
+
+        // Phòng sắp trống (đang RENTED, có kỳ thuê ACTIVE và endDate trong N ngày tới)
+        prisma.roomRentalPeriod.findMany({
+            where: {
+                status: 'ACTIVE',
+                endDate: {
+                    gte: now,
+                    lte: thresholdDate,
+                },
+                room: {
+                    status: 'RENTED',
+                    rentals: {
+                        owner_id: landlordId,
+                    },
+                },
+            },
+            select: {
+                roomId: true,
+            },
         }),
         
         // Trạng thái nhà trọ
@@ -1180,6 +1278,23 @@ async function getLandlordDashboardStats(landlordId) {
         }
     });
 
+    const roomStatusMap = {
+        PENDING: 0,
+        AVAILABLE: 0,
+        RENTED: 0,
+        MAINTENANCE: 0,
+    };
+
+    roomsByStatus.forEach((item) => {
+        if (roomStatusMap.hasOwnProperty(item.status)) {
+            roomStatusMap[item.status] = item._count.id;
+        }
+    });
+
+    roomStatusMap.NEARLY_AVAILABLE = new Set(
+        nearlyAvailableRoomPeriods.map((item) => item.roomId)
+    ).size;
+
     // Format preorder status data
     const preorderStatusMap = {
         PENDING: 0,
@@ -1202,6 +1317,7 @@ async function getLandlordDashboardStats(landlordId) {
             },
             rooms: {
                 total: totalRooms,
+                byStatus: roomStatusMap,
             },
             wallet: {
                 balance: wallet ? Number(wallet.balance) : 0,
@@ -1451,6 +1567,58 @@ async function getRentalDocumentsForModeration(rentalId, moderatorId) {
     };
 }
 
+async function getLandlordRentalDocuments(rentalId, landlordId) {
+    const rental = await prisma.rental.findUnique({
+        where: { id: rentalId },
+        include: {
+            rental_documents: true,
+        },
+    });
+
+    if (!rental) {
+        throw Object.assign(new Error('Rental không tìm thấy'), { statusCode: 404 });
+    }
+
+    if (rental.owner_id !== landlordId) {
+        throw Object.assign(new Error('Không có quyền truy cập'), { statusCode: 403 });
+    }
+
+    // Generate signed URLs for documents (expires in 1 hour)
+    const docsWithUrls = await Promise.all(
+        (rental.rental_documents || []).map(async (doc) => {
+            try {
+                const { data, error } = await supabase.storage
+                    .from('rental-documents')
+                    .createSignedUrl(doc.image_url, 3600);
+
+                return {
+                    id: doc.id,
+                    documentType: doc.document_type,
+                    status: doc.status,
+                    signedUrl: error ? null : data?.signedUrl,
+                    uploadedAt: doc.created_at,
+                };
+            } catch (err) {
+                console.error('Error generating signed URL:', err);
+                return {
+                    id: doc.id,
+                    documentType: doc.document_type,
+                    status: doc.status,
+                    signedUrl: null,
+                    uploadedAt: doc.created_at,
+                };
+            }
+        })
+    );
+
+    return {
+        data: {
+            id: rental.id,
+            documents: docsWithUrls,
+        },
+    };
+}
+
 module.exports = {
     createRental,
     getRentals,
@@ -1458,6 +1626,7 @@ module.exports = {
     getMyRentals,
     getRentalsForModeration,
     getRentalDocumentsForModeration,
+    getLandlordRentalDocuments,
     updateRentalStatus,
     updateRental,
     deleteRental,

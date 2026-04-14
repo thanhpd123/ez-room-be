@@ -6,6 +6,7 @@ const { sendEmail } = require('../utils/email');
 
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5174';
 const AMENITIES_CACHE_KEY = 'rooms:amenities';
+const NEARLY_AVAILABLE_DAYS = Math.max(1, Number(process.env.NEARLY_AVAILABLE_DAYS || 7));
 const FREE_TIER_LANDLORD_MAX_ROOMS = Math.max(
     1,
     Number(process.env.FREE_TIER_LANDLORD_MAX_ROOMS || 5)
@@ -17,6 +18,27 @@ function isActiveVipLandlord(authUser) {
 }
 
 function formatRoomResponse(room) {
+    const activePeriods = Array.isArray(room.rentalPeriods)
+        ? room.rentalPeriods.filter((p) => p.status === 'ACTIVE' && p.endDate)
+        : [];
+
+    const nearestEndDate = activePeriods.length > 0
+        ? activePeriods
+            .map((p) => new Date(p.endDate))
+            .sort((a, b) => a.getTime() - b.getTime())[0]
+        : null;
+
+    const daysUntilAvailable = nearestEndDate
+        ? Math.ceil((nearestEndDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+        : null;
+
+    const isNearlyAvailable =
+        room.status === 'RENTED' &&
+        nearestEndDate &&
+        daysUntilAvailable != null &&
+        daysUntilAvailable >= 0 &&
+        daysUntilAvailable <= NEARLY_AVAILABLE_DAYS;
+
     return {
         id: room.id,
         rentalId: room.rental_id,
@@ -27,6 +49,9 @@ function formatRoomResponse(room) {
         sizeM2: room.size_m2 ? Number(room.size_m2) : null,
         maxPeople: room.max_people,
         status: room.status,
+        isNearlyAvailable: Boolean(isNearlyAvailable),
+        availableFrom: nearestEndDate ? nearestEndDate.toISOString() : null,
+        daysUntilAvailable: daysUntilAvailable,
         createdAt: room.created_at,
         images: (room.images || []).map((img) => img.imageUrl),
         amenities: (room.roomAmenities || []).map((ra) => ({
@@ -40,6 +65,9 @@ function formatRoomResponse(room) {
         area: room.size_m2 ? Number(room.size_m2) : 0,
         max_occupants: room.max_people || 1,
         status: room.status,
+        isNearlyAvailable: Boolean(isNearlyAvailable),
+        availableFrom: nearestEndDate ? nearestEndDate.toISOString() : null,
+        daysUntilAvailable: daysUntilAvailable,
         thumbnail_url: room.images?.[0]?.imageUrl || null,
         created_at: room.created_at?.toISOString() || new Date().toISOString(),
     };
@@ -255,6 +283,12 @@ async function getRooms(params) {
             include: {
                 images: true,
                 roomAmenities: { include: { amenity: true } },
+                rentalPeriods: {
+                    where: { status: 'ACTIVE' },
+                    select: { status: true, endDate: true },
+                    orderBy: { endDate: 'asc' },
+                    take: 1,
+                },
                 rentals: { include: { location: true } },
             },
         }),
@@ -291,6 +325,12 @@ async function getRoomById(roomId, userId = null) {
         include: {
             images: true,
             roomAmenities: { include: { amenity: true } },
+            rentalPeriods: {
+                where: { status: 'ACTIVE' },
+                select: { status: true, endDate: true },
+                orderBy: { endDate: 'asc' },
+                take: 1,
+            },
             rentals: {
                 include: {
                     location: true,
@@ -531,7 +571,11 @@ async function getRoomTenants(roomId, userId) {
             orderBy: { startDate: 'desc' },
         }),
         prisma.preorder.findMany({
-            where: { roomId },
+            where: {
+                roomId,
+                status: { in: ['PENDING', 'CONFIRMED'] },
+                payment_status: { in: ['UNPAID', 'PAID'] },
+            },
             include: {
                 user: {
                     select: {
@@ -929,6 +973,12 @@ async function getRoomByIdForSearchRoomate(roomId, userId = null) {
         include: {
             images: true,
             roomAmenities: { include: { amenity: true } },
+            rentalPeriods: {
+                where: { status: 'ACTIVE' },
+                select: { status: true, endDate: true },
+                orderBy: { endDate: 'asc' },
+                take: 1,
+            },
             rentals: {
                 include: {
                     location: true,
