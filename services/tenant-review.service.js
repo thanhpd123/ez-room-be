@@ -171,7 +171,7 @@ async function getTenantReviews(revieweeId, requesterId) {
   const reviews = await prisma.tenant_review.findMany({
     where: {
       reviewee_id: revieweeId,
-      status: { in: ['APPROVED', 'HIDDEN'] }, // Only show approved or admin-hidden reviews
+      status: 'APPROVED', // Only show approved reviews
     },
     include: {
       reviewer: { select: { id: true, fullName: true, avatarUrl: true } },
@@ -309,7 +309,7 @@ async function updateReviewStatus(reviewId, action, moderatorId, notes = '') {
     throw Object.assign(new Error('Không tìm thấy đánh giá'), { statusCode: 404 });
   }
 
-  const newStatus = action === 'approve' ? 'APPROVED' : action === 'reject' ? 'REJECTED' : 'HIDDEN';
+  const newStatus = action === 'approve' ? 'APPROVED' : 'REJECTED';
 
   const updated = await prisma.$transaction(async (tx) => {
     const u = await tx.tenant_review.update({
@@ -328,7 +328,7 @@ async function updateReviewStatus(reviewId, action, moderatorId, notes = '') {
         moderator_id: moderatorId,
         target_type: 'FEEDBACK',
         target_id: reviewId,
-        action: action === 'approve' ? 'APPROVE' : action === 'reject' ? 'REJECT' : 'HIDE',
+        action: action === 'approve' ? 'APPROVE' : 'REJECT',
         previous_status: review.status,
         new_status: newStatus,
         reason: notes,
