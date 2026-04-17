@@ -37,7 +37,7 @@ async function createReport(reporterId, body) {
             },
         });
         const moderatorService = require('./moderator.service');
-        await moderatorService.autoAssignNewTask(tx, {
+        await moderatorService.addToModerationQueue(tx, {
             target_type: 'REPORT',
             target_id: created.id,
             priority: 'NORMAL',
