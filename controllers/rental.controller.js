@@ -269,7 +269,7 @@ async function deleteRental(req, res) {
 
 async function getLandlordDashboardStats(req, res) {
     try {
-        const result = await rentalService.getLandlordDashboardStats(req.auth.user.id);
+        const result = await rentalService.getLandlordDashboardStats(req.auth.user.id, req.query.month);
         return res.json({ success: true, ...result });
     } catch (err) {
         return handleError(err, res, 'Lỗi khi lấy thống kê');
@@ -278,7 +278,7 @@ async function getLandlordDashboardStats(req, res) {
 
 async function getLandlordPerformanceMetrics(req, res) {
     try {
-        const result = await rentalService.getLandlordPerformanceMetrics(req.auth.user.id);
+        const result = await rentalService.getLandlordPerformanceMetrics(req.auth.user.id, req.query.month);
         return res.json({ success: true, ...result });
     } catch (err) {
         return handleError(err, res, 'Lỗi khi lấy chỉ số hiệu suất');
