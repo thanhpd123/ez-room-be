@@ -2,6 +2,7 @@ const express = require('express');
 const { optionalJWT } = require('../middleware/auth');
 const { getPublicRentals, getPublicRentalById, getPublicRoomTypes, getLandlordProfile } = require('../controllers/rental.controller');
 const { getPublicSearch } = require('../controllers/search.controller');
+const { getPublicSiteConfig } = require('../controllers/site-config.controller');
 
 const router = express.Router();
 
@@ -95,6 +96,18 @@ router.get('/rentals', getPublicRentals);
  *         description: Chi tiết rental
  */
 router.get('/rentals/:rentalId', getPublicRentalById);
+
+/**
+ * @openapi
+ * /public/site-config:
+ *   get:
+ *     tags: [Public]
+ *     summary: Lay cau hinh trang chu cong khai
+ *     responses:
+ *       200:
+ *         description: Cau hinh website
+ */
+router.get('/site-config', getPublicSiteConfig);
 
 module.exports = router;
 
