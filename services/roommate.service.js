@@ -13,32 +13,7 @@ function tokenize(text) {
         .filter((w) => w.length > 1);
 }
 
-function countDealBreakerViolations(dealBreakerText, otherLifestyle) {
-    if (!dealBreakerText || !otherLifestyle) return 0;
-    const db = String(dealBreakerText).trim().toLowerCase();
-    if (!db) return 0;
-    let violations = 0;
-    if (/hút thuốc|thuốc lá|smoking|khói thuốc/.test(db) && otherLifestyle.smoking) violations++;
-    if (/rượu|bia|uống rượu|drinking|nhậu/.test(db) && otherLifestyle.drinking) violations++;
-    if (/dơ|bẩn|không sạch|ở bẩn|mất vệ sinh/.test(db)) {
-        const low = String(otherLifestyle.cleanliness || '').trim().toLowerCase();
-        if (low === 'bình thường' || low === 'không quan tâm') violations++;
-    }
-    if (/ồn|ồn ào|tiếng ồn|noise|gây ồn/.test(db)) {
-        const low = String(otherLifestyle.noise_tolerance || '').trim().toLowerCase();
-        if (low === 'cao') violations++;
-    }
-    if (/thú cưng|chó|mèo|pet|nuôi/.test(db) && otherLifestyle.pets_allowed) violations++;
-    if (/khách|đưa người lạ|dẫn bạn|guest/.test(db)) {
-        const low = String(otherLifestyle.guest_frequency || '').trim().toLowerCase();
-        if (low === 'thường xuyên') violations++;
-    }
-    if (/thức khuya|về khuya|ngủ muộn|khuya/.test(db)) {
-        const low = String(otherLifestyle.sleep_schedule || '').trim().toLowerCase();
-        if (low.includes('sau 0h') || low.includes('khuya')) violations++;
-    }
-    return violations;
-}
+
 
 // ─── Vector-based Weighted Cosine Similarity ─────────────────────────────────
 
@@ -48,6 +23,8 @@ function countDealBreakerViolations(dealBreakerText, otherLifestyle) {
  * produce vectors that are close together (unlike simple matching where
  * "Sạch" vs "Rất sạch" would score 0).
  */
+
+
 const QUANT_MAPS = {
     sleep_schedule: {
         'sớm (trước 22h)': 0.0,
@@ -175,6 +152,8 @@ function vectorizeLifestyle(lifestyle) {
     return features;
 }
 
+
+
 /**
  * Compute Weighted Cosine Similarity between two lifestyle vectors.
  *
@@ -248,10 +227,6 @@ function weightedCosineSimilarity(vecA, vecB) {
  *   Layer 1 — Quantization: convert all lifestyle values to [0, 1] scale
  *   Layer 2 — Vectorization + Weighting: build weighted feature vectors
  *   Layer 3 — Weighted Cosine Similarity: compute overall compatibility
- *
- * Hard Filter (Deal-breaker Penalty):
- *   1 violation  → score × 0.3
- *   2+ violations → score × 0
  */
 function computeLifestyleScore(myLifestyle, candidateLifestyle, myPrefs, candidatePrefs) {
     if (!myLifestyle || !candidateLifestyle) return 0;
@@ -267,21 +242,6 @@ function computeLifestyleScore(myLifestyle, candidateLifestyle, myPrefs, candida
 
     // Convert to percentage [0, 100]
     let score = Math.round(similarity * 100);
-
-    // Hard Filter: deal-breaker penalty (both directions)
-    const myViolations = countDealBreakerViolations(
-        myLifestyle.deal_breakers, candidateLifestyle
-    );
-    const candViolations = countDealBreakerViolations(
-        candidateLifestyle.deal_breakers, myLifestyle
-    );
-    const totalViolations = myViolations + candViolations;
-
-    if (totalViolations >= 2) {
-        score = 0;
-    } else if (totalViolations === 1) {
-        score = Math.round(score * 0.3);
-    }
 
     return Math.min(100, Math.max(0, score));
 }
@@ -348,6 +308,10 @@ function jaccardSimilarity(setA, setB) {
  * combinedSim = min(1.0, 0.6 * roommateSim + 0.4 * roomFavSim)
  * cfBoost     = round(15 * combinedSim)  → [0, 15]
  */
+
+
+
+
 function computeCFBoost(userId, candidateId, roommateMatrix, roomFavMatrix) {
     const myRoommateSet = roommateMatrix.get(userId) || new Set();
     const candRoommateSet = roommateMatrix.get(candidateId) || new Set();
@@ -375,6 +339,8 @@ function computeCFBoost(userId, candidateId, roommateMatrix, roomFavMatrix) {
     return Math.round(15 * combinedSim);
 }
 
+
+
 /**
  * Compute experience boost from roommate ratings for a list of candidate IDs.
  * experienceBoost = clamp(round(10 * (avgRating - 1) / 4), 0, 10)
@@ -386,7 +352,7 @@ async function computeExperienceData(candidateIds) {
 
     const ratings = await prisma.roommateRating.findMany({
         where: { target_id: { in: candidateIds } },
-        select: { target_id: true, overall_rating: true, would_live_again: true },
+        select: { target_id: true, overall_rating: true },
     });
 
     const grouped = new Map();
@@ -400,8 +366,7 @@ async function computeExperienceData(candidateIds) {
         const total = list.length;
         const avgRating = list.reduce((sum, r) => sum + r.overall_rating, 0) / total;
         const experienceBoost = Math.min(10, Math.max(0, Math.round(10 * (avgRating - 1) / 4)));
-        const countTrue = list.filter((r) => r.would_live_again === true).length;
-        const wouldLiveAgainRate = total > 0 ? Math.round((countTrue / total) * 100) : null;
+        const wouldLiveAgainRate = null;
         result.set(targetId, { avgRating, experienceBoost, wouldLiveAgainRate });
     }
     return result;
@@ -424,6 +389,7 @@ async function getSuggestions(userId, params) {
         throw Object.assign(new Error('User not found'), { statusCode: 404 });
     }
 
+    
     const existingMatches = await prisma.roommateMatch.findMany({
         where: { OR: [{ requester_id: userId }, { target_id: userId }] },
         select: { requester_id: true, target_id: true, status: true },
@@ -490,8 +456,12 @@ async function getSuggestions(userId, params) {
             me.preference,
             u.preference
         );
+        
+        
         const cfBoost = computeCFBoost(userId, u.id, roommateMatrix, roomFavMatrix);
+
         const expData = experienceMap.get(u.id) || { experienceBoost: 0, wouldLiveAgainRate: null };
+
         const matchScore = Math.min(100, lifestyleScore + cfBoost + expData.experienceBoost);
 
         return {

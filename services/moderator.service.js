@@ -865,61 +865,8 @@ async function assignQueueItem(id, assignTo) {
     return { message: 'Đã nhận task thành công', data: updated };
 }
 
-async function autoAssignNewTask(tx, data) {
-    // Lấy danh sách moderator
-    const moderators = await tx.user.findMany({
-        where: { role: 'MODERATOR' },
-        select: { id: true },
-        orderBy: { id: 'asc' },
-    });
-
-    if (moderators.length === 0) {
-        // Không có moderator nào, cứ đẩy vào queue mở
-        return await tx.moderation_queue.create({ data });
-    }
-
-    // Tìm xem task gần nhất đã giao là giao cho ai
-    const lastAssigned = await tx.moderation_queue.findFirst({
-        where: { assigned_to: { not: null } },
-        orderBy: { created_at: 'desc' }
-    });
-
-    let nextModId = moderators[0].id;
-    if (lastAssigned && lastAssigned.assigned_to) {
-        const lastIndex = moderators.findIndex(m => m.id === lastAssigned.assigned_to);
-        if (lastIndex !== -1) {
-            nextModId = moderators[(lastIndex + 1) % moderators.length].id;
-        }
-    }
-
-    // Tự động gán luôn cho người tiếp theo
-    const task = await tx.moderation_queue.create({
-        data: {
-            ...data,
-            assigned_to: nextModId,
-            assigned_at: new Date(),
-            status: 'IN_PROGRESS',
-        }
-    });
-
-    await tx.moderator_logs.create({
-        data: {
-            moderator_id: nextModId,
-            target_type: 'QUEUE',
-            target_id: task.id,
-            action: 'CLAIM',
-            previous_status: 'OPEN',
-            new_status: 'IN_PROGRESS',
-            metadata: {
-                queue_target_type: task.target_type,
-                queue_target_id: task.target_id,
-                queue_category: task.category,
-                auto_assigned: true
-            },
-        },
-    });
-
-    return task;
+async function addToModerationQueue(tx, data) {
+    return await tx.moderation_queue.create({ data });
 }
 
 async function releaseQueueItem(id, moderatorId) {
@@ -1618,5 +1565,6 @@ module.exports = {
     getLatestRejection,
     getOverview,
     getKpi,
-    autoAssignNewTask,
+    autoAssignNewTask: addToModerationQueue, // alias for legacy code just in case
+    addToModerationQueue,
 };

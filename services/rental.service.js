@@ -178,7 +178,7 @@ async function createRental(ownerId, body, files = {}) {
 
             // Add to moderation queue
             const moderatorService = require('./moderator.service');
-            await moderatorService.autoAssignNewTask(tx, {
+            await moderatorService.addToModerationQueue(tx, {
                 target_type: 'RENTAL',
                 target_id: created.id,
                 priority: 'NORMAL',
@@ -1069,7 +1069,7 @@ async function updateRental(rentalId, userId, body, files = {}) {
         // Resubmit hoặc edit bài đã duyệt: tạo mục mới trong moderation queue
         if (needsModeration) {
             const moderatorService = require('./moderator.service');
-            await moderatorService.autoAssignNewTask(tx, {
+            await moderatorService.addToModerationQueue(tx, {
                 target_type: 'RENTAL',
                 target_id: rentalId,
                 priority: 'NORMAL',

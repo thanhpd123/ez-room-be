@@ -226,7 +226,7 @@ async function createRoom(userId, body, authUser = null) {
             },
         });
         const moderatorService = require('./moderator.service');
-        await moderatorService.autoAssignNewTask(tx, {
+        await moderatorService.addToModerationQueue(tx, {
             target_type: 'ROOM',
             target_id: created.id,
             priority: vipLandlord ? 'HIGH' : 'NORMAL',
@@ -505,7 +505,7 @@ async function updateRoom(roomId, userId, body) {
     if (needsModeration) {
         try {
             const moderatorService = require('./moderator.service');
-            await moderatorService.autoAssignNewTask(prisma, {
+            await moderatorService.addToModerationQueue(prisma, {
                 target_type: 'ROOM',
                 target_id: roomId,
                 priority: 'NORMAL',
