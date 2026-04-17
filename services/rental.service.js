@@ -19,6 +19,25 @@ function getPublicRentalsOrderBy(sortParam) {
     return map[sortParam] || { createdAt: 'desc' };
 }
 
+function getMonthRange(monthInput) {
+    if (!monthInput) return null;
+
+    const monthText = String(monthInput).trim();
+    const match = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(monthText);
+    if (!match) {
+        throw Object.assign(new Error('Tham số month không hợp lệ. Định dạng đúng: YYYY-MM'), {
+            statusCode: 400,
+        });
+    }
+
+    const year = Number(match[1]);
+    const month = Number(match[2]) - 1;
+    const start = new Date(year, month, 1);
+    const endExclusive = new Date(year, month + 1, 1);
+
+    return { start, endExclusive };
+}
+
 async function createRental(ownerId, body, files = {}) {
     console.log('CREATE RENTAL - Files received:', {
         imageFiles: files.imageFiles?.length || 0,
@@ -1158,8 +1177,25 @@ async function deleteRental(rentalId, userId) {
 /**
  * Get landlord dashboard statistics
  */
-async function getLandlordDashboardStats(landlordId) {
+async function getLandlordDashboardStats(landlordId, month) {
     const nearlyAvailableDays = Math.max(1, Number(process.env.NEARLY_AVAILABLE_DAYS || 7));
+    const monthRange = getMonthRange(month);
+    const rentalCreatedAtFilter = monthRange
+        ? { createdAt: { gte: monthRange.start, lt: monthRange.endExclusive } }
+        : {};
+    const roomCreatedAtFilter = monthRange
+        ? { created_at: { gte: monthRange.start, lt: monthRange.endExclusive } }
+        : {};
+    const feedbackCreatedAtFilter = monthRange
+        ? { created_at: { gte: monthRange.start, lt: monthRange.endExclusive } }
+        : {};
+    const preorderCreatedAtFilter = monthRange
+        ? { createdAt: { gte: monthRange.start, lt: monthRange.endExclusive } }
+        : {};
+    const periodCreatedAtFilter = monthRange
+        ? { createdAt: { gte: monthRange.start, lt: monthRange.endExclusive } }
+        : {};
+
     const now = new Date();
     const thresholdDate = new Date(now);
     thresholdDate.setDate(thresholdDate.getDate() + nearlyAvailableDays);
@@ -1177,17 +1213,28 @@ async function getLandlordDashboardStats(landlordId) {
         preorderStats,
     ] = await Promise.all([
         // Tổng số nhà trọ
-        prisma.rental.count({ where: { owner_id: landlordId } }),
+        prisma.rental.count({
+            where: {
+                owner_id: landlordId,
+                ...rentalCreatedAtFilter,
+            },
+        }),
         
         // Tổng số phòng trọ
         prisma.rooms.count({
-            where: { rentals: { owner_id: landlordId } },
+            where: {
+                rentals: { owner_id: landlordId },
+                ...roomCreatedAtFilter,
+            },
         }),
 
         // Trạng thái phòng trọ
         prisma.rooms.groupBy({
             by: ['status'],
-            where: { rentals: { owner_id: landlordId } },
+            where: {
+                rentals: { owner_id: landlordId },
+                ...roomCreatedAtFilter,
+            },
             _count: { id: true },
         }),
 
@@ -1205,6 +1252,7 @@ async function getLandlordDashboardStats(landlordId) {
                         owner_id: landlordId,
                     },
                 },
+                ...periodCreatedAtFilter,
             },
             select: {
                 roomId: true,
@@ -1214,7 +1262,10 @@ async function getLandlordDashboardStats(landlordId) {
         // Trạng thái nhà trọ
         prisma.rental.groupBy({
             by: ['status'],
-            where: { owner_id: landlordId },
+            where: {
+                owner_id: landlordId,
+                ...rentalCreatedAtFilter,
+            },
             _count: { id: true },
         }),
         
@@ -1230,6 +1281,7 @@ async function getLandlordDashboardStats(landlordId) {
                 target_type: 'ROOM',
                 status: 'APPROVED',
                 room_rental_periods: { room: { rentals: { owner_id: landlordId } } },
+                ...feedbackCreatedAtFilter,
             },
         }),
         
@@ -1240,6 +1292,7 @@ async function getLandlordDashboardStats(landlordId) {
                 status: 'APPROVED',
                 rating: { not: null },
                 room_rental_periods: { room: { rentals: { owner_id: landlordId } } },
+                ...feedbackCreatedAtFilter,
             },
             _avg: { rating: true },
             _count: { id: true },
@@ -1249,6 +1302,7 @@ async function getLandlordDashboardStats(landlordId) {
         prisma.preorder.count({
             where: {
                 room: { rentals: { owner_id: landlordId } },
+                ...preorderCreatedAtFilter,
             },
         }),
         
@@ -1257,6 +1311,7 @@ async function getLandlordDashboardStats(landlordId) {
             by: ['status'],
             where: {
                 room: { rentals: { owner_id: landlordId } },
+                ...preorderCreatedAtFilter,
             },
             _count: { id: true },
         }),
@@ -1334,14 +1389,19 @@ async function getLandlordDashboardStats(landlordId) {
     };
 }
 
-async function getLandlordPerformanceMetrics(landlordId) {
+async function getLandlordPerformanceMetrics(landlordId, month) {
+    const monthRange = getMonthRange(month);
     const now = new Date();
-    const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const thisMonthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    const thisMonthStart = monthRange
+        ? monthRange.start
+        : new Date(now.getFullYear(), now.getMonth(), 1);
+    const thisMonthEndExclusive = monthRange
+        ? monthRange.endExclusive
+        : new Date(now.getFullYear(), now.getMonth() + 1, 1);
     
     const [
         totalRooms,
-        activeRentals,
+        activeRoomsThisMonth,
         thisMonthRevenue,
         totalRevenue,
         cancelledPeriods,
@@ -1354,25 +1414,29 @@ async function getLandlordPerformanceMetrics(landlordId) {
             where: { rentals: { owner_id: landlordId } },
         }),
         
-        // Số phòng đang thuê (ACTIVE periods)
-        prisma.RoomRentalPeriod.count({
+        // Số phòng có thuê active trong tháng (không trùng room)
+        prisma.roomRentalPeriod.findMany({
             where: {
                 room: { rentals: { owner_id: landlordId } },
                 status: 'ACTIVE',
+                startDate: { lt: thisMonthEndExclusive },
+                OR: [{ endDate: null }, { endDate: { gte: thisMonthStart } }],
             },
+            select: { roomId: true },
+            distinct: ['roomId'],
         }),
         
         // Doanh thu tháng này
-        prisma.RoomRentalPeriod.aggregate({
+        prisma.roomRentalPeriod.aggregate({
             where: {
                 room: { rentals: { owner_id: landlordId } },
-                createdAt: { gte: thisMonthStart, lte: thisMonthEnd },
+                createdAt: { gte: thisMonthStart, lt: thisMonthEndExclusive },
             },
             _sum: { actualPrice: true },
         }),
         
         // Tổng doanh thu
-        prisma.RoomRentalPeriod.aggregate({
+        prisma.roomRentalPeriod.aggregate({
             where: {
                 room: { rentals: { owner_id: landlordId } },
             },
@@ -1380,43 +1444,47 @@ async function getLandlordPerformanceMetrics(landlordId) {
         }),
         
         // Số đơn hủy
-        prisma.RoomRentalPeriod.count({
+        prisma.roomRentalPeriod.count({
             where: {
                 room: { rentals: { owner_id: landlordId } },
                 status: 'CANCELLED',
+                createdAt: { gte: thisMonthStart, lt: thisMonthEndExclusive },
             },
         }),
         
         // Tổng đơn kết thúc (COMPLETED hoặc CANCELLED)
-        prisma.RoomRentalPeriod.count({
+        prisma.roomRentalPeriod.count({
             where: {
                 room: { rentals: { owner_id: landlordId } },
                 OR: [
                     { status: 'COMPLETED' },
                     { status: 'CANCELLED' },
                 ],
+                createdAt: { gte: thisMonthStart, lt: thisMonthEndExclusive },
             },
         }),
         
         // Đơn đã xác nhận
-        prisma.Preorder.count({
+        prisma.preorder.count({
             where: {
                 room: { rentals: { owner_id: landlordId } },
                 status: 'CONFIRMED',
+                createdAt: { gte: thisMonthStart, lt: thisMonthEndExclusive },
             },
         }),
         
         // Tổng đơn đặt cọc
-        prisma.Preorder.count({
+        prisma.preorder.count({
             where: {
                 room: { rentals: { owner_id: landlordId } },
                 NOT: { status: 'PENDING' },
+                createdAt: { gte: thisMonthStart, lt: thisMonthEndExclusive },
             },
         }),
     ]);
 
     // Tính toán metrics
-    const occupancyRate = totalRooms > 0 ? (activeRentals / totalRooms) * 100 : 0;
+    const occupancyRate = totalRooms > 0 ? (activeRoomsThisMonth.length / totalRooms) * 100 : 0;
     const cancellationRate = totalPeriods > 0 ? (cancelledPeriods / totalPeriods) * 100 : 0;
     const conversionRate = totalPreorders > 0 ? (confirmedPreorders / totalPreorders) * 100 : 0;
 
@@ -1430,7 +1498,7 @@ async function getLandlordPerformanceMetrics(landlordId) {
             cancellationRate: parseFloat(cancellationRate.toFixed(2)),
             conversionRate: parseFloat(conversionRate.toFixed(2)),
             bookingStats: {
-                active: activeRentals,
+                active: activeRoomsThisMonth.length,
                 cancelled: cancelledPeriods,
                 total: totalPeriods,
             },
