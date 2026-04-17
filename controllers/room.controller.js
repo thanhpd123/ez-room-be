@@ -3,7 +3,13 @@ const roomService = require('../services/room.service');
 function handleError(err, res, defaultMessage) {
     const statusCode = err.statusCode || 500;
     const message = err.message || defaultMessage;
-    console.error('Room error:', err);
+    console.error('Room error:', {
+        message: err?.message,
+        code: err?.code,
+        statusCode,
+        meta: err?.meta,
+        stack: err?.stack,
+    });
     return res.status(statusCode).json({
         success: false,
         message,

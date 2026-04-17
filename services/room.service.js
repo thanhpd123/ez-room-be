@@ -441,12 +441,52 @@ async function updateRoom(roomId, userId, body) {
         }
     }
 
+    const hasImagesField = Object.prototype.hasOwnProperty.call(body, 'images');
+    const normalizedImages = hasImagesField
+        ? Array.from(new Set(
+            (Array.isArray(body.images) ? body.images : [])
+                .map((url) => (typeof url === 'string' ? url.trim() : ''))
+                .filter(Boolean)
+        ))
+        : null;
+
+    const hasAmenityIdsField = Object.prototype.hasOwnProperty.call(body, 'amenityIds');
+    const normalizedAmenityIds = hasAmenityIdsField
+        ? Array.from(new Set(
+            (Array.isArray(body.amenityIds) ? body.amenityIds : [])
+                .map((id) => (typeof id === 'string' ? id.trim() : ''))
+                .filter(Boolean)
+        ))
+        : null;
+
     const previousStatus = existingRoom.status;
 
     const room = await prisma.$transaction(async (tx) => {
-        const updated = await tx.rooms.update({
+        await tx.rooms.update({
             where: { id: roomId },
             data: updateData,
+        });
+
+        if (hasImagesField) {
+            await tx.roomImage.deleteMany({ where: { roomId } });
+            if (normalizedImages && normalizedImages.length > 0) {
+                await tx.roomImage.createMany({
+                    data: normalizedImages.map((imageUrl) => ({ roomId, imageUrl })),
+                });
+            }
+        }
+
+        if (hasAmenityIdsField) {
+            await tx.roomAmenity.deleteMany({ where: { roomId } });
+            if (normalizedAmenityIds && normalizedAmenityIds.length > 0) {
+                await tx.roomAmenity.createMany({
+                    data: normalizedAmenityIds.map((amenityId) => ({ roomId, amenityId })),
+                });
+            }
+        }
+
+        const updated = await tx.rooms.findUnique({
+            where: { id: roomId },
             include: {
                 images: true,
                 roomAmenities: { include: { amenity: true } },
@@ -454,20 +494,32 @@ async function updateRoom(roomId, userId, body) {
             },
         });
 
-        // Resubmit hoặc edit bài đã duyệt: tạo mục mới trong moderation queue
-        if (needsModeration) {
+        if (!updated) {
+            throw Object.assign(new Error('Không tìm thấy phòng sau khi cập nhật'), { statusCode: 404 });
+        }
+
+        return updated;
+    });
+
+    // Tránh lỗi P2028 trên interactive transaction: gán moderation task sau khi transaction update đã commit.
+    if (needsModeration) {
+        try {
             const moderatorService = require('./moderator.service');
-            await moderatorService.autoAssignNewTask(tx, {
+            await moderatorService.autoAssignNewTask(prisma, {
                 target_type: 'ROOM',
                 target_id: roomId,
                 priority: 'NORMAL',
                 category: 'NEW_LISTING',
                 source: 'SYSTEM',
             });
+        } catch (err) {
+            console.error('Failed to auto assign moderation task for room update:', {
+                roomId,
+                error: err?.message,
+                code: err?.code,
+            });
         }
-
-        return updated;
-    });
+    }
 
     if (previousStatus === 'RENTED' && room.status === 'AVAILABLE') {
         notifyFavoritersRoomAvailable(room).catch((err) => console.error('Notify favoriters error:', err));
