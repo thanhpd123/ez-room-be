@@ -434,7 +434,12 @@ async function getSuggestions(userId, params) {
     });
 
     if (hasUsableGender && (myGenderNorm === 'nam' || myGenderNorm === 'nữ')) {
-        candidates = candidates.filter((u) => genderNorm(u.gender) === myGenderNorm);
+        // Giữ lại: cùng giới HOẶC chưa khai báo giới tính (null/undefined/rỗng)
+        // Loại bỏ: rõ ràng khác giới
+        candidates = candidates.filter((u) => {
+            const cg = genderNorm(u.gender);
+            return cg === myGenderNorm || cg === null;
+        });
     }
 
     const candidateIds = candidates.map((u) => u.id);
@@ -544,11 +549,19 @@ async function sendRequest(requesterId, targetId) {
     const reverse = await prisma.roommateMatch.findUnique({
         where: { requester_id_target_id: { requester_id: targetId, target_id: requesterId } },
     });
-    if (reverse && reverse.status === 'PENDING') {
-        throw Object.assign(
-            new Error('Người này đã gửi lời mời cho bạn. Hãy xem trong "Lời mời nhận được" và chấp nhận.'),
-            { statusCode: 400 }
-        );
+    if (reverse) {
+        if (reverse.status === 'PENDING') {
+            throw Object.assign(
+                new Error('Người này đã gửi lời mời cho bạn. Hãy xem trong "Lời mời nhận được" và chấp nhận.'),
+                { statusCode: 400 }
+            );
+        }
+        if (reverse.status === 'ACCEPTED') {
+            throw Object.assign(new Error('Hai bạn đã là match'), { statusCode: 400 });
+        }
+        if (reverse.status === 'REJECTED' || reverse.status === 'BLOCKED') {
+            throw Object.assign(new Error('Không thể gửi lời mời'), { statusCode: 400 });
+        }
     }
 
     const match = await prisma.roommateMatch.create({
@@ -946,7 +959,7 @@ async function getTopSearchersInArea(currentUserId, areaQuery, limit = 10) {
         .slice(0, Math.min(50, limit))
         .map(([uid]) => uid);
 
-    const [users, currentUser] = await Promise.all([
+    const [users, currentUser, myMatchesForArea] = await Promise.all([
         prisma.user.findMany({
             where: { id: { in: sortedUserIds }, status: 'ACTIVE', role: 'TENANT' },
             include: { lifestyleProfile: true, preference: true },
@@ -955,7 +968,19 @@ async function getTopSearchersInArea(currentUserId, areaQuery, limit = 10) {
             where: { id: currentUserId },
             include: { lifestyleProfile: true, preference: true },
         }),
+        prisma.roommateMatch.findMany({
+            where: {
+                OR: [{ requester_id: currentUserId }, { target_id: currentUserId }],
+            },
+            select: { requester_id: true, target_id: true, status: true },
+        }),
     ]);
+
+    const matchStatusMap = new Map();
+    for (const m of myMatchesForArea) {
+        const otherId = m.requester_id === currentUserId ? m.target_id : m.requester_id;
+        matchStatusMap.set(otherId, m.status);
+    }
 
     const userMap = new Map(users.map((u) => [u.id, u]));
     const genderNorm = (g) => {
@@ -1011,6 +1036,7 @@ async function getTopSearchersInArea(currentUserId, areaQuery, limit = 10) {
                     : null,
                 matchScore: Math.min(100, baseScore),
                 isSameGender,
+                matchStatus: matchStatusMap.get(uid) || null,
                 activityInArea: {
                     views: activity.views,
                     favorites: activity.fav,
@@ -1034,20 +1060,15 @@ function periodsOverlap(startA, endA, startB, endB) {
 }
 
 async function createRoommateRating(reviewerId, body) {
-    const { targetId, rentalPeriodId, overallRating, wouldLiveAgain, comment } = body;
+    const { targetId, rentalPeriodId, overallRating, comment } = body;
 
-    if (!targetId || !rentalPeriodId || overallRating == null || wouldLiveAgain == null) {
-        const err = new Error('Thiếu thông tin bắt buộc (targetId, rentalPeriodId, overallRating, wouldLiveAgain)');
+    if (!targetId || !rentalPeriodId || overallRating == null) {
+        const err = new Error('Thiếu thông tin bắt buộc (targetId, rentalPeriodId, overallRating)');
         err.statusCode = 400;
         throw err;
     }
     if (overallRating < 1 || overallRating > 5) {
         const err = new Error('Rating phải trong khoảng 1–5');
-        err.statusCode = 400;
-        throw err;
-    }
-    if (typeof wouldLiveAgain !== 'boolean') {
-        const err = new Error('wouldLiveAgain phải là true hoặc false');
         err.statusCode = 400;
         throw err;
     }
@@ -1090,7 +1111,6 @@ async function createRoommateRating(reviewerId, body) {
             target_id: targetId,
             rental_period_id: rentalPeriodId,
             overall_rating: overallRating,
-            would_live_again: wouldLiveAgain,
             comment: comment || null,
         },
     });
@@ -1104,7 +1124,6 @@ async function checkRoommateRating(reviewerId, targetId, rentalPeriodId) {
         select: {
             id: true,
             overall_rating: true,
-            would_live_again: true,
             comment: true,
             created_at: true,
         },
@@ -1115,193 +1134,233 @@ async function checkRoommateRating(reviewerId, targetId, rentalPeriodId) {
 // ─── People You May Know ──────────────────────────────────────────────────────
 
 /**
- * Gợi ý "Có thể bạn biết" dựa trên:
- *   1. Bạn chung (friend-of-friend qua ACCEPTED RoommateMatch)
- *   2. Cùng khu vực preferred_districts
- *
- * Returns array of { user, reasons[], matchStatus }
+ * Gợi ý "Có thể bạn quan tâm" dựa trên hành vi tìm phòng thực tế.
+ * Tối ưu: tất cả queries chạy song song, không có sequential loop.
  */
 async function getPeopleYouMayKnow(userId) {
-    const me = await prisma.user.findUnique({
-        where: { id: userId },
-        include: { lifestyleProfile: true, preference: true },
-    });
+    // ── Bước 1: Load song song user info + match status + interactions của user ──
+    const [me, myMatches, myInteractions] = await Promise.all([
+        prisma.user.findUnique({
+            where: { id: userId },
+            include: { lifestyleProfile: true, preference: true },
+        }),
+        prisma.roommateMatch.findMany({
+            where: { OR: [{ requester_id: userId }, { target_id: userId }] },
+            select: { requester_id: true, target_id: true, status: true },
+        }),
+        prisma.user_room_interactions.findMany({
+            where: { user_id: userId },
+            select: { room_id: true },
+        }),
+    ]);
+
     if (!me) return { data: [] };
 
-    // ── 1. Get my accepted friends ──
-    const myMatches = await prisma.roommateMatch.findMany({
-        where: {
-            OR: [{ requester_id: userId }, { target_id: userId }],
-        },
-        select: { requester_id: true, target_id: true, status: true },
-    });
-
-    const myFriendIds = new Set();
-    const matchStatusMap = new Map(); // otherId → status
+    const matchStatusMap = new Map();
     const excludeIds = new Set([userId]);
-
     for (const m of myMatches) {
         const otherId = m.requester_id === userId ? m.target_id : m.requester_id;
         matchStatusMap.set(otherId, m.status);
-        if (m.status === 'ACCEPTED') myFriendIds.add(otherId);
         if (m.status === 'BLOCKED') excludeIds.add(otherId);
     }
 
-    // ── 2. Find friends-of-friends (mutual friends) ──
-    // candidateId → { mutualFriendIds: Set }
-    const mutualMap = new Map();
+    // ── Bước 2: Nếu chưa có interaction → random 5 người (song song với CF matrices) ──
+    if (myInteractions.length === 0) {
+        const [randomUsers, roommateMatrix, roomFavMatrix] = await Promise.all([
+            prisma.user.findMany({
+                where: { id: { notIn: Array.from(excludeIds) }, status: 'ACTIVE', role: 'TENANT' },
+                include: { lifestyleProfile: true, preference: true },
+                take: 50,
+            }),
+            buildRoommateInteractionMatrix().catch(() => new Map()),
+            buildRoomFavMatrix().catch(() => new Map()),
+        ]);
 
-    if (myFriendIds.size > 0) {
-        const friendMatches = await prisma.roommateMatch.findMany({
-            where: {
-                status: 'ACCEPTED',
-                OR: [
-                    { requester_id: { in: Array.from(myFriendIds) } },
-                    { target_id: { in: Array.from(myFriendIds) } },
-                ],
-            },
-            select: { requester_id: true, target_id: true },
+        const shuffled = randomUsers.sort(() => Math.random() - 0.5).slice(0, 5);
+        const data = shuffled.map((u) => {
+            const lifestyleScore = computeLifestyleScore(me.lifestyleProfile, u.lifestyleProfile, me.preference, u.preference);
+            const cfBoost = computeCFBoost(userId, u.id, roommateMatrix, roomFavMatrix);
+            return {
+                user: { id: u.id, fullName: u.fullName, avatarUrl: u.avatarUrl, gender: u.gender },
+                reasons: [{ type: 'random_suggestion' }],
+                matchStatus: matchStatusMap.get(u.id) || null,
+                matchScore: Math.min(100, lifestyleScore + cfBoost),
+                areaName: null,
+            };
         });
-
-        for (const fm of friendMatches) {
-            const friendId = myFriendIds.has(fm.requester_id) ? fm.requester_id : fm.target_id;
-            const candidateId = fm.requester_id === friendId ? fm.target_id : fm.requester_id;
-
-            // Skip self, already friends, blocked
-            if (excludeIds.has(candidateId) || myFriendIds.has(candidateId)) continue;
-
-            if (!mutualMap.has(candidateId)) {
-                mutualMap.set(candidateId, new Set());
-            }
-            mutualMap.get(candidateId).add(friendId);
-        }
+        return { data, isRandom: true };
     }
 
-    // ── 3. Find users with common preferred_districts ──
-    const myDistricts = me.preference?.preferred_districts || [];
+    // ── Bước 3: Tính top 3 quận/xã từ interactions ──
+    const myRoomIds = [...new Set(myInteractions.map((i) => i.room_id))];
 
-    const districtMap = new Map(); // candidateId → Set of common districts
-
-    if (myDistricts.length > 0) {
-        // Find all TENANT users who have overlapping districts
-        const usersWithDistricts = await prisma.userPreference.findMany({
-            where: {
-                userId: { notIn: Array.from(excludeIds) },
-                preferred_districts: { hasSome: myDistricts },
-                user: { status: 'ACTIVE', role: 'TENANT' },
-            },
-            select: { userId: true, preferred_districts: true },
-        });
-
-        const myDistrictSet = new Set(myDistricts.map((d) => d.toLowerCase()));
-
-        for (const up of usersWithDistricts) {
-            // Skip already-friends (they already appear in suggestions)
-            if (myFriendIds.has(up.userId)) continue;
-
-            const common = (up.preferred_districts || []).filter((d) =>
-                myDistrictSet.has(d.toLowerCase())
-            );
-            if (common.length > 0) {
-                districtMap.set(up.userId, new Set(common));
-            }
-        }
-    }
-
-    // ── 4. Merge both sources ──
-    const allCandidateIds = new Set([...mutualMap.keys(), ...districtMap.keys()]);
-
-    if (allCandidateIds.size === 0) return { data: [] };
-
-    // Fetch user info for all candidates
-    const candidateUsers = await prisma.user.findMany({
-        where: {
-            id: { in: Array.from(allCandidateIds) },
-            status: 'ACTIVE',
-            role: 'TENANT',
+    const roomsWithLocation = await prisma.rooms.findMany({
+        where: { id: { in: myRoomIds } },
+        select: {
+            id: true,
+            rentals: { select: { location: { select: { district: true, address: true } } } },
         },
-        include: { lifestyleProfile: true, preference: true },
     });
 
-    const [roommateMatrix, roomFavMatrix, experienceMap] = await Promise.all([
+    const districtViewCount = new Map();
+    for (const room of roomsWithLocation) {
+        const loc = room.rentals?.location;
+        if (!loc) continue;
+        const area = (loc.district || '').trim() || extractAreaFromAddress(loc.address || '');
+        if (!area) continue;
+        districtViewCount.set(area, (districtViewCount.get(area) || 0) + 1);
+    }
+
+    if (districtViewCount.size === 0) return { data: [], isRandom: false };
+
+    const top3Areas = [...districtViewCount.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([area]) => area);
+
+    // ── Bước 4: Song song — tìm rooms của cả 3 quận cùng lúc ──
+    const roomsPerAreaResults = await Promise.all(
+        top3Areas.map((area) =>
+            prisma.rooms.findMany({
+                where: {
+                    rentals: {
+                        location: {
+                            OR: [
+                                { district: { contains: area, mode: 'insensitive' } },
+                                { address: { contains: area, mode: 'insensitive' } },
+                            ],
+                        },
+                    },
+                },
+                select: { id: true },
+            })
+        )
+    );
+
+    // ── Bước 5: Song song — tính điểm tổng hợp (view×1 + fav×3 + preorder×5) cho cả 3 quận ──
+    const seenUserIds = new Set(excludeIds);
+    const activityPerAreaResults = await Promise.all(
+        top3Areas.map(async (area, idx) => {
+            const roomIdsInArea = roomsPerAreaResults[idx].map((r) => r.id);
+            if (roomIdsInArea.length === 0) return [];
+
+            const excludeArr = Array.from(seenUserIds);
+            const [viewCounts, favCounts, preorderCounts] = await Promise.all([
+                prisma.user_room_interactions.groupBy({
+                    by: ['user_id'],
+                    where: { room_id: { in: roomIdsInArea }, user_id: { notIn: excludeArr } },
+                    _count: { user_id: true },
+                }),
+                prisma.favoriteRoom.groupBy({
+                    by: ['userId'],
+                    where: { roomId: { in: roomIdsInArea }, userId: { notIn: excludeArr } },
+                    _count: { userId: true },
+                }),
+                prisma.preorder.groupBy({
+                    by: ['userId'],
+                    where: { roomId: { in: roomIdsInArea }, userId: { notIn: excludeArr } },
+                    _count: { userId: true },
+                }),
+            ]);
+
+            // Gộp điểm
+            const scoreMap = new Map();
+            for (const r of viewCounts) {
+                if (!scoreMap.has(r.user_id)) scoreMap.set(r.user_id, { views: 0, favorites: 0, preorders: 0, totalScore: 0 });
+                const e = scoreMap.get(r.user_id);
+                e.views = r._count.user_id;
+                e.totalScore += r._count.user_id * 1;
+            }
+            for (const r of favCounts) {
+                if (!scoreMap.has(r.userId)) scoreMap.set(r.userId, { views: 0, favorites: 0, preorders: 0, totalScore: 0 });
+                const e = scoreMap.get(r.userId);
+                e.favorites = r._count.userId;
+                e.totalScore += r._count.userId * 3;
+            }
+            for (const r of preorderCounts) {
+                if (!scoreMap.has(r.userId)) scoreMap.set(r.userId, { views: 0, favorites: 0, preorders: 0, totalScore: 0 });
+                const e = scoreMap.get(r.userId);
+                e.preorders = r._count.userId;
+                e.totalScore += r._count.userId * 5;
+            }
+
+            // Sắp xếp theo totalScore, lấy top 6
+            return [...scoreMap.entries()]
+                .sort((a, b) => b[1].totalScore - a[1].totalScore)
+                .slice(0, 6)
+                .map(([uid, activity]) => ({ uid, area, activity }));
+        })
+    );
+
+    // Gom tất cả userIds cần fetch, tránh trùng
+    const areaUserIdMap = new Map(); // userId → { area, activity }
+    for (const areaResults of activityPerAreaResults) {
+        for (const { uid, area, activity } of areaResults) {
+            if (!seenUserIds.has(uid) && !areaUserIdMap.has(uid)) {
+                areaUserIdMap.set(uid, { area, activity });
+                seenUserIds.add(uid);
+            }
+        }
+    }
+
+    if (areaUserIdMap.size === 0) return { data: [], isRandom: false };
+
+    const allCandidateIds = Array.from(areaUserIdMap.keys());
+
+    // ── Bước 6: Song song — fetch users + CF matrices + experience ──
+    const [candidateUsers, roommateMatrix, roomFavMatrix, experienceMap] = await Promise.all([
+        prisma.user.findMany({
+            where: { id: { in: allCandidateIds }, status: 'ACTIVE', role: 'TENANT' },
+            include: { lifestyleProfile: true, preference: true },
+        }),
         buildRoommateInteractionMatrix().catch(() => new Map()),
         buildRoomFavMatrix().catch(() => new Map()),
-        computeExperienceData(Array.from(allCandidateIds)).catch(() => new Map()),
+        computeExperienceData(allCandidateIds).catch(() => new Map()),
     ]);
 
-    // Also get mutual friend names for display
-    const allMutualFriendIds = new Set();
-    for (const friendSet of mutualMap.values()) {
-        for (const fid of friendSet) allMutualFriendIds.add(fid);
-    }
-    const mutualFriendUsers = allMutualFriendIds.size > 0
-        ? await prisma.user.findMany({
-            where: { id: { in: Array.from(allMutualFriendIds) } },
-            select: { id: true, fullName: true, avatarUrl: true },
-        })
-        : [];
-    const mutualFriendMap = new Map(mutualFriendUsers.map((u) => [u.id, u]));
-
-    // ── 5. Build results with reasons ──
-    const results = candidateUsers.map((u) => {
-        const reasons = [];
-
-        // Mutual friends reason
-        const mutualFriends = mutualMap.get(u.id);
-        if (mutualFriends && mutualFriends.size > 0) {
-            const friendNames = Array.from(mutualFriends)
-                .slice(0, 3)
-                .map((fid) => mutualFriendMap.get(fid)?.fullName || 'Người dùng')
-                .filter(Boolean);
-            reasons.push({
-                type: 'mutual_friends',
-                count: mutualFriends.size,
-                names: friendNames,
-            });
-        }
-
-        // Common area reason
-        const commonDistricts = districtMap.get(u.id);
-        if (commonDistricts && commonDistricts.size > 0) {
-            reasons.push({
-                type: 'common_area',
-                districts: Array.from(commonDistricts),
-            });
-        }
-
-        // Score for sorting: mutual friends weight more
-        const score = (mutualFriends?.size || 0) * 3 + (commonDistricts?.size || 0);
-
-        // Calculate matchScore exactly like getSuggestions
-        const lifestyleScore = computeLifestyleScore(
-            me.lifestyleProfile,
-            u.lifestyleProfile,
-            me.preference,
-            u.preference
-        );
+    // ── Bước 7: Tính scores và build response ──
+    const data = candidateUsers.map((u) => {
+        const { area, activity } = areaUserIdMap.get(u.id) || { area: '', activity: { views: 0, favorites: 0, preorders: 0, totalScore: 0 } };
+        const lifestyleScore = computeLifestyleScore(me.lifestyleProfile, u.lifestyleProfile, me.preference, u.preference);
         const cfBoost = computeCFBoost(userId, u.id, roommateMatrix, roomFavMatrix);
         const expData = experienceMap.get(u.id) || { experienceBoost: 0, wouldLiveAgainRate: null };
-        const matchScore = Math.min(100, lifestyleScore + cfBoost + expData.experienceBoost);
-
         return {
-            user: {
-                id: u.id,
-                fullName: u.fullName,
-                avatarUrl: u.avatarUrl,
-                gender: u.gender,
-            },
-            reasons,
+            user: { id: u.id, fullName: u.fullName, avatarUrl: u.avatarUrl, gender: u.gender },
+            lifestyle: u.lifestyleProfile ? {
+                smoking: u.lifestyleProfile.smoking,
+                drinking: u.lifestyleProfile.drinking,
+                pets_allowed: u.lifestyleProfile.pets_allowed,
+                sleep_schedule: u.lifestyleProfile.sleep_schedule,
+                personalityType: u.lifestyleProfile.personalityType,
+                cleanliness: u.lifestyleProfile.cleanliness,
+                noise_tolerance: u.lifestyleProfile.noise_tolerance,
+                guest_frequency: u.lifestyleProfile.guest_frequency,
+                interests: u.lifestyleProfile.interests || [],
+                deal_breakers: u.lifestyleProfile.deal_breakers || null,
+            } : null,
+            reasons: [{ type: 'same_area_search', area, activity }],
             matchStatus: matchStatusMap.get(u.id) || null,
-            matchScore,
-            _score: score,
+            matchScore: Math.min(100, lifestyleScore + cfBoost + expData.experienceBoost),
+            areaName: area,
         };
     });
 
-    // Sort by score descending, limit to 10
-    results.sort((a, b) => b._score - a._score);
-    const limited = results.slice(0, 10).map(({ _score, ...rest }) => rest);
+    const groupedByArea = top3Areas
+        .map((area) => ({ area, users: data.filter((d) => d.areaName === area) }))
+        .filter((g) => g.users.length > 0);
 
-    return { data: limited };
+    return { data, groupedByArea, isRandom: false, topAreas: top3Areas };
+}
+
+/**
+ * Trích xuất tên quận/xã từ địa chỉ đầy đủ (fallback khi district null).
+ * VD: "Thôn X, Xã Hòa Lạc, Huyện Thạch Thất, Hà Nội" → "Xã Hòa Lạc"
+ */
+function extractAreaFromAddress(address) {
+    if (!address) return '';
+    // Tìm xã/phường/thị trấn/quận/huyện
+    const match = address.match(/(xã|phường|thị trấn|quận|huyện|thành phố)\s+[^\s,]+(?:\s+[^\s,]+)?/i);
+    return match ? match[0].trim() : '';
 }
 
 module.exports = {
