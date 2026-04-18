@@ -1016,6 +1016,71 @@ async function confirmRequest(preorderId, landlordId) {
             },
         });
 
+        // Tự động hủy và hoàn tiền cho các yêu cầu PENDING còn lại của căn phòng này
+        const otherPendingPreorders = await tx.preorder.findMany({
+            where: {
+                roomId: preorder.roomId,
+                status: 'PENDING',
+                id: { not: preorder.id },
+            },
+        });
+
+        for (const other of otherPendingPreorders) {
+            await tx.preorder.update({
+                where: { id: other.id },
+                data: {
+                    status: 'CANCELLED',
+                    refund_status: other.payment_status === 'PAID' ? 'REFUNDED' : 'NOT_APPLICABLE',
+                    cancel_reason: 'Chủ nhà đã chọn người thuê khác',
+                },
+            });
+
+            if (other.payment_status === 'PAID') {
+                const refundAmount = toNumber(other.deposit_amount);
+                if (refundAmount > 0) {
+                    const tenantWallet = await tx.wallet.findUnique({ where: { userId: other.userId } })
+                        || await tx.wallet.create({ data: { userId: other.userId, balance: 0 } });
+
+                    await tx.wallet.update({
+                        where: { id: tenantWallet.id },
+                        data: { balance: { increment: refundAmount } },
+                    });
+
+                    await tx.walletTransaction.create({
+                        data: {
+                            walletId: tenantWallet.id,
+                            transaction_type: 'REFUND',
+                            status: 'SUCCESS',
+                            amount: refundAmount,
+                            description: `Hoàn tiền do phòng đặt trước đã được chốt cho người khác (Preorder gốc: ${other.id})`,
+                            ref_type: 'PREORDER_REFUND',
+                            ref_id: other.id,
+                        },
+                    });
+
+                    await tx.notification.create({
+                        data: {
+                            userId: other.userId,
+                            type: 'PAYMENT',
+                            status: 'UNREAD',
+                            title: 'Hoàn trả tiền cọc',
+                            body: `Chủ nhà đã chọn người thuê khác. Ví của bạn đã được hoàn lại số tiền cọc ${refundAmount.toLocaleString('vi-VN')} VND.`,
+                        },
+                    });
+                }
+            } else {
+                await tx.notification.create({
+                    data: {
+                        userId: other.userId,
+                        type: 'PREORDER',
+                        status: 'UNREAD',
+                        title: 'Từ chối yêu cầu thuê',
+                        body: 'Rất tiếc yêu cầu thuê của bạn không được duyệt vì phòng đã có người thuê khác.',
+                    },
+                });
+            }
+        }
+
         await tx.notification.create({
             data: {
                 userId: preorder.userId,
