@@ -401,7 +401,7 @@ async function createDepositPayment(userId, body) {
         );
 
         if (existing && !canReuseFavoritePlaceholder) {
-            throw Object.assign(new Error('Bạn đ� c� y�u cầu đặt cọc đang hoạt động cho ph�ng n�y'), {
+            throw Object.assign(new Error('Bạn đã có yêu cầu đặt cọc đang hoạt động cho phòng này'), {
                 statusCode: 409,
             });
         }
@@ -416,13 +416,13 @@ async function createDepositPayment(userId, body) {
         });
 
         if (!roomNow || roomNow.status !== 'AVAILABLE') {
-            throw Object.assign(new Error('Ph�ng hiện kh�ng khả dụng để đặt cọc'), {
+            throw Object.assign(new Error('Phòng hiện không khả dụng để đặt cọc'), {
                 statusCode: 400,
             });
         }
 
         if (roomNow.rentals?.owner_id === userId) {
-            throw Object.assign(new Error('Kh�ng thể tự đặt cọc ph�ng của ch�nh bạn'), {
+            throw Object.assign(new Error('Không thể tự đặt cọc phòng của chính bạn'), {
                 statusCode: 400,
             });
         }
@@ -644,7 +644,7 @@ async function handlePayOSWebhook(payload) {
             if (finalOrderStatus === 'SUCCESS') {
                 const preorder = await tx.preorder.findUnique({
                     where: { id: latestOrder.ref_id },
-                    select: { payment_status: true },
+                    select: { payment_status: true, status: true },
                 });
 
                 if (preorder && preorder.payment_status !== 'PAID') {
@@ -652,7 +652,7 @@ async function handlePayOSWebhook(payload) {
                         where: { id: latestOrder.ref_id },
                         data: {
                             payment_status: 'PAID',
-                            status: 'PENDING',
+                            status: preorder.status === 'CONFIRMED' ? 'CONFIRMED' : 'PENDING',
                         },
                     });
 
@@ -1586,11 +1586,15 @@ async function verifyPreorderPayment(userId, input = {}, orderCodeRaw) {
         });
 
         if (finalOrderStatus === 'SUCCESS') {
+            const currentPreorder = await tx.preorder.findUnique({
+                where: { id: preorderId },
+                select: { status: true },
+            });
             await tx.preorder.update({
                 where: { id: preorderId },
                 data: {
                     payment_status: 'PAID',
-                    status: 'PENDING',
+                    status: (currentPreorder && currentPreorder.status === 'CONFIRMED') ? 'CONFIRMED' : 'PENDING',
                 },
             });
         } else if (finalOrderStatus !== 'PENDING') {
