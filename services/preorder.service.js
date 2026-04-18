@@ -401,7 +401,7 @@ async function createDepositPayment(userId, body) {
         );
 
         if (existing && !canReuseFavoritePlaceholder) {
-            throw Object.assign(new Error('Bạn đ� c� y�u cầu đặt cọc đang hoạt động cho ph�ng n�y'), {
+            throw Object.assign(new Error('Bạn đã có yêu cầu đặt cọc đang hoạt động cho phòng này'), {
                 statusCode: 409,
             });
         }
@@ -416,13 +416,13 @@ async function createDepositPayment(userId, body) {
         });
 
         if (!roomNow || roomNow.status !== 'AVAILABLE') {
-            throw Object.assign(new Error('Ph�ng hiện kh�ng khả dụng để đặt cọc'), {
+            throw Object.assign(new Error('Phòng hiện không khả dụng để đặt cọc'), {
                 statusCode: 400,
             });
         }
 
         if (roomNow.rentals?.owner_id === userId) {
-            throw Object.assign(new Error('Kh�ng thể tự đặt cọc ph�ng của ch�nh bạn'), {
+            throw Object.assign(new Error('Không thể tự đặt cọc phòng của chính bạn'), {
                 statusCode: 400,
             });
         }
@@ -644,7 +644,7 @@ async function handlePayOSWebhook(payload) {
             if (finalOrderStatus === 'SUCCESS') {
                 const preorder = await tx.preorder.findUnique({
                     where: { id: latestOrder.ref_id },
-                    select: { payment_status: true },
+                    select: { payment_status: true, status: true },
                 });
 
                 if (preorder && preorder.payment_status !== 'PAID') {
@@ -652,7 +652,7 @@ async function handlePayOSWebhook(payload) {
                         where: { id: latestOrder.ref_id },
                         data: {
                             payment_status: 'PAID',
-                            status: 'PENDING',
+                            status: preorder.status === 'CONFIRMED' ? 'CONFIRMED' : 'PENDING',
                         },
                     });
 
@@ -1015,6 +1015,71 @@ async function confirmRequest(preorderId, landlordId) {
                 payout_at: hasPaidDeposit ? new Date() : null,
             },
         });
+
+        // Tự động hủy và hoàn tiền cho các yêu cầu PENDING còn lại của căn phòng này
+        const otherPendingPreorders = await tx.preorder.findMany({
+            where: {
+                roomId: preorder.roomId,
+                status: 'PENDING',
+                id: { not: preorder.id },
+            },
+        });
+
+        for (const other of otherPendingPreorders) {
+            await tx.preorder.update({
+                where: { id: other.id },
+                data: {
+                    status: 'CANCELLED',
+                    refund_status: other.payment_status === 'PAID' ? 'REFUNDED' : 'NOT_APPLICABLE',
+                    cancel_reason: 'Chủ nhà đã chọn người thuê khác',
+                },
+            });
+
+            if (other.payment_status === 'PAID') {
+                const refundAmount = toNumber(other.deposit_amount);
+                if (refundAmount > 0) {
+                    const tenantWallet = await tx.wallet.findUnique({ where: { userId: other.userId } })
+                        || await tx.wallet.create({ data: { userId: other.userId, balance: 0 } });
+
+                    await tx.wallet.update({
+                        where: { id: tenantWallet.id },
+                        data: { balance: { increment: refundAmount } },
+                    });
+
+                    await tx.walletTransaction.create({
+                        data: {
+                            walletId: tenantWallet.id,
+                            transaction_type: 'REFUND',
+                            status: 'SUCCESS',
+                            amount: refundAmount,
+                            description: `Hoàn tiền do phòng đặt trước đã được chốt cho người khác (Preorder gốc: ${other.id})`,
+                            ref_type: 'PREORDER_REFUND',
+                            ref_id: other.id,
+                        },
+                    });
+
+                    await tx.notification.create({
+                        data: {
+                            userId: other.userId,
+                            type: 'PAYMENT',
+                            status: 'UNREAD',
+                            title: 'Hoàn trả tiền cọc',
+                            body: `Chủ nhà đã chọn người thuê khác. Ví của bạn đã được hoàn lại số tiền cọc ${refundAmount.toLocaleString('vi-VN')} VND.`,
+                        },
+                    });
+                }
+            } else {
+                await tx.notification.create({
+                    data: {
+                        userId: other.userId,
+                        type: 'PREORDER',
+                        status: 'UNREAD',
+                        title: 'Từ chối yêu cầu thuê',
+                        body: 'Rất tiếc yêu cầu thuê của bạn không được duyệt vì phòng đã có người thuê khác.',
+                    },
+                });
+            }
+        }
 
         await tx.notification.create({
             data: {
@@ -1521,11 +1586,15 @@ async function verifyPreorderPayment(userId, input = {}, orderCodeRaw) {
         });
 
         if (finalOrderStatus === 'SUCCESS') {
+            const currentPreorder = await tx.preorder.findUnique({
+                where: { id: preorderId },
+                select: { status: true },
+            });
             await tx.preorder.update({
                 where: { id: preorderId },
                 data: {
                     payment_status: 'PAID',
-                    status: 'PENDING',
+                    status: (currentPreorder && currentPreorder.status === 'CONFIRMED') ? 'CONFIRMED' : 'PENDING',
                 },
             });
         } else if (finalOrderStatus !== 'PENDING') {

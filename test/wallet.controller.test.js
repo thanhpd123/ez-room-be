@@ -27,6 +27,7 @@ const fakeTx = { id: 'tx-1', walletId: 'w-1', transaction_type: 'DEPOSIT', statu
 describe('Wallet > getMyWallet', () => {
     beforeEach(() => {
         mockPrisma.wallet.findUnique = async () => fakeWallet;
+        mockPrisma.wallet.upsert = async () => fakeWallet;
     });
 
     it('should return wallet for logged in user', async () => {
@@ -41,7 +42,7 @@ describe('Wallet > getMyWallet', () => {
 
     it('should auto-create wallet if not exists', async () => {
         mockPrisma.wallet.findUnique = async () => null;
-        mockPrisma.wallet.create = async () => ({ ...fakeWallet, balance: 0 });
+        mockPrisma.wallet.upsert = async () => ({ ...fakeWallet, balance: 0 });
         const ctrl = loadController();
         const req = mockReq();
         const res = mockRes();
@@ -52,6 +53,7 @@ describe('Wallet > getMyWallet', () => {
 
     it('should return 500 on DB error', async () => {
         mockPrisma.wallet.findUnique = async () => { throw new Error('db fail'); };
+        mockPrisma.wallet.upsert = async () => { throw new Error('db fail'); };
         const ctrl = loadController();
         const req = mockReq();
         const res = mockRes();
@@ -66,6 +68,7 @@ describe('Wallet > getMyWallet', () => {
 describe('Wallet > getMyWalletTransactions', () => {
     beforeEach(() => {
         mockPrisma.wallet.findUnique = async () => fakeWallet;
+        mockPrisma.wallet.upsert = async () => fakeWallet;
         mockPrisma.wallet.create = async () => fakeWallet;
         mockPrisma.walletTransaction.findMany = async () => [fakeTx];
         mockPrisma.walletTransaction.count = async () => 1;
@@ -103,6 +106,7 @@ describe('Wallet > getMyWalletTransactions', () => {
 
     it('should return 500 on DB error', async () => {
         mockPrisma.wallet.findUnique = async () => { throw new Error('db fail'); };
+        mockPrisma.wallet.upsert = async () => { throw new Error('db fail'); };
         const ctrl = loadController();
         const req = mockReq({ query: {} });
         const res = mockRes();
@@ -117,6 +121,7 @@ describe('Wallet > getMyWalletTransactions', () => {
 describe('Wallet > depositToWallet', () => {
     beforeEach(() => {
         mockPrisma.wallet.findUnique = async () => fakeWallet;
+        mockPrisma.wallet.upsert = async () => fakeWallet;
         mockPrisma.wallet.create = async () => fakeWallet;
         mockPrisma.wallet.update = async () => ({ ...fakeWallet, balance: 1500000 });
         mockPrisma.payment_orders.create = async ({ data }) => ({ id: 'po-1', ...data });
@@ -183,6 +188,7 @@ describe('Wallet > depositToWallet', () => {
 describe('Wallet > withdrawFromWallet', () => {
     beforeEach(() => {
         mockPrisma.wallet.findUnique = async () => fakeWallet;
+        mockPrisma.wallet.upsert = async () => fakeWallet;
         mockPrisma.wallet.create = async () => fakeWallet;
         mockPrisma.wallet.update = async () => ({ ...fakeWallet, balance: 500000 });
         mockPrisma.walletTransaction.create = async () => fakeTx;
@@ -200,6 +206,7 @@ describe('Wallet > withdrawFromWallet', () => {
 
     it('should reject when insufficient balance', async () => {
         mockPrisma.wallet.findUnique = async () => ({ ...fakeWallet, balance: 100 });
+        mockPrisma.wallet.upsert = async () => ({ ...fakeWallet, balance: 100 });
         mockPrisma.$transaction = async (fn) => fn(mockPrisma);
         const ctrl = loadController();
         const req = mockReq({ body: { amount: 500000 } });
