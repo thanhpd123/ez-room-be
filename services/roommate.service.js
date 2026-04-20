@@ -661,6 +661,35 @@ async function updateMatchStatus(userId, matchId, body) {
         throw Object.assign(new Error('Lời mời đã được xử lý'), { statusCode: 400 });
 
     const updated = await prisma.roommateMatch.update({ where: { id: matchId }, data: { status } });
+
+    try {
+        const targetUser = await prisma.user.findUnique({ where: { id: userId }, select: { fullName: true } });
+        const targetName = targetUser?.fullName || 'Người dùng';
+        
+        let notifTitle = '';
+        let notifBody = '';
+        
+        if (status === 'ACCEPTED') {
+            notifTitle = 'Lời mời ở ghép được chấp nhận';
+            notifBody = `${targetName} đã chấp nhận lời mời kết bạn ở ghép của bạn.`;
+        } else {
+            notifTitle = 'Lời mời ở ghép bị từ chối';
+            notifBody = `${targetName} đã từ chối lời mời kết bạn ở ghép của bạn.`;
+        }
+    
+        await prisma.notification.create({
+            data: {
+                userId: match.requester_id,
+                type: 'ROOMMATE_INVITE',
+                title: notifTitle,
+                body: notifBody,
+                status: 'UNREAD',
+            },
+        });
+    } catch (err) {
+        console.error('Lỗi khi gửi thông báo chấp nhận/từ chối roommate:', err);
+    }
+
     return {
         message: status === 'ACCEPTED' ? 'Đã chấp nhận lời mời' : 'Đã từ chối lời mời',
         data: { id: updated.id, status: updated.status },
