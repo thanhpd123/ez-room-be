@@ -241,7 +241,14 @@ async function getRentals(params) {
             orderBy: { createdAt: 'desc' },
             include: {
                 location: true,
-                images: true,
+                images: {
+                    select: { imageUrl: true },
+                    orderBy: { createdAt: 'asc' },
+                    take: 1,
+                },
+                _count: {
+                    select: { images: true },
+                },
                 users: {
                     select: {
                         id: true,
@@ -277,6 +284,7 @@ async function getRentals(params) {
                   }
                 : null,
             images: (r.images || []).map((img) => img.imageUrl),
+            imageCount: r._count?.images || 0,
         })),
         pagination: {
             page,
