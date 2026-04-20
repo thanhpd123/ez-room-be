@@ -564,8 +564,20 @@ async function sendRequest(requesterId, targetId) {
         }
     }
 
+    const requester = await prisma.user.findUnique({ where: { id: requesterId }, select: { fullName: true } });
+
     const match = await prisma.roommateMatch.create({
         data: { requester_id: requesterId, target_id: targetId, status: 'PENDING' },
+    });
+
+    await prisma.notification.create({
+        data: {
+            userId: targetId,
+            type: 'ROOMMATE_INVITE',
+            title: 'Lời mời ở ghép mới',
+            body: `${requester?.fullName || 'Ai đó'} đã gửi cho bạn một lời mời kết bạn ở ghép.`,
+            status: 'UNREAD',
+        },
     });
 
     return {
