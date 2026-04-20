@@ -235,18 +235,6 @@ function mapWalletTxnStatus(orderStatus) {
     return 'FAILED';
 }
 
-async function getPayOSPaymentByOrderCode(payos, orderCode) {
-    if (payos?.paymentRequests?.get) {
-        return payos.paymentRequests.get(orderCode);
-    }
-
-    if (payos?.paymentRequests?.getByOrderCode) {
-        return payos.paymentRequests.getByOrderCode(orderCode);
-    }
-
-    throw new Error('SDK PayOS không hỗ trợ truy vấn theo orderCode');
-}
-
 function mapPayOSPaymentLinkStatusToOrderStatus(linkStatusRaw) {
     const s = String(linkStatusRaw || '').toUpperCase();
     if (s === 'PAID' || s === 'SUCCESS') return 'SUCCESS';
