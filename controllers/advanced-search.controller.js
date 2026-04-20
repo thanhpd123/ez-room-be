@@ -111,8 +111,9 @@ function computeTextMatchScore(room, analysis, rawQuery = '') {
     const district = (loc?.district || '').toLowerCase();
     const city = (loc?.city || '').toLowerCase();
     const address = (loc?.address || '').toLowerCase();
+    const landlordName = (rental?.users?.fullName || '').toLowerCase();
 
-    const searchable = `${title} ${desc} ${roomDesc} ${roomName} ${district} ${city} ${address}`;
+    const searchable = `${title} ${desc} ${roomDesc} ${roomName} ${district} ${city} ${address} ${landlordName}`;
 
     const qRaw = (rawQuery || '').toLowerCase().trim();
     if (qRaw.length >= 2 && searchable.includes(qRaw)) {
@@ -371,6 +372,7 @@ async function getAdvancedSearch(req, res) {
             textOr = [
                 { title: { contains: q, mode: 'insensitive' } },
                 { description: { contains: q, mode: 'insensitive' } },
+                { users: { fullName: { contains: q, mode: 'insensitive' } } },
                 { location: { is: { district: { contains: q, mode: 'insensitive' } } } },
                 { location: { is: { city: { contains: q, mode: 'insensitive' } } } },
                 { location: { is: { address: { contains: q, mode: 'insensitive' } } } },
@@ -379,6 +381,7 @@ async function getAdvancedSearch(req, res) {
                 textOr.push(
                     { title: { contains: term, mode: 'insensitive' } },
                     { description: { contains: term, mode: 'insensitive' } },
+                    { users: { fullName: { contains: term, mode: 'insensitive' } } },
                     { location: { is: { district: { contains: term, mode: 'insensitive' } } } },
                     { location: { is: { city: { contains: term, mode: 'insensitive' } } } },
                     { location: { is: { address: { contains: term, mode: 'insensitive' } } } },
@@ -439,6 +442,7 @@ async function getAdvancedSearch(req, res) {
                         include: {
                             location: true,
                             images: true,
+                            users: { select: { id: true, fullName: true, role: true, isVip: true } },
                             rooms: {
                                 include: {
                                     roomAmenities: { include: { amenity: true } },
@@ -463,6 +467,7 @@ async function getAdvancedSearch(req, res) {
                             include: {
                                 location: true,
                                 images: true,
+                                users: { select: { id: true, fullName: true, role: true, isVip: true } },
                                 rooms: {
                                     include: {
                                         roomAmenities: { include: { amenity: true } },
