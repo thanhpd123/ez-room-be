@@ -5,9 +5,9 @@
 
 const { getClipImageEmbedding, preloadCLIP, CLIP_DIMS, CLIP_MODEL, getClipModelLabel } = require('./clip');
 
-/** Minimal valid PNG (1×1 px) — exercises ONNX vision path without a user upload */
+/** Minimal valid PNG (2x2 px) — exercises ONNX / Python vision path without a user upload */
 const MINI_PNG = Buffer.from(
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVQIW2NkYGD4z8DAwMgAI0AMDAAhXgIHbRElRwAAAABJRU5ErkJggg==',
     'base64'
 );
 
