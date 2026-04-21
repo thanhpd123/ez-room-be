@@ -12,6 +12,7 @@ const {
     searchByArea,
     createRoommateRating,
     checkRoommateRating,
+    getPeopleYouMayKnow,
 } = require('../controllers/roommate.controller');
 
 const router = express.Router();
@@ -198,6 +199,19 @@ router.get('/profile/:userId', getProfile);
 
 router.post('/experiences', createRoommateRating);
 router.get('/experiences/check', checkRoommateRating);
+
+/**
+ * @openapi
+ * /roommate/people-you-may-know:
+ *   get:
+ *     tags: [Roommate]
+ *     summary: Gợi ý "Có thể bạn biết" dựa trên bạn chung và khu vực chung
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200:
+ *         description: Danh sách gợi ý kèm lý do
+ */
+router.get('/people-you-may-know', getPeopleYouMayKnow);
 
 module.exports = router;
 

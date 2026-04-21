@@ -87,7 +87,7 @@ async function createFeedback(userId, body) {
                 },
             });
             const moderatorService = require('./moderator.service');
-            await moderatorService.autoAssignNewTask(tx, {
+            await moderatorService.addToModerationQueue(tx, {
                 target_type: 'FEEDBACK',
                 target_id: updated.id,
                 priority: 'NORMAL',
@@ -114,7 +114,7 @@ async function createFeedback(userId, body) {
                 },
             });
             const moderatorService = require('./moderator.service');
-            await moderatorService.autoAssignNewTask(tx, {
+            await moderatorService.addToModerationQueue(tx, {
                 target_type: 'FEEDBACK',
                 target_id: created.id,
                 priority: 'NORMAL',

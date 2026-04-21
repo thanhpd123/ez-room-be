@@ -15,6 +15,7 @@ const {
     getLandlordPerformanceMetrics,
     getTopSearchedRooms,
     getRentalDocumentsForModeration,
+    getLandlordRentalDocuments,
 } = require('../controllers/rental.controller');
 const { deleteRental: deleteRentalAdmin } = require('../controllers/rentals.controller');
 const { getRejectionInfo } = require('../controllers/moderator.controller');
@@ -239,6 +240,7 @@ router.get('/moderation', verifyJWT, requireRole('MODERATOR', 'ADMIN'), getRenta
  *         description: Danh sách documents với signed URLs
  */
 router.get('/:rentalId/documents', verifyJWT, requireRole('MODERATOR', 'ADMIN'), getRentalDocumentsForModeration);
+router.get('/:rentalId/landlord-documents', verifyJWT, requireRole('LANDLORD'), getLandlordRentalDocuments);
 
 /**
  * @openapi
@@ -312,7 +314,7 @@ router.get('/:rentalId/documents', verifyJWT, requireRole('MODERATOR', 'ADMIN'),
  */
 router.get('/:rentalId', getRentalById);
 router.patch('/:rentalId/status', verifyJWT, requireRole('MODERATOR', 'ADMIN'), updateRentalStatus);
-router.put('/:rentalId', verifyJWT, requireRole('LANDLORD'), updateRental);
+router.put('/:rentalId', verifyJWT, requireRole('LANDLORD'), debugBeforeMulter, uploadMultiple.any(), debugCreateRental, updateRental);
 router.delete('/:rentalId', verifyJWT, requireRole('LANDLORD', 'ADMIN'), (req, res, next) => {
     const userRole = req.auth.user.role;
     

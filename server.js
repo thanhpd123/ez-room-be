@@ -28,6 +28,7 @@ const moderatorRoutes = require('./routes/moderator');
 const reportRoutes = require('./routes/report');
 const preorderRoutes = require('./routes/preorder');
 const feedbackRoutes = require('./routes/feedback');
+const tenantReviewRoutes = require('./routes/tenant-review');
 const interactionRoutes = require('./routes/interactions');
 const documentRoutes = require('./routes/document');
 const vipRoutes = require('./routes/vip');
@@ -47,6 +48,8 @@ const allowedOrigins = [
     'http://localhost:5174',
     'http://127.0.0.1:5173',
     'http://127.0.0.1:5174',
+    'https://ezroom-vn.com',
+    'https://www.ezroom-vn.com'
 ];
 const corsOrigin = process.env.CORS_ORIGIN
     ? process.env.CORS_ORIGIN.split(',').map((o) => o.trim()).filter(Boolean)
@@ -174,6 +177,7 @@ app.use('/moderator', moderatorRoutes);
 app.use('/reports', reportRoutes);
 app.use('/preorders', preorderRoutes);
 app.use('/feedback', feedbackRoutes);
+app.use('/tenant-reviews', tenantReviewRoutes);
 app.use('/interactions', interactionRoutes);
 app.use('/documents', documentRoutes);
 app.use('/vip', vipRoutes);
@@ -252,17 +256,23 @@ app.use((err, req, res, next) => {
 });
 
 httpServer.listen(PORT, () => {
-    console.log(`Server is running on http://localhost:${PORT}`);
+    console.log(`Server is running on port ${PORT}`);
     startPreorderPayoutReconciliationJob();
     startStaleCron();
 
     // Pre-load AI models in background (non-blocking)
-    const { preloadEmbedding } = require('./utils/embedding');
-    const { preloadCLIP } = require('./utils/clip');
-    preloadEmbedding().then((ok) => {
-        if (ok) console.log('[Embedding] Model ready for smart search');
-    });
-    preloadCLIP().then((ok) => {
-        if (ok) console.log('[CLIP] Model ready for image search');
-    });
+    // ENABLE_AI_MODELS=false in .env temporarily if your VPS RAM is full (OOM)
+    if (process.env.ENABLE_AI_MODELS !== 'false') {
+        const { preloadEmbedding } = require('./utils/embedding');
+        const { preloadCLIP } = require('./utils/clip');
+        preloadEmbedding().then((ok) => {
+            if (ok) console.log('[Embedding] Model ready for smart search');
+        }).catch(e => console.log('Embedding model load failed', e.message));
+
+        preloadCLIP().then((ok) => {
+            if (ok) console.log('[CLIP] Model ready for image search');
+        }).catch(e => console.log('CLIP model load failed', e.message));
+    } else {
+        console.log('[AI] Models preloading is disabled (ENABLE_AI_MODELS=false)');
+    }
 });

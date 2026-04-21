@@ -1,5 +1,6 @@
 const prisma = require('../config/prisma');
 const { reconcilePreorderPayoutsOnce } = require('./preorder-reconciliation.service');
+const cache = require('../utils/simple-cache');
 
 const VALID_ROLES = ['ADMIN', 'LANDLORD', 'TENANT', 'GUEST', 'MODERATOR'];
 const VALID_STATUSES = ['ACTIVE', 'INACTIVE', 'SUSPENDED', 'BANNED'];
@@ -21,7 +22,11 @@ const VIP_REFUND_REASON_CODES = new Set([
 const SETTINGS_KEYS = {
     PREORDER_DEPOSIT: 'preorder.deposit',
     PLATFORM_COMMISSION: 'platform.commission',
+    SITE_HOME_BANNER: 'site.homeBanner',
+    SITE_HOME_LAYOUT: 'site.homeLayout',
 };
+const HOME_SECTION_KEYS = ['hero', 'aiFeature', 'featuredRooms', 'recommendedRooms', 'popularAreas', 'whyEzRoom'];
+const SITE_CONFIG_CACHE_KEY = 'public:site-config';
 
 function toFiniteNumber(value, fallback) {
     const parsed = Number(value);
@@ -42,6 +47,17 @@ function getDefaultSystemSettings() {
         },
         [SETTINGS_KEYS.PLATFORM_COMMISSION]: {
             preorderFeeBps: Math.max(0, Math.round(toFiniteNumber(process.env.PLATFORM_PREORDER_FEE_BPS, 0))),
+        },
+        [SETTINGS_KEYS.SITE_HOME_BANNER]: {
+            enabled: true,
+            title: 'Tìm phòng trọ ưng ý & bạn ở ghép lý tưởng',
+            subtitle: 'Tìm kiếm thông minh bằng AI, thanh toán an toàn',
+            imageUrl: '',
+            ctaText: '',
+            ctaLink: '',
+        },
+        [SETTINGS_KEYS.SITE_HOME_LAYOUT]: {
+            sections: HOME_SECTION_KEYS.map((key) => ({ key, enabled: true })),
         },
     };
 }
@@ -87,6 +103,115 @@ function validateCommissionSettings(value) {
         });
     }
     return { preorderFeeBps };
+}
+
+function normalizeShortText(value, fallback, maxLength) {
+    const text = typeof value === 'string' ? value.trim() : '';
+    if (!text) return fallback;
+    return text.slice(0, maxLength);
+}
+
+function normalizeUrl(value) {
+    const raw = typeof value === 'string' ? value.trim() : '';
+    if (!raw) return '';
+    try {
+        const parsed = new URL(raw);
+        if (!['http:', 'https:'].includes(parsed.protocol)) {
+            throw new Error('URL phải bắt đầu bằng http:// hoặc https://');
+        }
+        return parsed.toString();
+    } catch {
+        throw Object.assign(new Error('URL không hợp lệ'), { statusCode: 400 });
+    }
+}
+
+function validateHomeBannerSettings(value) {
+    if (!value || typeof value !== 'object') {
+        throw Object.assign(new Error('site.homeBanner phải là object'), { statusCode: 400 });
+    }
+
+    const enabled = value.enabled === undefined ? true : Boolean(value.enabled);
+    const title = normalizeShortText(value.title, '', 120);
+    const subtitle = normalizeShortText(value.subtitle, '', 220);
+    const imageUrl = normalizeUrl(value.imageUrl);
+    const ctaText = normalizeShortText(value.ctaText, '', 40);
+    const ctaLink = normalizeUrl(value.ctaLink);
+
+    return {
+        enabled,
+        title,
+        subtitle,
+        imageUrl,
+        ctaText,
+        ctaLink,
+    };
+}
+
+function validateHomeLayoutSettings(value) {
+    if (!value || typeof value !== 'object') {
+        throw Object.assign(new Error('site.homeLayout phải là object'), { statusCode: 400 });
+    }
+
+    const rawSections = Array.isArray(value.sections) ? value.sections : [];
+    if (rawSections.length === 0) {
+        throw Object.assign(new Error('site.homeLayout.sections phải là mảng không rỗng'), { statusCode: 400 });
+    }
+
+    const normalized = [];
+    const seen = new Set();
+    for (const item of rawSections) {
+        const key = typeof item?.key === 'string' ? item.key.trim() : '';
+        if (!HOME_SECTION_KEYS.includes(key)) {
+            throw Object.assign(new Error(`site.homeLayout.sections chứa key không hợp lệ: ${key || 'empty'}`), {
+                statusCode: 400,
+            });
+        }
+        if (seen.has(key)) continue;
+        seen.add(key);
+        normalized.push({
+            key,
+            enabled: item?.enabled === undefined ? true : Boolean(item.enabled),
+        });
+    }
+
+    for (const key of HOME_SECTION_KEYS) {
+        if (!seen.has(key)) {
+            normalized.push({ key, enabled: true });
+        }
+    }
+
+    return { sections: normalized };
+}
+
+async function getPublicSiteConfig() {
+    const cached = cache.get(SITE_CONFIG_CACHE_KEY);
+    if (cached) {
+        return { data: cached };
+    }
+
+    const defaults = getDefaultSystemSettings();
+    const keys = [SETTINGS_KEYS.SITE_HOME_BANNER, SETTINGS_KEYS.SITE_HOME_LAYOUT];
+    const rows = await prisma.systemSetting.findMany({
+        where: { key: { in: keys } },
+        select: { key: true, value_json: true, updated_at: true },
+    });
+
+    const map = new Map(rows.map((row) => [row.key, row]));
+    const homeBanner = validateHomeBannerSettings(
+        map.get(SETTINGS_KEYS.SITE_HOME_BANNER)?.value_json ?? defaults[SETTINGS_KEYS.SITE_HOME_BANNER]
+    );
+    const homeLayout = validateHomeLayoutSettings(
+        map.get(SETTINGS_KEYS.SITE_HOME_LAYOUT)?.value_json ?? defaults[SETTINGS_KEYS.SITE_HOME_LAYOUT]
+    );
+
+    const siteConfig = {
+        homeBanner,
+        homeLayout,
+        updatedAt: map.get(SETTINGS_KEYS.SITE_HOME_LAYOUT)?.updated_at || map.get(SETTINGS_KEYS.SITE_HOME_BANNER)?.updated_at || null,
+    };
+
+    cache.set(SITE_CONFIG_CACHE_KEY, siteConfig);
+    return { data: siteConfig };
 }
 
 function normalizeSettingsPayload(body) {
@@ -1146,6 +1271,10 @@ async function updateSystemSettings(body, adminId) {
             updates.push({ key, value: validateDepositSettings(value) });
         } else if (key === SETTINGS_KEYS.PLATFORM_COMMISSION) {
             updates.push({ key, value: validateCommissionSettings(value) });
+        } else if (key === SETTINGS_KEYS.SITE_HOME_BANNER) {
+            updates.push({ key, value: validateHomeBannerSettings(value) });
+        } else if (key === SETTINGS_KEYS.SITE_HOME_LAYOUT) {
+            updates.push({ key, value: validateHomeLayoutSettings(value) });
         }
     }
 
@@ -1180,6 +1309,8 @@ async function updateSystemSettings(body, adminId) {
             });
         }
     });
+
+    cache.invalidate(SITE_CONFIG_CACHE_KEY);
 
     return {
         message: 'Đã cập nhật system settings',
@@ -2331,6 +2462,7 @@ module.exports = {
     getDashboardStats,
     getSystemSettings,
     updateSystemSettings,
+    getPublicSiteConfig,
     getFinanceSummary,
     getFinanceReconciliation,
     getPendingPaymentOrders,

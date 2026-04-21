@@ -1,4 +1,5 @@
 const prisma = require('../config/prisma');
+const supabase = require('../config/supabase');
 const { validateUpdateRentalStatus } = require('../validators/rental.validator');
 const { mapFeToDb, mapDbToFe } = require('../utils/room-type-mapper');
 const { publishPendingRoomsWhenRentalAvailable } = require('./sync-rental-rooms-on-approve');
@@ -327,40 +328,65 @@ async function getRentalsForModeration(params) {
         prisma.rental.count({ where }),
     ]);
 
+    // Helper: generate signed URL for a Supabase storage path (1 hour expiry)
+    const getSignedUrl = async (path) => {
+        if (!path || !supabase) return path;
+        // Already a full URL (e.g. Cloudinary or public bucket)
+        if (path.startsWith('http')) return path;
+        try {
+            const { data, error } = await supabase.storage
+                .from('rental-documents')
+                .createSignedUrl(path, 3600);
+            return error ? path : (data?.signedUrl ?? path);
+        } catch {
+            return path;
+        }
+    };
+
+    const data = await Promise.all(
+        rentals.map(async (r) => {
+            const documents = await Promise.all(
+                (r.rental_documents || []).map(async (doc) => ({
+                    id: doc.id,
+                    documentType: doc.document_type,
+                    imageUrl: await getSignedUrl(doc.image_url),
+                    status: doc.status,
+                    note: doc.note,
+                }))
+            );
+
+            return {
+                id: r.id,
+                title: r.title,
+                description: r.description,
+                status: r.status,
+                createdAt: r.createdAt,
+                owner: r.users
+                    ? {
+                          id: r.users.id,
+                          fullName: r.users.fullName,
+                          avatarUrl: r.users.avatarUrl,
+                          email: r.users.email,
+                          phone: r.users.phone,
+                      }
+                    : null,
+                location: r.location
+                    ? {
+                          id: r.location.id,
+                          address: r.location.address,
+                          district: r.location.district,
+                          city: r.location.city,
+                      }
+                    : null,
+                images: (r.images || []).map((img) => img.imageUrl),
+                documents,
+                roomsCount: r.rooms ? r.rooms.length : 0,
+            };
+        })
+    );
+
     return {
-        data: rentals.map((r) => ({
-            id: r.id,
-            title: r.title,
-            description: r.description,
-            status: r.status,
-            createdAt: r.createdAt,
-            owner: r.users
-                ? {
-                      id: r.users.id,
-                      fullName: r.users.fullName,
-                      avatarUrl: r.users.avatarUrl,
-                      email: r.users.email,
-                      phone: r.users.phone,
-                  }
-                : null,
-            location: r.location
-                ? {
-                      id: r.location.id,
-                      address: r.location.address,
-                      district: r.location.district,
-                      city: r.location.city,
-                  }
-                : null,
-            images: (r.images || []).map((img) => img.imageUrl),
-            documents: (r.rental_documents || []).map((doc) => ({
-                id: doc.id,
-                documentType: doc.document_type,
-                imageUrl: doc.image_url,
-                status: doc.status,
-                note: doc.note,
-            })),
-            roomsCount: r.rooms ? r.rooms.length : 0,
-        })),
+        data,
         pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
     };
 }
@@ -839,61 +865,8 @@ async function assignQueueItem(id, assignTo) {
     return { message: 'Đã nhận task thành công', data: updated };
 }
 
-async function autoAssignNewTask(tx, data) {
-    // Lấy danh sách moderator
-    const moderators = await tx.user.findMany({
-        where: { role: 'MODERATOR' },
-        select: { id: true },
-        orderBy: { id: 'asc' },
-    });
-
-    if (moderators.length === 0) {
-        // Không có moderator nào, cứ đẩy vào queue mở
-        return await tx.moderation_queue.create({ data });
-    }
-
-    // Tìm xem task gần nhất đã giao là giao cho ai
-    const lastAssigned = await tx.moderation_queue.findFirst({
-        where: { assigned_to: { not: null } },
-        orderBy: { created_at: 'desc' }
-    });
-
-    let nextModId = moderators[0].id;
-    if (lastAssigned && lastAssigned.assigned_to) {
-        const lastIndex = moderators.findIndex(m => m.id === lastAssigned.assigned_to);
-        if (lastIndex !== -1) {
-            nextModId = moderators[(lastIndex + 1) % moderators.length].id;
-        }
-    }
-
-    // Tự động gán luôn cho người tiếp theo
-    const task = await tx.moderation_queue.create({
-        data: {
-            ...data,
-            assigned_to: nextModId,
-            assigned_at: new Date(),
-            status: 'IN_PROGRESS',
-        }
-    });
-
-    await tx.moderator_logs.create({
-        data: {
-            moderator_id: nextModId,
-            target_type: 'QUEUE',
-            target_id: task.id,
-            action: 'CLAIM',
-            previous_status: 'OPEN',
-            new_status: 'IN_PROGRESS',
-            metadata: {
-                queue_target_type: task.target_type,
-                queue_target_id: task.target_id,
-                queue_category: task.category,
-                auto_assigned: true
-            },
-        },
-    });
-
-    return task;
+async function addToModerationQueue(tx, data) {
+    return await tx.moderation_queue.create({ data });
 }
 
 async function releaseQueueItem(id, moderatorId) {
@@ -1437,6 +1410,95 @@ async function getLatestRejection(targetType, targetId) {
     };
 }
 
+async function getKpi(params = {}) {
+    const { days = 30 } = params;
+    const since = new Date();
+    since.setDate(since.getDate() - Number(days));
+
+    // Lấy tất cả logs trong khoảng thời gian
+    const logs = await prisma.moderator_logs.findMany({
+        where: { created_at: { gte: since } },
+        include: { users: { select: { id: true, fullName: true, avatarUrl: true } } },
+        orderBy: { created_at: 'asc' },
+    });
+
+    // Tổng hợp theo moderator
+    const modMap = new Map();
+    for (const log of logs) {
+        const id = log.moderator_id;
+        if (!modMap.has(id)) {
+            modMap.set(id, {
+                moderatorId: id,
+                moderatorName: log.users?.fullName ?? id,
+                totalActions: 0,
+                approvals: 0,
+                rejections: 0,
+                reportHandled: 0,
+                reviewHandled: 0,
+                byDay: {},
+            });
+        }
+        const m = modMap.get(id);
+        m.totalActions++;
+
+        const action = (log.action ?? '').toUpperCase();
+        if (['APPROVE', 'APPROVE_LISTING', 'APPROVE_ROOM_POST'].includes(action)) m.approvals++;
+        if (['REJECT', 'REJECT_LISTING', 'REJECT_ROOM_POST', 'HIDE', 'BAN', 'SUSPEND'].includes(action)) m.rejections++;
+        if (log.target_type === 'REPORT') m.reportHandled++;
+        if (log.target_type === 'FEEDBACK') m.reviewHandled++;
+
+        // Group by date (YYYY-MM-DD)
+        const day = log.created_at.toISOString().slice(0, 10);
+        m.byDay[day] = (m.byDay[day] ?? 0) + 1;
+    }
+
+    // Tính avg actions/day và approval rate
+    const moderators = Array.from(modMap.values()).map((m) => {
+        const activeDays = Object.keys(m.byDay).length || 1;
+        const avgPerDay = parseFloat((m.totalActions / activeDays).toFixed(1));
+        const approvalRate = m.approvals + m.rejections > 0
+            ? parseFloat(((m.approvals / (m.approvals + m.rejections)) * 100).toFixed(1))
+            : null;
+        return { ...m, avgPerDay, approvalRate, byDay: undefined };
+    }).sort((a, b) => b.totalActions - a.totalActions);
+
+    // Trend: actions per day (last N days, all moderators combined)
+    const trendMap = {};
+    for (let i = Number(days) - 1; i >= 0; i--) {
+        const d = new Date();
+        d.setDate(d.getDate() - i);
+        trendMap[d.toISOString().slice(0, 10)] = 0;
+    }
+    for (const log of logs) {
+        const day = log.created_at.toISOString().slice(0, 10);
+        if (trendMap[day] !== undefined) trendMap[day]++;
+    }
+    const trend = Object.entries(trendMap).map(([date, count]) => ({ date, count }));
+
+    // Action breakdown (all moderators)
+    const actionBreakdown = {};
+    for (const log of logs) {
+        const a = log.action ?? 'UNKNOWN';
+        actionBreakdown[a] = (actionBreakdown[a] ?? 0) + 1;
+    }
+
+    return {
+        data: {
+            period: { days: Number(days), since: since.toISOString() },
+            moderators,
+            trend,
+            actionBreakdown,
+            totals: {
+                totalActions: logs.length,
+                totalApprovals: moderators.reduce((s, m) => s + m.approvals, 0),
+                totalRejections: moderators.reduce((s, m) => s + m.rejections, 0),
+                totalReportsHandled: moderators.reduce((s, m) => s + m.reportHandled, 0),
+                totalReviewsHandled: moderators.reduce((s, m) => s + m.reviewHandled, 0),
+            },
+        },
+    };
+}
+
 async function getOverview() {
     const [
         openQueueCount,
@@ -1502,5 +1564,7 @@ module.exports = {
     getModeratorList,
     getLatestRejection,
     getOverview,
-    autoAssignNewTask,
+    getKpi,
+    autoAssignNewTask: addToModerationQueue, // alias for legacy code just in case
+    addToModerationQueue,
 };

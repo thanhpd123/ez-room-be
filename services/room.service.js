@@ -6,6 +6,7 @@ const { sendEmail } = require('../utils/email');
 
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5174';
 const AMENITIES_CACHE_KEY = 'rooms:amenities';
+const NEARLY_AVAILABLE_DAYS = Math.max(1, Number(process.env.NEARLY_AVAILABLE_DAYS || 7));
 const FREE_TIER_LANDLORD_MAX_ROOMS = Math.max(
     1,
     Number(process.env.FREE_TIER_LANDLORD_MAX_ROOMS || 5)
@@ -17,6 +18,27 @@ function isActiveVipLandlord(authUser) {
 }
 
 function formatRoomResponse(room) {
+    const activePeriods = Array.isArray(room.rentalPeriods)
+        ? room.rentalPeriods.filter((p) => p.status === 'ACTIVE' && p.endDate)
+        : [];
+
+    const nearestEndDate = activePeriods.length > 0
+        ? activePeriods
+            .map((p) => new Date(p.endDate))
+            .sort((a, b) => a.getTime() - b.getTime())[0]
+        : null;
+
+    const daysUntilAvailable = nearestEndDate
+        ? Math.ceil((nearestEndDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+        : null;
+
+    const isNearlyAvailable =
+        room.status === 'RENTED' &&
+        nearestEndDate &&
+        daysUntilAvailable != null &&
+        daysUntilAvailable >= 0 &&
+        daysUntilAvailable <= NEARLY_AVAILABLE_DAYS;
+
     return {
         id: room.id,
         rentalId: room.rental_id,
@@ -27,6 +49,9 @@ function formatRoomResponse(room) {
         sizeM2: room.size_m2 ? Number(room.size_m2) : null,
         maxPeople: room.max_people,
         status: room.status,
+        isNearlyAvailable: Boolean(isNearlyAvailable),
+        availableFrom: nearestEndDate ? nearestEndDate.toISOString() : null,
+        daysUntilAvailable: daysUntilAvailable,
         createdAt: room.created_at,
         images: (room.images || []).map((img) => img.imageUrl),
         amenities: (room.roomAmenities || []).map((ra) => ({
@@ -40,6 +65,9 @@ function formatRoomResponse(room) {
         area: room.size_m2 ? Number(room.size_m2) : 0,
         max_occupants: room.max_people || 1,
         status: room.status,
+        isNearlyAvailable: Boolean(isNearlyAvailable),
+        availableFrom: nearestEndDate ? nearestEndDate.toISOString() : null,
+        daysUntilAvailable: daysUntilAvailable,
         thumbnail_url: room.images?.[0]?.imageUrl || null,
         created_at: room.created_at?.toISOString() || new Date().toISOString(),
     };
@@ -198,7 +226,7 @@ async function createRoom(userId, body, authUser = null) {
             },
         });
         const moderatorService = require('./moderator.service');
-        await moderatorService.autoAssignNewTask(tx, {
+        await moderatorService.addToModerationQueue(tx, {
             target_type: 'ROOM',
             target_id: created.id,
             priority: vipLandlord ? 'HIGH' : 'NORMAL',
@@ -255,6 +283,12 @@ async function getRooms(params) {
             include: {
                 images: true,
                 roomAmenities: { include: { amenity: true } },
+                rentalPeriods: {
+                    where: { status: 'ACTIVE' },
+                    select: { status: true, endDate: true },
+                    orderBy: { endDate: 'asc' },
+                    take: 1,
+                },
                 rentals: { include: { location: true } },
             },
         }),
@@ -291,6 +325,12 @@ async function getRoomById(roomId, userId = null) {
         include: {
             images: true,
             roomAmenities: { include: { amenity: true } },
+            rentalPeriods: {
+                where: { status: 'ACTIVE' },
+                select: { status: true, endDate: true },
+                orderBy: { endDate: 'asc' },
+                take: 1,
+            },
             rentals: {
                 include: {
                     location: true,
@@ -401,12 +441,52 @@ async function updateRoom(roomId, userId, body) {
         }
     }
 
+    const hasImagesField = Object.prototype.hasOwnProperty.call(body, 'images');
+    const normalizedImages = hasImagesField
+        ? Array.from(new Set(
+            (Array.isArray(body.images) ? body.images : [])
+                .map((url) => (typeof url === 'string' ? url.trim() : ''))
+                .filter(Boolean)
+        ))
+        : null;
+
+    const hasAmenityIdsField = Object.prototype.hasOwnProperty.call(body, 'amenityIds');
+    const normalizedAmenityIds = hasAmenityIdsField
+        ? Array.from(new Set(
+            (Array.isArray(body.amenityIds) ? body.amenityIds : [])
+                .map((id) => (typeof id === 'string' ? id.trim() : ''))
+                .filter(Boolean)
+        ))
+        : null;
+
     const previousStatus = existingRoom.status;
 
     const room = await prisma.$transaction(async (tx) => {
-        const updated = await tx.rooms.update({
+        await tx.rooms.update({
             where: { id: roomId },
             data: updateData,
+        });
+
+        if (hasImagesField) {
+            await tx.roomImage.deleteMany({ where: { roomId } });
+            if (normalizedImages && normalizedImages.length > 0) {
+                await tx.roomImage.createMany({
+                    data: normalizedImages.map((imageUrl) => ({ roomId, imageUrl })),
+                });
+            }
+        }
+
+        if (hasAmenityIdsField) {
+            await tx.roomAmenity.deleteMany({ where: { roomId } });
+            if (normalizedAmenityIds && normalizedAmenityIds.length > 0) {
+                await tx.roomAmenity.createMany({
+                    data: normalizedAmenityIds.map((amenityId) => ({ roomId, amenityId })),
+                });
+            }
+        }
+
+        const updated = await tx.rooms.findUnique({
+            where: { id: roomId },
             include: {
                 images: true,
                 roomAmenities: { include: { amenity: true } },
@@ -414,20 +494,32 @@ async function updateRoom(roomId, userId, body) {
             },
         });
 
-        // Resubmit hoặc edit bài đã duyệt: tạo mục mới trong moderation queue
-        if (needsModeration) {
+        if (!updated) {
+            throw Object.assign(new Error('Không tìm thấy phòng sau khi cập nhật'), { statusCode: 404 });
+        }
+
+        return updated;
+    });
+
+    // Tránh lỗi P2028 trên interactive transaction: gán moderation task sau khi transaction update đã commit.
+    if (needsModeration) {
+        try {
             const moderatorService = require('./moderator.service');
-            await moderatorService.autoAssignNewTask(tx, {
+            await moderatorService.addToModerationQueue(prisma, {
                 target_type: 'ROOM',
                 target_id: roomId,
                 priority: 'NORMAL',
                 category: 'NEW_LISTING',
                 source: 'SYSTEM',
             });
+        } catch (err) {
+            console.error('Failed to auto assign moderation task for room update:', {
+                roomId,
+                error: err?.message,
+                code: err?.code,
+            });
         }
-
-        return updated;
-    });
+    }
 
     if (previousStatus === 'RENTED' && room.status === 'AVAILABLE') {
         notifyFavoritersRoomAvailable(room).catch((err) => console.error('Notify favoriters error:', err));
@@ -531,7 +623,11 @@ async function getRoomTenants(roomId, userId) {
             orderBy: { startDate: 'desc' },
         }),
         prisma.preorder.findMany({
-            where: { roomId },
+            where: {
+                roomId,
+                status: { in: ['PENDING', 'CONFIRMED'] },
+                payment_status: { in: ['UNPAID', 'PAID'] },
+            },
             include: {
                 user: {
                     select: {
@@ -929,6 +1025,12 @@ async function getRoomByIdForSearchRoomate(roomId, userId = null) {
         include: {
             images: true,
             roomAmenities: { include: { amenity: true } },
+            rentalPeriods: {
+                where: { status: 'ACTIVE' },
+                select: { status: true, endDate: true },
+                orderBy: { endDate: 'asc' },
+                take: 1,
+            },
             rentals: {
                 include: {
                     location: true,

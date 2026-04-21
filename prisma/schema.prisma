@@ -51,25 +51,16 @@ model User {
   searchPrompts                                            SearchPrompt[]
   system_setting_audits_updated                            SystemSettingAudit[]     @relation("SystemSettingAuditUpdatedBy")
   system_settings_updated                                  SystemSetting[]          @relation("SystemSettingUpdatedBy")
-  tenant_reviews_tenant_reviews_reviewed_byTousers         tenant_reviews[]         @relation("tenant_reviews_reviewed_byTousers")
-  tenant_reviews_tenant_reviews_reviewee_idTousers         tenant_reviews[]         @relation("tenant_reviews_reviewee_idTousers")
-  tenant_reviews_tenant_reviews_reviewer_idTousers         tenant_reviews[]         @relation("tenant_reviews_reviewer_idTousers")
   preference                                               UserPreference?
   user_room_interactions                                   user_room_interactions[]
   user_vip_purchases                                       user_vip_purchases[]
   user_warnings_user_warnings_issued_byTousers             user_warnings[]          @relation("user_warnings_issued_byTousers")
   user_warnings_user_warnings_user_idTousers               user_warnings[]          @relation("user_warnings_user_idTousers")
   wallet                                                   Wallet?
-  refreshTokens                                            RefreshToken[]
-  document_access_logs                                     document_access_log[]
-  blogPosts                                                BlogPost[]
   tenant_reviews_as_reviewer                               tenant_review[]          @relation("tenant_review_reviewer")
   tenant_reviews_as_reviewee                               tenant_review[]          @relation("tenant_review_reviewee")
   tenant_reviews_as_moderator                              tenant_review[]          @relation("tenant_review_reviewed_by")
 
-  system_settings_updated        SystemSetting[]      @relation("SystemSettingUpdatedBy")
-  system_setting_audits_updated  SystemSettingAudit[] @relation("SystemSettingAuditUpdatedBy")
-  platform_ledger_entries_created PlatformLedgerEntry[] @relation("PlatformLedgerCreatedBy")
   ratingsGiven                                             RoommateRating[] @relation("RatingReviewer")
   ratingsReceived                                          RoommateRating[] @relation("RatingTarget")
 
@@ -298,7 +289,6 @@ model RoomRentalPeriod {
   preorder_id    String?                   @unique @db.Uuid
   feedback       feedback[]
   tenantReviews  tenant_review[]
-  tenant_reviews tenant_reviews[]
   RoommateRatings RoommateRating[]
   preorders      Preorder?                 @relation(fields: [preorder_id], references: [id], onUpdate: NoAction)
   room           rooms                     @relation(fields: [roomId], references: [id], onDelete: Cascade, onUpdate: NoAction)
@@ -803,35 +793,7 @@ model BlogPostTag {
 }
 
 /// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
-model tenant_reviews {
-  id                                      String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  rental_period_id                        String                @db.Uuid
-  reviewer_id                             String                @db.Uuid
-  reviewee_id                             String                @db.Uuid
-  rating                                  Int?
-  payment_punctuality_rating              Int?
-  property_care_rating                    Int?
-  communication_rating                    Int?
-  comment                                 String?
-  landlord_reply                          String?
-  replied_at                              DateTime?             @db.Timestamptz(6)
-  status                                  feedback_status_enum? @default(PENDING)
-  reviewed_by                             String?               @db.Uuid
-  reviewed_at                             DateTime?             @db.Timestamptz(6)
-  moderator_note                          String?
-  created_at                              DateTime?             @default(now()) @db.Timestamp(6)
-  updated_at                              DateTime?             @db.Timestamp(6)
-  room_rental_periods                     RoomRentalPeriod      @relation(fields: [rental_period_id], references: [id], onUpdate: NoAction)
-  users_tenant_reviews_reviewed_byTousers User?                 @relation("tenant_reviews_reviewed_byTousers", fields: [reviewed_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  users_tenant_reviews_reviewee_idTousers User                  @relation("tenant_reviews_reviewee_idTousers", fields: [reviewee_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  users_tenant_reviews_reviewer_idTousers User                  @relation("tenant_reviews_reviewer_idTousers", fields: [reviewer_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
-  @@unique([reviewer_id, rental_period_id], map: "uq_tenant_review_reviewer_rental")
-  @@index([created_at], map: "idx_tenant_review_created")
-  @@index([rental_period_id], map: "idx_tenant_review_rental_period")
-  @@index([reviewee_id], map: "idx_tenant_review_reviewee")
-  @@index([status], map: "idx_tenant_review_status")
-}
 
 model RoommateRating {
   id                   String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid

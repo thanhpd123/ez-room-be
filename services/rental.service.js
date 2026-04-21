@@ -19,6 +19,25 @@ function getPublicRentalsOrderBy(sortParam) {
     return map[sortParam] || { createdAt: 'desc' };
 }
 
+function getMonthRange(monthInput) {
+    if (!monthInput) return null;
+
+    const monthText = String(monthInput).trim();
+    const match = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(monthText);
+    if (!match) {
+        throw Object.assign(new Error('Tham số month không hợp lệ. Định dạng đúng: YYYY-MM'), {
+            statusCode: 400,
+        });
+    }
+
+    const year = Number(match[1]);
+    const month = Number(match[2]) - 1;
+    const start = new Date(year, month, 1);
+    const endExclusive = new Date(year, month + 1, 1);
+
+    return { start, endExclusive };
+}
+
 async function createRental(ownerId, body, files = {}) {
     console.log('CREATE RENTAL - Files received:', {
         imageFiles: files.imageFiles?.length || 0,
@@ -142,22 +161,24 @@ async function createRental(ownerId, body, files = {}) {
             }
 
             // Save uploaded document paths to rental_documents table
-            for (const doc of uploadedDocuments) {
-                // Create document record first to get its ID
+            for (let i = 0; i < uploadedDocuments.length; i++) {
+                const doc = uploadedDocuments[i];
+                const VALID_TYPES = ['CCCD', 'SO_DO', 'GPKD', 'HOP_DONG', 'OTHER'];
+                const rawType = (files.documentTypes?.[i] ?? 'OTHER').toUpperCase();
+                const docType = VALID_TYPES.includes(rawType) ? rawType : 'OTHER';
                 await tx.rental_documents.create({
                     data: {
                         rental_id: created.id,
-                        document_type: 'OTHER',
+                        document_type: docType,
                         image_url: doc.path,
                         status: 'PENDING',
                     },
                 });
-                // Note: Access logging will be done separately when moderator views documents
             }
 
             // Add to moderation queue
             const moderatorService = require('./moderator.service');
-            await moderatorService.autoAssignNewTask(tx, {
+            await moderatorService.addToModerationQueue(tx, {
                 target_type: 'RENTAL',
                 target_id: created.id,
                 priority: 'NORMAL',
@@ -220,7 +241,14 @@ async function getRentals(params) {
             orderBy: { createdAt: 'desc' },
             include: {
                 location: true,
-                images: true,
+                images: {
+                    select: { imageUrl: true },
+                    orderBy: { createdAt: 'asc' },
+                    take: 1,
+                },
+                _count: {
+                    select: { images: true },
+                },
                 users: {
                     select: {
                         id: true,
@@ -256,6 +284,7 @@ async function getRentals(params) {
                   }
                 : null,
             images: (r.images || []).map((img) => img.imageUrl),
+            imageCount: r._count?.images || 0,
         })),
         pagination: {
             page,
@@ -901,8 +930,8 @@ async function getLandlordProfile(userId) {
     };
 }
 
-async function updateRental(rentalId, userId, body) {
-    const { title, description, address, district, city, images, status, resubmit } = body;
+async function updateRental(rentalId, userId, body, files = {}) {
+    const { title, description, address, district, city, images, status, resubmit, deleted_documents } = body;
 
     const allowedStatuses = ['AVAILABLE', 'UNAVAILABLE', 'HIDDEN'];
     if (status && !allowedStatuses.includes(status)) {
@@ -961,11 +990,39 @@ async function updateRental(rentalId, userId, body) {
         }
     }
 
+    // UPLOAD DOCUMENTS
+    const uploadedDocuments = [];
+    if (files.documentFiles && files.documentFiles.length > 0) {
+        console.log(`📤 Uploading ${files.documentFiles.length} document file(s) for update`);
+        for (const docFile of files.documentFiles) {
+            try {
+                const sanitizedName = docFile.originalname
+                    .replace(/[^\w.-]/g, '')
+                    .substring(0, 200);
+                const fileName = `temp/documents/${Date.now()}_${sanitizedName}`;
+                
+                const { data, error: uploadError } = await supabase.storage
+                    .from('rental-documents')
+                    .upload(fileName, docFile.buffer, {
+                        contentType: docFile.mimetype,
+                        cacheControl: '0',
+                    });
+
+                if (uploadError) throw uploadError;
+                if (data) Object.assign(uploadedDocuments, [...uploadedDocuments, { path: data.path, name: docFile.originalname }]);
+            } catch (err) {
+                console.error('❌ Document upload error during update:', err.message);
+                throw err;
+            }
+        }
+    }
+
     // Xác định status mới: resubmit hoặc edit bài đã duyệt → PENDING
     const needsModeration = isResubmit || isEditApproved;
     const newStatus = needsModeration ? 'PENDING' : status;
 
-    const result = await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(
+        async (tx) => {
         await tx.rental.update({
             where: { id: rentalId },
             data: {
@@ -985,10 +1042,42 @@ async function updateRental(rentalId, userId, body) {
             }
         }
 
+        // Delete documents marked for removal
+        if (deleted_documents && deleted_documents.length > 0) {
+            await tx.rental_documents.deleteMany({
+                where: {
+                    id: { in: deleted_documents },
+                    rental_id: rentalId
+                }
+            });
+        }
+
+        // Save uploaded document paths to rental_documents table
+        if (uploadedDocuments.length > 0) {
+            // Optional: We can delete old documents here if we want to replace them completely. 
+            // For now, we append them or maybe the landlord just uploads missing ones.
+            // But if it's a completely new submission, we COULD delete old ones.
+            // Let's NOT delete so we don't accidentally wipe approved docs if they just upload 1 new thing.
+            for (let i = 0; i < uploadedDocuments.length; i++) {
+                const doc = uploadedDocuments[i];
+                const VALID_TYPES = ['CCCD', 'SO_DO', 'GPKD', 'HOP_DONG', 'OTHER'];
+                const rawType = (files.documentTypes?.[i] ?? 'OTHER').toUpperCase();
+                const docType = VALID_TYPES.includes(rawType) ? rawType : 'OTHER';
+                await tx.rental_documents.create({
+                    data: {
+                        rental_id: rentalId,
+                        document_type: docType,
+                        image_url: doc.path,
+                        status: 'PENDING',
+                    },
+                });
+            }
+        }
+
         // Resubmit hoặc edit bài đã duyệt: tạo mục mới trong moderation queue
         if (needsModeration) {
             const moderatorService = require('./moderator.service');
-            await moderatorService.autoAssignNewTask(tx, {
+            await moderatorService.addToModerationQueue(tx, {
                 target_type: 'RENTAL',
                 target_id: rentalId,
                 priority: 'NORMAL',
@@ -999,9 +1088,11 @@ async function updateRental(rentalId, userId, body) {
 
         return tx.rental.findUnique({
             where: { id: rentalId },
-            include: { location: true, images: true },
+            include: { location: true, images: true, rental_documents: true },
         });
-    });
+    },
+    { timeout: 10000 }
+    );
 
     const message = isResubmit
         ? 'Đã gửi lại bài đăng để duyệt'
@@ -1094,10 +1185,34 @@ async function deleteRental(rentalId, userId) {
 /**
  * Get landlord dashboard statistics
  */
-async function getLandlordDashboardStats(landlordId) {
+async function getLandlordDashboardStats(landlordId, month) {
+    const nearlyAvailableDays = Math.max(1, Number(process.env.NEARLY_AVAILABLE_DAYS || 7));
+    const monthRange = getMonthRange(month);
+    const rentalCreatedAtFilter = monthRange
+        ? { createdAt: { gte: monthRange.start, lt: monthRange.endExclusive } }
+        : {};
+    const roomCreatedAtFilter = monthRange
+        ? { created_at: { gte: monthRange.start, lt: monthRange.endExclusive } }
+        : {};
+    const feedbackCreatedAtFilter = monthRange
+        ? { created_at: { gte: monthRange.start, lt: monthRange.endExclusive } }
+        : {};
+    const preorderCreatedAtFilter = monthRange
+        ? { createdAt: { gte: monthRange.start, lt: monthRange.endExclusive } }
+        : {};
+    const periodCreatedAtFilter = monthRange
+        ? { createdAt: { gte: monthRange.start, lt: monthRange.endExclusive } }
+        : {};
+
+    const now = new Date();
+    const thresholdDate = new Date(now);
+    thresholdDate.setDate(thresholdDate.getDate() + nearlyAvailableDays);
+
     const [
         totalRentals,
         totalRooms,
+        roomsByStatus,
+        nearlyAvailableRoomPeriods,
         rentalsByStatus,
         wallet,
         totalFeedback,
@@ -1106,17 +1221,59 @@ async function getLandlordDashboardStats(landlordId) {
         preorderStats,
     ] = await Promise.all([
         // Tổng số nhà trọ
-        prisma.rental.count({ where: { owner_id: landlordId } }),
+        prisma.rental.count({
+            where: {
+                owner_id: landlordId,
+                ...rentalCreatedAtFilter,
+            },
+        }),
         
         // Tổng số phòng trọ
         prisma.rooms.count({
-            where: { rentals: { owner_id: landlordId } },
+            where: {
+                rentals: { owner_id: landlordId },
+                ...roomCreatedAtFilter,
+            },
+        }),
+
+        // Trạng thái phòng trọ
+        prisma.rooms.groupBy({
+            by: ['status'],
+            where: {
+                rentals: { owner_id: landlordId },
+                ...roomCreatedAtFilter,
+            },
+            _count: { id: true },
+        }),
+
+        // Phòng sắp trống (đang RENTED, có kỳ thuê ACTIVE và endDate trong N ngày tới)
+        prisma.roomRentalPeriod.findMany({
+            where: {
+                status: 'ACTIVE',
+                endDate: {
+                    gte: now,
+                    lte: thresholdDate,
+                },
+                room: {
+                    status: 'RENTED',
+                    rentals: {
+                        owner_id: landlordId,
+                    },
+                },
+                ...periodCreatedAtFilter,
+            },
+            select: {
+                roomId: true,
+            },
         }),
         
         // Trạng thái nhà trọ
         prisma.rental.groupBy({
             by: ['status'],
-            where: { owner_id: landlordId },
+            where: {
+                owner_id: landlordId,
+                ...rentalCreatedAtFilter,
+            },
             _count: { id: true },
         }),
         
@@ -1132,6 +1289,7 @@ async function getLandlordDashboardStats(landlordId) {
                 target_type: 'ROOM',
                 status: 'APPROVED',
                 room_rental_periods: { room: { rentals: { owner_id: landlordId } } },
+                ...feedbackCreatedAtFilter,
             },
         }),
         
@@ -1142,6 +1300,7 @@ async function getLandlordDashboardStats(landlordId) {
                 status: 'APPROVED',
                 rating: { not: null },
                 room_rental_periods: { room: { rentals: { owner_id: landlordId } } },
+                ...feedbackCreatedAtFilter,
             },
             _avg: { rating: true },
             _count: { id: true },
@@ -1151,6 +1310,7 @@ async function getLandlordDashboardStats(landlordId) {
         prisma.preorder.count({
             where: {
                 room: { rentals: { owner_id: landlordId } },
+                ...preorderCreatedAtFilter,
             },
         }),
         
@@ -1159,6 +1319,7 @@ async function getLandlordDashboardStats(landlordId) {
             by: ['status'],
             where: {
                 room: { rentals: { owner_id: landlordId } },
+                ...preorderCreatedAtFilter,
             },
             _count: { id: true },
         }),
@@ -1179,6 +1340,23 @@ async function getLandlordDashboardStats(landlordId) {
             rentalStatusMap[item.status] = item._count.id;
         }
     });
+
+    const roomStatusMap = {
+        PENDING: 0,
+        AVAILABLE: 0,
+        RENTED: 0,
+        MAINTENANCE: 0,
+    };
+
+    roomsByStatus.forEach((item) => {
+        if (roomStatusMap.hasOwnProperty(item.status)) {
+            roomStatusMap[item.status] = item._count.id;
+        }
+    });
+
+    roomStatusMap.NEARLY_AVAILABLE = new Set(
+        nearlyAvailableRoomPeriods.map((item) => item.roomId)
+    ).size;
 
     // Format preorder status data
     const preorderStatusMap = {
@@ -1202,6 +1380,7 @@ async function getLandlordDashboardStats(landlordId) {
             },
             rooms: {
                 total: totalRooms,
+                byStatus: roomStatusMap,
             },
             wallet: {
                 balance: wallet ? Number(wallet.balance) : 0,
@@ -1218,14 +1397,19 @@ async function getLandlordDashboardStats(landlordId) {
     };
 }
 
-async function getLandlordPerformanceMetrics(landlordId) {
+async function getLandlordPerformanceMetrics(landlordId, month) {
+    const monthRange = getMonthRange(month);
     const now = new Date();
-    const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const thisMonthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    const thisMonthStart = monthRange
+        ? monthRange.start
+        : new Date(now.getFullYear(), now.getMonth(), 1);
+    const thisMonthEndExclusive = monthRange
+        ? monthRange.endExclusive
+        : new Date(now.getFullYear(), now.getMonth() + 1, 1);
     
     const [
         totalRooms,
-        activeRentals,
+        activeRoomsThisMonth,
         thisMonthRevenue,
         totalRevenue,
         cancelledPeriods,
@@ -1238,25 +1422,29 @@ async function getLandlordPerformanceMetrics(landlordId) {
             where: { rentals: { owner_id: landlordId } },
         }),
         
-        // Số phòng đang thuê (ACTIVE periods)
-        prisma.RoomRentalPeriod.count({
+        // Số phòng có thuê active trong tháng (không trùng room)
+        prisma.roomRentalPeriod.findMany({
             where: {
                 room: { rentals: { owner_id: landlordId } },
                 status: 'ACTIVE',
+                startDate: { lt: thisMonthEndExclusive },
+                OR: [{ endDate: null }, { endDate: { gte: thisMonthStart } }],
             },
+            select: { roomId: true },
+            distinct: ['roomId'],
         }),
         
         // Doanh thu tháng này
-        prisma.RoomRentalPeriod.aggregate({
+        prisma.roomRentalPeriod.aggregate({
             where: {
                 room: { rentals: { owner_id: landlordId } },
-                createdAt: { gte: thisMonthStart, lte: thisMonthEnd },
+                createdAt: { gte: thisMonthStart, lt: thisMonthEndExclusive },
             },
             _sum: { actualPrice: true },
         }),
         
         // Tổng doanh thu
-        prisma.RoomRentalPeriod.aggregate({
+        prisma.roomRentalPeriod.aggregate({
             where: {
                 room: { rentals: { owner_id: landlordId } },
             },
@@ -1264,43 +1452,47 @@ async function getLandlordPerformanceMetrics(landlordId) {
         }),
         
         // Số đơn hủy
-        prisma.RoomRentalPeriod.count({
+        prisma.roomRentalPeriod.count({
             where: {
                 room: { rentals: { owner_id: landlordId } },
                 status: 'CANCELLED',
+                createdAt: { gte: thisMonthStart, lt: thisMonthEndExclusive },
             },
         }),
         
         // Tổng đơn kết thúc (COMPLETED hoặc CANCELLED)
-        prisma.RoomRentalPeriod.count({
+        prisma.roomRentalPeriod.count({
             where: {
                 room: { rentals: { owner_id: landlordId } },
                 OR: [
                     { status: 'COMPLETED' },
                     { status: 'CANCELLED' },
                 ],
+                createdAt: { gte: thisMonthStart, lt: thisMonthEndExclusive },
             },
         }),
         
         // Đơn đã xác nhận
-        prisma.Preorder.count({
+        prisma.preorder.count({
             where: {
                 room: { rentals: { owner_id: landlordId } },
                 status: 'CONFIRMED',
+                createdAt: { gte: thisMonthStart, lt: thisMonthEndExclusive },
             },
         }),
         
         // Tổng đơn đặt cọc
-        prisma.Preorder.count({
+        prisma.preorder.count({
             where: {
                 room: { rentals: { owner_id: landlordId } },
                 NOT: { status: 'PENDING' },
+                createdAt: { gte: thisMonthStart, lt: thisMonthEndExclusive },
             },
         }),
     ]);
 
     // Tính toán metrics
-    const occupancyRate = totalRooms > 0 ? (activeRentals / totalRooms) * 100 : 0;
+    const occupancyRate = totalRooms > 0 ? (activeRoomsThisMonth.length / totalRooms) * 100 : 0;
     const cancellationRate = totalPeriods > 0 ? (cancelledPeriods / totalPeriods) * 100 : 0;
     const conversionRate = totalPreorders > 0 ? (confirmedPreorders / totalPreorders) * 100 : 0;
 
@@ -1314,7 +1506,7 @@ async function getLandlordPerformanceMetrics(landlordId) {
             cancellationRate: parseFloat(cancellationRate.toFixed(2)),
             conversionRate: parseFloat(conversionRate.toFixed(2)),
             bookingStats: {
-                active: activeRentals,
+                active: activeRoomsThisMonth.length,
                 cancelled: cancelledPeriods,
                 total: totalPeriods,
             },
@@ -1451,6 +1643,58 @@ async function getRentalDocumentsForModeration(rentalId, moderatorId) {
     };
 }
 
+async function getLandlordRentalDocuments(rentalId, landlordId) {
+    const rental = await prisma.rental.findUnique({
+        where: { id: rentalId },
+        include: {
+            rental_documents: true,
+        },
+    });
+
+    if (!rental) {
+        throw Object.assign(new Error('Rental không tìm thấy'), { statusCode: 404 });
+    }
+
+    if (rental.owner_id !== landlordId) {
+        throw Object.assign(new Error('Không có quyền truy cập'), { statusCode: 403 });
+    }
+
+    // Generate signed URLs for documents (expires in 1 hour)
+    const docsWithUrls = await Promise.all(
+        (rental.rental_documents || []).map(async (doc) => {
+            try {
+                const { data, error } = await supabase.storage
+                    .from('rental-documents')
+                    .createSignedUrl(doc.image_url, 3600);
+
+                return {
+                    id: doc.id,
+                    documentType: doc.document_type,
+                    status: doc.status,
+                    signedUrl: error ? null : data?.signedUrl,
+                    uploadedAt: doc.created_at,
+                };
+            } catch (err) {
+                console.error('Error generating signed URL:', err);
+                return {
+                    id: doc.id,
+                    documentType: doc.document_type,
+                    status: doc.status,
+                    signedUrl: null,
+                    uploadedAt: doc.created_at,
+                };
+            }
+        })
+    );
+
+    return {
+        data: {
+            id: rental.id,
+            documents: docsWithUrls,
+        },
+    };
+}
+
 module.exports = {
     createRental,
     getRentals,
@@ -1458,6 +1702,7 @@ module.exports = {
     getMyRentals,
     getRentalsForModeration,
     getRentalDocumentsForModeration,
+    getLandlordRentalDocuments,
     updateRentalStatus,
     updateRental,
     deleteRental,

@@ -1,139 +1,109 @@
-/**
- * Text embedding utility — runs locally via Transformers.js.
- * No API keys needed. Model downloads on first use (cached after).
- * On corrupt cache (e.g. Protobuf parsing failed), cache is cleared and load retried once.
- *
- * Default: Xenova/multilingual-e5-base (quantized ONNX, multilingual incl. Vietnamese) — stronger than e5-small.
- * Override: TEXT_EMBEDDING_MODEL, TEXT_EMBEDDING_DIMS (must match model output, e.g. small=384, base=768).
- * After changing model/dimensions, truncate or delete room_text_embeddings and re-run scripts/generate-embeddings.js.
+﻿/**
+ * Text embedding utility — runs via Hugging Face Inference API.
+ * Replaces Xenova/transformers local model to save RAM and prevent 503 errors.
  */
 
-const path = require('path');
-const fs = require('fs');
+const axios = require('axios');
 
-const LOCAL_MODEL = (process.env.TEXT_EMBEDDING_MODEL || 'Xenova/multilingual-e5-base').trim();
+// Using the original Hugging Face model instead of Xenova's port
+const LOCAL_MODEL = (process.env.TEXT_EMBEDDING_MODEL || 'intfloat/multilingual-e5-base').trim();
 const LOCAL_DIMS = Math.max(1, parseInt(process.env.TEXT_EMBEDDING_DIMS || '768', 10) || 768);
 
-let extractor = null;
-let loadingPromise = null;
+/**
+ * Generate text embedding via Hugging Face API
+ * Output format: [number, number, ...] with length = LOCAL_DIMS
+ */
+async function getEmbedding(text) {
+    const HF_TOKEN = process.env.HUGGING_FACE_TOKEN;
+    if (!HF_TOKEN) {
+        console.warn(`[Embedding] HUGGING_FACE_TOKEN is not set in .env! Cannot fetch embeddings.`);
+        return null;
+    }
 
-function getEmbeddingCachePath() {
-    const parts = LOCAL_MODEL.split('/').filter(Boolean);
-    return path.join(__dirname, '..', 'node_modules', '@huggingface', 'transformers', '.cache', ...parts);
-}
+    const clean = (text || '').trim();
+    if (!clean) return null;
 
-function clearEmbeddingCache() {
-    const cacheDir = getEmbeddingCachePath();
     try {
-        if (fs.existsSync(cacheDir)) {
-            fs.rmSync(cacheDir, { recursive: true });
-            console.log('[Embedding] Cleared corrupt cache, will re-download on next load.');
+        const response = await axios.post(
+            `https://api-inference.huggingface.co/pipeline/feature-extraction/${LOCAL_MODEL}`,
+            { inputs: clean.slice(0, 5000) },
+            {
+                headers: {
+                    'Authorization': `Bearer ${HF_TOKEN}`,
+                    'Content-Type': 'application/json'
+                },
+                timeout: 15000 // 15 seconds timeout to prevent hanging the server
+            }
+        );
+
+        let data = response.data;
+
+        // Hugging Face feature-extraction returns data differently depending on the model pipeline.
+        if (Array.isArray(data) && Array.isArray(data[0])) {
+            if (Array.isArray(data[0][0])) {
+                // Return shape: [[[vec1], [vec2], ...]] (3D -> token embeddings)
+                data = data[0];
+            }
+            // Mean pool it across sequence
+            const seqLen = data.length;
+            const dim = data[0].length;
+            const pooled = new Array(dim).fill(0);
+            for (let i = 0; i < seqLen; i++) {
+                for (let j = 0; j < dim; j++) {
+                    pooled[j] += data[i][j];
+                }
+            }
+            // divide by sequence length
+            for (let j = 0; j < dim; j++) {
+                pooled[j] /= seqLen;
+            }
+            data = pooled;
+        } else if (!Array.isArray(data)) {
+            console.error('[Embedding] Unexpected HF response format:', typeof data);
+            return null; // Return null gracefully
         }
-    } catch (e) {
-        console.warn('[Embedding] Could not clear cache:', e.message);
+
+        // L2 Normalize
+        const arr = Array.from(data);
+        const magnitude = Math.sqrt(arr.reduce((sum, val) => sum + val * val, 0));
+        const normalized = magnitude > 0 ? arr.map(val => val / magnitude) : arr;
+
+        if (normalized.length !== LOCAL_DIMS) {
+            console.warn(`[Embedding] Got ${normalized.length} dims, expected ${LOCAL_DIMS}.`);
+        }
+
+        return normalized;
+    } catch (err) {
+        console.error('[Embedding] Hugging Face API Error:', err.response ? JSON.stringify(err.response.data) : err.message);
+        // Fallback: return null so server logic can gracefully degrade instead of crashing
+        return null;
     }
 }
 
-function isCorruptCacheError(err) {
-    const msg = (err && err.message) || '';
-    return /Protobuf parsing failed|failed to load|parse.*onnx/i.test(msg);
-}
-
-async function loadModel() {
-    if (extractor) return;
-    if (loadingPromise) return loadingPromise;
-
-    loadingPromise = (async () => {
-        const { pipeline } = await import('@huggingface/transformers');
-        console.log(`[Embedding] Loading model ${LOCAL_MODEL} (first run may download ~100–500MB depending on model)...`);
-        try {
-            extractor = await pipeline('feature-extraction', LOCAL_MODEL);
-            console.log(`[Embedding] Model loaded (dim=${LOCAL_DIMS})`);
-        } catch (err) {
-            if (isCorruptCacheError(err)) {
-                loadingPromise = null;
-                clearEmbeddingCache();
-                extractor = await pipeline('feature-extraction', LOCAL_MODEL);
-                console.log(`[Embedding] Model loaded after cache clear (dim=${LOCAL_DIMS})`);
-            } else {
-                throw err;
-            }
-        }
-    })();
-
-    return loadingPromise;
-}
-
-/**
- * Always available — no API keys required.
- */
 function isEmbeddingAvailable() {
-    return true;
+    return !!process.env.HUGGING_FACE_TOKEN;
 }
 
 function getProvider() {
-    return 'local';
+    return 'huggingface-api';
 }
 
 function getEmbeddingDims() {
     return LOCAL_DIMS;
 }
 
-/**
- * Generate text embedding. Returns number[] or null.
- */
 async function getTextEmbedding(text) {
-    const clean = (text || '').trim();
-    if (!clean) return null;
-
-    try {
-        await loadModel();
-
-        // multilingual-e5 expects "query: ..." or "passage: ..." prefix
-        const input = `query: ${clean.slice(0, 5000)}`;
-        const output = await extractor(input, { pooling: 'mean', normalize: true });
-
-        const arr = Array.from(output.data);
-        if (arr.length !== LOCAL_DIMS) {
-            console.warn(
-                `[Embedding] Got ${arr.length} dims, expected ${LOCAL_DIMS} — fix TEXT_EMBEDDING_DIMS for ${LOCAL_MODEL}`
-            );
-        }
-        return arr;
-    } catch (err) {
-        console.error('[Embedding] Error:', err.message);
-        return null;
-    }
+    if (!text) return null;
+    const input = `query: ${text.trim()}`;
+    return await getEmbedding(input);
 }
 
-/**
- * Generate embedding for a "passage" (room description stored in DB).
- * Uses "passage:" prefix for better retrieval quality.
- */
 async function getPassageEmbedding(text) {
-    const clean = (text || '').trim();
-    if (!clean) return null;
-
-    try {
-        await loadModel();
-        const input = `passage: ${clean.slice(0, 5000)}`;
-        const output = await extractor(input, { pooling: 'mean', normalize: true });
-        const arr = Array.from(output.data);
-        if (arr.length !== LOCAL_DIMS) {
-            console.warn(
-                `[Embedding] Got ${arr.length} dims, expected ${LOCAL_DIMS} — fix TEXT_EMBEDDING_DIMS for ${LOCAL_MODEL}`
-            );
-        }
-        return arr;
-    } catch (err) {
-        console.error('[Embedding] Passage error:', err.message);
-        return null;
-    }
+    if (!text) return null;
+    const input = `passage: ${text.trim()}`;
+    return await getEmbedding(input);
 }
 
-/**
- * Build a rich text blob from room + rental data for embedding.
- */
 function buildRoomTextForEmbedding(room) {
     const parts = [];
     const rental = room.rentals || room.rental;
@@ -143,14 +113,17 @@ function buildRoomTextForEmbedding(room) {
     if (room.room_name) parts.push(`Phòng: ${room.room_name}`);
     if (room.description) parts.push(room.description);
     if (room.room_type) parts.push(`Loại: ${room.room_type}`);
-    if (room.price) parts.push(`Giá: ${Number(room.price).toLocaleString('vi-VN')} VNĐ/tháng`);
-    if (room.size_m2) parts.push(`Diện tích: ${room.size_m2} m²`);
+    if (room.price) parts.push(`Giá: ${Number(room.price).toLocaleString('vi-VN')} VNĐ`);
 
-    const loc = rental?.location;
-    if (loc) {
-        const locParts = [loc.address, loc.district, loc.city].filter(Boolean);
-        if (locParts.length) parts.push(`Địa chỉ: ${locParts.join(', ')}`);
+    // location logic
+    const locParts = [];
+    if (room.location) {
+        if (room.location.street) locParts.push(room.location.street);
+        if (room.location.ward) locParts.push(room.location.ward);
+        if (room.location.district) locParts.push(room.location.district);
+        if (room.location.city) locParts.push(room.location.city);
     }
+    if (locParts.length > 0) parts.push(`Địa chỉ: ${locParts.join(', ')}`);
 
     const amenities = (room.roomAmenities || []).map((ra) => ra.amenity?.name || ra.name).filter(Boolean);
     if (amenities.length) parts.push(`Tiện nghi: ${amenities.join(', ')}`);
@@ -158,17 +131,8 @@ function buildRoomTextForEmbedding(room) {
     return parts.join('. ');
 }
 
-/**
- * Pre-load the embedding model (call at server startup).
- */
 async function preloadEmbedding() {
-    try {
-        await loadModel();
-        return true;
-    } catch (err) {
-        console.error('[Embedding] Preload failed:', err.message);
-        return false;
-    }
+    return true;
 }
 
 module.exports = {
