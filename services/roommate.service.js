@@ -63,17 +63,16 @@ const QUANT_MAPS = {
  * Custom weights from the frontend multiply these values.
  */
 const LIFESTYLE_WEIGHTS = {
-    smoking:            0.15,   
-    sleep_schedule:     0.14,   
-    pets_allowed:       0.12,   
-    noise_tolerance:    0.10,  
-    guest_frequency:    0.08,  
-    drinking:           0.07,   
-    social_level:       0.06,   
-    cooking_frequency:  0.04,  
-    work_from_home:     0.04,  
-    personalityType:    0.04,  
-    interests:          0.03,   
+    smoking:            0.1,   
+    sleep_schedule:     0.1,   
+    pets_allowed:       0.1,   
+    noise_tolerance:    0.1,  
+    guest_frequency:    0.1,  
+    drinking:           0.1,   
+    cooking_frequency:  0.1,  
+    work_from_home:     0.1,  
+    personalityType:    0.1,  
+    interests:          0.1,   
 };
 
 
