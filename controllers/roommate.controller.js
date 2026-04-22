@@ -13,9 +13,19 @@ function handleError(err, res, defaultMessage) {
 
 async function getSuggestions(req, res) {
     try {
+        // Parse weights: sent as JSON string ?weights={"smoking":5,...}
+        let weights = null;
+        if (req.query.weights) {
+            try {
+                weights = JSON.parse(req.query.weights);
+            } catch {
+                weights = null;
+            }
+        }
+        console.log('[getSuggestions] req.query.weights =', req.query.weights, '→ parsed weights =', JSON.stringify(weights));
         const result = await roommateService.getSuggestions(
             req.auth.user.id,
-            { limit: req.query.limit }
+            { limit: req.query.limit, weights }
         );
         return res.json({
             success: true,

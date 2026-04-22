@@ -15,16 +15,13 @@ function tokenize(text) {
 
 
 
-// ─── Vector-based Weighted Cosine Similarity ─────────────────────────────────
+// ─── Attribute-Based Weighted Compatibility Score ────────────────────────────────
 
 /**
  * Quantization maps: convert categorical/ordinal lifestyle values to [0, 1].
  * For ordinal scales, values are evenly spaced so that "nearby" options
- * produce vectors that are close together (unlike simple matching where
- * "Sạch" vs "Rất sạch" would score 0).
+ * score closer together.
  */
-
-
 const QUANT_MAPS = {
     sleep_schedule: {
         'sớm (trước 22h)': 0.0,
@@ -62,9 +59,8 @@ const QUANT_MAPS = {
 };
 
 /**
- * Weights for each lifestyle criterion, summing to 1.0.
- * Higher weights = more influence on compatibility score.
- * Weights are based on real-world roommate conflict potential.
+ * Weights for each lifestyle criterion – equal baseline.
+ * Custom weights from the frontend multiply these values.
  */
 const LIFESTYLE_WEIGHTS = {
     smoking:            0.15,   
@@ -80,15 +76,21 @@ const LIFESTYLE_WEIGHTS = {
     interests:          0.03,   
 };
 
+
+
 /**
  * Quantize a single lifestyle field value to [0, 1].
  * Returns null if value is missing or not found in the map.
  */
+
+
 function quantize(fieldName, rawValue) {
     if (rawValue === undefined || rawValue === null) return null;
 
-    // Binary fields: true → 1, false → 0
+    // Binary fields: handle both boolean and string representations
     if (typeof rawValue === 'boolean') return rawValue ? 1.0 : 0.0;
+    if (rawValue === 'true') return 1.0;
+    if (rawValue === 'false') return 0.0;
 
     // Ordinal/categorical fields: lookup in QUANT_MAPS
     const map = QUANT_MAPS[fieldName];
@@ -100,289 +102,188 @@ function quantize(fieldName, rawValue) {
 }
 
 /**
- * Build a feature vector from a LifestyleProfile.
- * Each entry: { key, value, weight }.
- * Only includes dimensions where the user has data (non-null).
+ * Calculate similarity for a single attribute [0,1].
+ * Using clean Direct Matching instead of Vectors.
  */
-function vectorizeLifestyle(lifestyle) {
-    if (!lifestyle) return [];
+function calculateAttributeSim(key, valA, valB) {
+    if (key === 'interests' || key === 'languages') {
+        const arrA = Array.isArray(valA) ? valA : [];
+        const arrB = Array.isArray(valB) ? valB : [];
+        if (arrA.length === 0 && arrB.length === 0) return 1.0;
+        
+        const tokensA = new Set(arrA.flatMap((s) => tokenize(s)));
+        const tokensB = new Set(arrB.flatMap((s) => tokenize(s)));
 
-    const features = [];
+        if (tokensA.size === 0 && tokensB.size === 0) return 1.0;
 
-    // Binary fields
-    const binaryFields = ['smoking', 'drinking', 'pets_allowed', 'work_from_home'];
-    for (const field of binaryFields) {
-        const val = quantize(field, lifestyle[field]);
-        if (val !== null) {
-            features.push({ key: field, value: val, weight: LIFESTYLE_WEIGHTS[field] || 0 });
+        let overlap = 0;
+        for (const t of tokensA) {
+            if (tokensB.has(t)) overlap++;
         }
-    }
 
-    // Ordinal fields
-    const ordinalFields = [
-        'sleep_schedule', 'cleanliness', 'noise_tolerance',
-        'social_level', 'guest_frequency', 'cooking_frequency',
-    ];
-    for (const field of ordinalFields) {
-        const val = quantize(field, lifestyle[field]);
-        if (val !== null) {
-            features.push({ key: field, value: val, weight: LIFESTYLE_WEIGHTS[field] || 0 });
-        }
+        const unionSize = new Set([...tokensA, ...tokensB]).size;
+        return unionSize > 0 ? overlap / unionSize : 0;
+    
+    
+    } else if (key === 'personalityType') {
+        return strEq(valA, valB) ? 1.0 : 0.0;
+    } else {
+        // Numeric ordinal/binary: similarity = 1 - |a - b|
+        return 1.0 - Math.abs(valA - valB);
     }
-
-    // Personality type: same → 1.0, different → 0.0 (categorical, no ordinal proximity)
-    if (lifestyle.personalityType) {
-        features.push({
-            key: 'personalityType',
-            value: lifestyle.personalityType,  // stored as string, compared later
-            weight: LIFESTYLE_WEIGHTS.personalityType || 0,
-        });
-    }
-
-    // Interests: stored as Jaccard similarity (computed during comparison, not here)
-    const interests = Array.isArray(lifestyle.interests) ? lifestyle.interests : [];
-    if (interests.length > 0) {
-        features.push({
-            key: 'interests',
-            value: interests,  // stored as array, Jaccard computed later
-            weight: LIFESTYLE_WEIGHTS.interests || 0,
-        });
-    }
-
-    return features;
 }
 
+/**
+ * Validate và normalize custom weights từ query string.
+ * @param {object|null} rawWeights - Object { [criterion]: string|number }
+ * @returns {object|null} normalizedWeights với sum = 1.0, hoặc null nếu không có weights hợp lệ
+ */
+function normalizeWeights(rawWeights) {
+    if (!rawWeights || typeof rawWeights !== 'object') return null;
 
+    const VALID_KEYS = new Set(Object.keys(LIFESTYLE_WEIGHTS));
+    const sanitized = {};
+
+    for (const [key, val] of Object.entries(rawWeights)) {
+        if (!VALID_KEYS.has(key)) continue;
+        const num = Number(val);
+        if (!Number.isFinite(num) || num < 0 || num > 10) continue;
+        sanitized[key] = num;
+    }
+
+    if (Object.keys(sanitized).length === 0) return null;
+
+    const total = Object.values(sanitized).reduce((s, v) => s + v, 0);
+    if (total === 0) return { allZero: true };
+
+    const normalized = {};
+    for (const [key, val] of Object.entries(sanitized)) {
+        normalized[key] = val / total;
+    }
+    return normalized;
+}
 
 /**
- * Compute Weighted Cosine Similarity between two lifestyle vectors.
- *
- * For numeric dimensions:  similarity_i = 1 - |aᵢ - bᵢ|  (distance-based, [0,1])
- * For categorical (personalityType): similarity_i = (same → 1, different → 0)
- * For interests: similarity_i = Jaccard(A_interests, B_interests)
- *
- * Final score = Σ(wᵢ * simᵢ) / Σ(wᵢ)  for shared dimensions only
- * This gives a weighted average of per-dimension similarities ∈ [0, 1].
+ * Compute Lifestyle Match (0 - 100) directly from LifestyleProfiles.
  */
-function weightedCosineSimilarity(vecA, vecB) {
-    // Build lookup maps
-    const mapA = new Map();
-    for (const f of vecA) mapA.set(f.key, f);
-    const mapB = new Map();
-    for (const f of vecB) mapB.set(f.key, f);
+function calculateLifestyleMatch(myLifestyle, candidateLifestyle, customWeights) {
+    if (!myLifestyle || !candidateLifestyle) return 0;
+    // allZero sentinel: caller should have handled this, but guard here too
+    if (customWeights?.allZero) return 0;
 
+    const weights = customWeights || LIFESTYLE_WEIGHTS;
     let weightedSimSum = 0;
     let totalWeight = 0;
-
-    // Iterate over all possible dimensions (union of both vectors)
-    const allKeys = new Set([...mapA.keys(), ...mapB.keys()]);
-
-    for (const key of allKeys) {
-        const a = mapA.get(key);
-        const b = mapB.get(key);
-
-        // Only score dimensions where BOTH users have data
-        if (!a || !b) continue;
-
-        const w = a.weight || b.weight || 0;
-        if (w === 0) continue;
-
-        let sim = 0;
-
-        if (key === 'interests') {
-            // Jaccard similarity for interests
-            const tokensA = new Set((a.value || []).flatMap((s) => tokenize(s)));
-            const tokensB = new Set((b.value || []).flatMap((s) => tokenize(s)));
-            if (tokensA.size === 0 && tokensB.size === 0) {
-                sim = 1.0; // Both empty = identical
-            } else {
-                let overlap = 0;
-                for (const t of tokensA) {
-                    if (tokensB.has(t)) overlap++;
-                }
-                const unionSize = new Set([...tokensA, ...tokensB]).size;
-                sim = unionSize > 0 ? overlap / unionSize : 0;
-            }
-        } else if (key === 'personalityType') {
-            // Categorical: exact match = 1, else = 0
-            sim = strEq(a.value, b.value) ? 1.0 : 0.0;
-        } else {
-            // Numeric ordinal/binary: similarity = 1 - |a - b|
-            sim = 1.0 - Math.abs(a.value - b.value);
+    
+    const fields = Object.keys(weights);
+    const debugFields = [];
+    for (const key of fields) {
+        let valA = myLifestyle[key];
+        let valB = candidateLifestyle[key];
+        const weight = weights[key] || 0;
+        
+        if (weight === 0) continue;
+        
+        // Quantize numeric values
+        if (key !== 'interests' && key !== 'languages' && key !== 'personalityType') {
+            valA = quantize(key, valA);
+            valB = quantize(key, valB);
         }
-
-        weightedSimSum += w * sim;
-        totalWeight += w;
+        
+        // Skip if either user is missing data for this field
+        if (valA === null || valA === undefined || valB === null || valB === undefined) {
+            debugFields.push(`${key}:SKIP(valA=${valA},valB=${valB})`);
+            continue;
+        }
+        
+        const sim = calculateAttributeSim(key, valA, valB);
+        weightedSimSum += weight * sim;
+        totalWeight += weight;
+        debugFields.push(`${key}:sim=${sim.toFixed(2)},w=${weight.toFixed(3)}`);
     }
-
+    
     if (totalWeight === 0) return 0;
-    return weightedSimSum / totalWeight; // ∈ [0, 1]
+    const score = Math.round((weightedSimSum / totalWeight) * 100);
+    if (customWeights) {
+        console.log(`[calcMatch] score=${score} fields=[${debugFields.join(' | ')}]`);
+    }
+    return score;
 }
 
 /**
- * Compute lifestyle compatibility score (0–100) using Vector-based
- * Weighted Cosine Similarity.
- *
- * Architecture (3 layers):
- *   Layer 1 — Quantization: convert all lifestyle values to [0, 1] scale
- *   Layer 2 — Vectorization + Weighting: build weighted feature vectors
- *   Layer 3 — Weighted Cosine Similarity: compute overall compatibility
+ * Compute Preference Match (0 - 100).
+ * Evaluates how well the candidate's preferences align with mine.
+ * Score is based on matching budget, room type, and preferred districts.
  */
-function computeLifestyleScore(myLifestyle, candidateLifestyle, myPrefs, candidatePrefs) {
-    if (!myLifestyle || !candidateLifestyle) return 0;
+// function calculatePreferenceMatch(myPrefs, candidatePrefs) {
+//     if (!myPrefs || !candidatePrefs) return 0;
+    
+//     let score = 0;
+//     let weight = 0;
 
-    // Layer 1 & 2: Vectorize both profiles
-    const vecA = vectorizeLifestyle(myLifestyle);
-    const vecB = vectorizeLifestyle(candidateLifestyle);
+//     // 1. District match (60% weight)
+//     const myDistricts = Array.isArray(myPrefs.preferred_districts) ? myPrefs.preferred_districts : [];
+//     const theirDistricts = Array.isArray(candidatePrefs.preferred_districts) ? candidatePrefs.preferred_districts : [];
+    
+//     if (myDistricts.length > 0 && theirDistricts.length > 0) {
+//         const overlap = myDistricts.filter(d => theirDistricts.includes(d)).length;
+//         if (overlap > 0) score += 60;
+//         weight += 60;
+//     } else if (myDistricts.length === 0 && theirDistricts.length === 0) {
+//         score += 60;
+//         weight += 60;
+//     }
+//     if (myPrefs.room_type && candidatePrefs.room_type) {
+//         if (myPrefs.room_type === candidatePrefs.room_type) score += 20;
+//         weight += 20;
+//     }
+//     const minA = Number(myPrefs.budget_min) || 0;
+//     const maxA = Number(myPrefs.budget_max) || Infinity;
+//     const minB = Number(candidatePrefs.budget_min) || 0;
+//     const maxB = Number(candidatePrefs.budget_max) || Infinity;
+    
+//     if (Math.max(minA, minB) <= Math.min(maxA, maxB)) {
+//         score += 20; 
+//     }
+//     weight += 20;
 
-    if (vecA.length === 0 || vecB.length === 0) return 0;
+//     if (weight === 0) return 0;
+//     return Math.round((score / weight) * 100);
+// }
 
-    // Layer 3: Weighted Cosine Similarity → [0, 1]
-    const similarity = weightedCosineSimilarity(vecA, vecB);
+// async function computeExperienceData(candidateIds) {
+//     if (!candidateIds || candidateIds.length === 0) return new Map();
 
-    // Convert to percentage [0, 100]
-    let score = Math.round(similarity * 100);
+//     const ratings = await prisma.roommateRating.findMany({
+//         where: { target_id: { in: candidateIds } },
+//         select: { target_id: true, overall_rating: true },
+//     });
 
-    return Math.min(100, Math.max(0, score));
-}
+//     const grouped = new Map();
+//     for (const r of ratings) {
+//         if (!grouped.has(r.target_id)) grouped.set(r.target_id, []);
+//         grouped.get(r.target_id).push(r);
+//     }
 
-// ─── Collaborative Filtering helpers ─────────────────────────────────────────
-
-/**
- * Build roommate interaction matrix from RoommateMatch table.
- * PENDING: one-way (requester → target)
- * ACCEPTED: two-way
- * Returns Map<userId, Set<userId>>
- */
-async function buildRoommateInteractionMatrix() {
-    const matches = await prisma.roommateMatch.findMany({
-        where: { status: { in: ['PENDING', 'ACCEPTED'] } },
-        select: { requester_id: true, target_id: true, status: true },
-    });
-    const matrix = new Map();
-    const addEdge = (from, to) => {
-        if (!matrix.has(from)) matrix.set(from, new Set());
-        matrix.get(from).add(to);
-    };
-    for (const m of matches) {
-        addEdge(m.requester_id, m.target_id);
-        if (m.status === 'ACCEPTED') addEdge(m.target_id, m.requester_id);
-    }
-    return matrix;
-}
-
-/**
- * Build room favorite matrix from FavoriteRoom table.
- * Returns Map<userId, Set<roomId>>
- */
-async function buildRoomFavMatrix() {
-    const favs = await prisma.favoriteRoom.findMany({
-        select: { userId: true, roomId: true },
-    });
-    const matrix = new Map();
-    for (const f of favs) {
-        if (!matrix.has(f.userId)) matrix.set(f.userId, new Set());
-        matrix.get(f.userId).add(f.roomId);
-    }
-    return matrix;
-}
-
-/**
- * Jaccard similarity between two Sets.
- * Returns number in [0.0, 1.0]
- */
-function jaccardSimilarity(setA, setB) {
-    if (!setA || !setB || setA.size === 0 || setB.size === 0) return 0;
-    let intersection = 0;
-    for (const item of setA) {
-        if (setB.has(item)) intersection++;
-    }
-    const union = setA.size + setB.size - intersection;
-    return union === 0 ? 0 : intersection / union;
-}
-
-/**
- * Compute CF boost for a (userId, candidateId) pair using full CF algorithm.
- * roommateSim = max(directJaccard, maxNeighborJaccard)
- * roomFavSim  = jaccard(myFavSet, candFavSet)
- * combinedSim = min(1.0, 0.6 * roommateSim + 0.4 * roomFavSim)
- * cfBoost     = round(15 * combinedSim)  → [0, 15]
- */
-
-
-
-
-function computeCFBoost(userId, candidateId, roommateMatrix, roomFavMatrix) {
-    const myRoommateSet = roommateMatrix.get(userId) || new Set();
-    const candRoommateSet = roommateMatrix.get(candidateId) || new Set();
-    const myFavSet = roomFavMatrix.get(userId) || new Set();
-    const candFavSet = roomFavMatrix.get(candidateId) || new Set();
-
-    // Cold start: no data at all
-    if (myRoommateSet.size === 0 && myFavSet.size === 0) return 0;
-
-    // Direct jaccard between user and candidate
-    const directJaccard = jaccardSimilarity(myRoommateSet, candRoommateSet);
-
-    // Neighbor-based: find max jaccard between any neighbor of userId and candidateId
-    let maxNeighborJaccard = 0;
-    for (const [neighborId, neighborSet] of roommateMatrix) {
-        if (neighborId === userId || neighborId === candidateId) continue;
-        if (!myRoommateSet.has(neighborId)) continue; // only neighbors of userId
-        const sim = jaccardSimilarity(candRoommateSet, neighborSet);
-        if (sim > maxNeighborJaccard) maxNeighborJaccard = sim;
-    }
-
-    const roommateSim = Math.max(directJaccard, maxNeighborJaccard);
-    const roomFavSim = jaccardSimilarity(myFavSet, candFavSet);
-    const combinedSim = Math.min(1.0, 0.6 * roommateSim + 0.4 * roomFavSim);
-    return Math.round(15 * combinedSim);
-}
-
-
-
-/**
- * Compute experience boost from roommate ratings for a list of candidate IDs.
- * experienceBoost = clamp(round(10 * (avgRating - 1) / 4), 0, 10)
- * wouldLiveAgainRate = round(countTrue / total * 100), null if no ratings
- * Returns Map<candidateId, { avgRating, experienceBoost, wouldLiveAgainRate }>
- */
-async function computeExperienceData(candidateIds) {
-    if (!candidateIds || candidateIds.length === 0) return new Map();
-
-    const ratings = await prisma.roommateRating.findMany({
-        where: { target_id: { in: candidateIds } },
-        select: { target_id: true, overall_rating: true },
-    });
-
-    const grouped = new Map();
-    for (const r of ratings) {
-        if (!grouped.has(r.target_id)) grouped.set(r.target_id, []);
-        grouped.get(r.target_id).push(r);
-    }
-
-    const result = new Map();
-    for (const [targetId, list] of grouped) {
-        const total = list.length;
-        const avgRating = list.reduce((sum, r) => sum + r.overall_rating, 0) / total;
-        const experienceBoost = Math.min(10, Math.max(0, Math.round(10 * (avgRating - 1) / 4)));
-        const wouldLiveAgainRate = null;
-        result.set(targetId, { avgRating, experienceBoost, wouldLiveAgainRate });
-    }
-    return result;
-}
+//     const result = new Map();
+//     for (const [targetId, list] of grouped) {
+//         const total = list.length;
+//         const avgRating = list.reduce((sum, r) => sum + r.overall_rating, 0) / total;
+//         const experienceBoost = Math.min(10, Math.max(0, Math.round(10 * (avgRating - 1) / 4)));
+//         const wouldLiveAgainRate = null;
+//         result.set(targetId, { avgRating, experienceBoost, wouldLiveAgainRate });
+//     }
+//     return result;
+// }
 
 // ─── Core suggestion logic ────────────────────────────────────────────────────
 
-/**
- * Lấy gợi ý roommate
- * matchScore = min(100, lifestyleScore + cfBoost + experienceBoost)
- */
 async function getSuggestions(userId, params) {
     const limit = Math.min(50, Math.max(1, parseInt(params.limit) || 20));
+    const normalizedWeights = normalizeWeights(params.weights);
+    console.log('[getSuggestions] params.weights =', JSON.stringify(params.weights), '→ normalizedWeights =', JSON.stringify(normalizedWeights));
 
-    const me = await prisma.user.findUnique({
-        where: { id: userId },
+    const me = await prisma.user.findUnique({        where: { id: userId },
         include: { lifestyleProfile: true, preference: true },
     });
     if (!me) {
@@ -434,40 +335,25 @@ async function getSuggestions(userId, params) {
     });
 
     if (hasUsableGender && (myGenderNorm === 'nam' || myGenderNorm === 'nữ')) {
-        // Giữ lại: cùng giới HOẶC chưa khai báo giới tính (null/undefined/rỗng)
-        // Loại bỏ: rõ ràng khác giới
+  
         candidates = candidates.filter((u) => {
             const cg = genderNorm(u.gender);
             return cg === myGenderNorm || cg === null;
         });
     }
 
-    const candidateIds = candidates.map((u) => u.id);
+    console.log(`[getSuggestions] userId=${userId} gender="${me.gender}" myGenderNorm="${myGenderNorm}" hasUsableGender=${hasUsableGender} candidates=${candidates.length}`);
 
-    // Load all CF and experience data in parallel (single batch per source)
-    const [roommateMatrix, roomFavMatrix, experienceMap] = await Promise.all([
-        buildRoommateInteractionMatrix().catch(() => new Map()),
-        buildRoomFavMatrix().catch(() => new Map()),
-        computeExperienceData(candidateIds).catch(() => new Map()),
-    ]);
+    const candidateIds = candidates.map((u) => u.id);
 
     const scored = candidates.map((u) => {
         const candidateGenderNorm = genderNorm(u.gender);
         const isSameGender = hasUsableGender && candidateGenderNorm === myGenderNorm;
 
-        const lifestyleScore = computeLifestyleScore(
-            me.lifestyleProfile,
-            u.lifestyleProfile,
-            me.preference,
-            u.preference
-        );
-        
-        
-        const cfBoost = computeCFBoost(userId, u.id, roommateMatrix, roomFavMatrix);
+        const lifestyleMatch = calculateLifestyleMatch(me.lifestyleProfile, u.lifestyleProfile, normalizedWeights);
 
-        const expData = experienceMap.get(u.id) || { experienceBoost: 0, wouldLiveAgainRate: null };
-
-        const matchScore = Math.min(100, lifestyleScore + cfBoost + expData.experienceBoost);
+        // Match Score = 100% Lifestyle
+        const matchScore = lifestyleMatch;
 
         return {
             user: {
@@ -489,7 +375,7 @@ async function getSuggestions(userId, params) {
                       noise_tolerance: u.lifestyleProfile.noise_tolerance,
                       guest_frequency: u.lifestyleProfile.guest_frequency,
                       interests: u.lifestyleProfile.interests || [],
-                      deal_breakers: u.lifestyleProfile.deal_breakers || null,
+                      languages: u.lifestyleProfile.languages || [],
                   }
                 : null,
             preference: u.preference
@@ -502,9 +388,7 @@ async function getSuggestions(userId, params) {
                   }
                 : null,
             matchScore,
-            cfScore: cfBoost,
-            experienceScore: expData.experienceBoost,
-            wouldLiveAgainRate: expData.wouldLiveAgainRate,
+            lifestyleMatch,
             isSameGender,
             matchStatus: matchStatusMap.get(u.id) || null,
         };
@@ -755,7 +639,6 @@ async function getPublicProfile(userId) {
                       temperature_preference: lp.temperature_preference,
                       quiet_hours_preference: lp.quiet_hours_preference,
                       interests: lp.interests || [],
-                      deal_breakers: lp.deal_breakers || null,
                       languages: lp.languages || [],
                       preferred_lease_months: lp.preferred_lease_months,
                   }
@@ -1063,7 +946,6 @@ async function getTopSearchersInArea(currentUserId, areaQuery, limit = 10) {
                           noise_tolerance: u.lifestyleProfile.noise_tolerance,
                           guest_frequency: u.lifestyleProfile.guest_frequency,
                           interests: u.lifestyleProfile.interests || [],
-                          deal_breakers: u.lifestyleProfile.deal_breakers || null,
                       }
                     : null,
                 preference: u.preference
@@ -1348,22 +1230,20 @@ async function getPeopleYouMayKnow(userId) {
 
     const allCandidateIds = Array.from(areaUserIdMap.keys());
 
-    // ── Bước 6: Song song — fetch users + CF matrices + experience ──
-    const [candidateUsers, roommateMatrix, roomFavMatrix, experienceMap] = await Promise.all([
+    // ── Bước 6: Song song — fetch users + experience ──
+    const [candidateUsers, experienceMap] = await Promise.all([
         prisma.user.findMany({
             where: { id: { in: allCandidateIds }, status: 'ACTIVE', role: 'TENANT' },
             include: { lifestyleProfile: true, preference: true },
         }),
-        buildRoommateInteractionMatrix().catch(() => new Map()),
-        buildRoomFavMatrix().catch(() => new Map()),
         computeExperienceData(allCandidateIds).catch(() => new Map()),
     ]);
 
     // ── Bước 7: Tính scores và build response ──
     const data = candidateUsers.map((u) => {
         const { area, activity } = areaUserIdMap.get(u.id) || { area: '', activity: { views: 0, favorites: 0, preorders: 0, totalScore: 0 } };
-        const lifestyleScore = computeLifestyleScore(me.lifestyleProfile, u.lifestyleProfile, me.preference, u.preference);
-        const cfBoost = computeCFBoost(userId, u.id, roommateMatrix, roomFavMatrix);
+        const lifestyleMatch = calculateLifestyleMatch(me.lifestyleProfile, u.lifestyleProfile);
+        const preferenceMatch = calculatePreferenceMatch(me.preference, u.preference);
         const expData = experienceMap.get(u.id) || { experienceBoost: 0, wouldLiveAgainRate: null };
         return {
             user: { id: u.id, fullName: u.fullName, avatarUrl: u.avatarUrl, gender: u.gender },
@@ -1377,11 +1257,13 @@ async function getPeopleYouMayKnow(userId) {
                 noise_tolerance: u.lifestyleProfile.noise_tolerance,
                 guest_frequency: u.lifestyleProfile.guest_frequency,
                 interests: u.lifestyleProfile.interests || [],
-                deal_breakers: u.lifestyleProfile.deal_breakers || null,
             } : null,
             reasons: [{ type: 'same_area_search', area, activity }],
             matchStatus: matchStatusMap.get(u.id) || null,
-            matchScore: Math.min(100, lifestyleScore + cfBoost + expData.experienceBoost),
+            lifestyleMatch,
+            preferenceMatch,
+            // 70% Lifestyle, 30% Preference
+            matchScore: Math.min(100, Math.round((lifestyleMatch * 0.7) + (preferenceMatch * 0.3)) + expData.experienceBoost),
             areaName: area,
         };
     });
@@ -1405,7 +1287,7 @@ function extractAreaFromAddress(address) {
 }
 
 module.exports = {
-    computeLifestyleScore,
+    calculateLifestyleMatch,
     getSuggestions,
     sendRequest,
     getMyMatches,
@@ -1417,16 +1299,9 @@ module.exports = {
     createRoommateRating,
     checkRoommateRating,
     getPeopleYouMayKnow,
-    // helpers exported for testing
-    jaccardSimilarity,
-    computeCFBoost,
-    computeExperienceData,
-    buildRoommateInteractionMatrix,
-    buildRoomFavMatrix,
-    // vector-based scoring helpers (testing)
+    // attribute-based scoring helpers (testing)
     quantize,
-    vectorizeLifestyle,
-    weightedCosineSimilarity,
+    calculateAttributeSim,
     QUANT_MAPS,
     LIFESTYLE_WEIGHTS,
 };
