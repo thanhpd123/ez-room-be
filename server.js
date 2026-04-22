@@ -5,6 +5,7 @@ const swaggerUi = require('swagger-ui-express');
 const { Server: SocketServer } = require('socket.io');
 require('dotenv').config();
 
+const { isMailConfigured } = require('./utils/email');
 const swaggerSpec = require('./config/swagger');
 const supabase = require('./config/supabase');
 const { isSupabaseConfigured } = require('./config/supabase-helpers');
@@ -257,6 +258,12 @@ app.use((err, req, res, next) => {
 
 httpServer.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
+    if (isMailConfigured()) {
+        const mp = Number(process.env.MAIL_PORT) || 587;
+        console.log(`[mail] SMTP enabled (${process.env.MAIL_HOST}:${mp})`);
+    } else {
+        console.warn('[mail] SMTP not configured — set MAIL_HOST, MAIL_USER, and MAIL_PASS in .env to send mail');
+    }
     startPreorderPayoutReconciliationJob();
     startStaleCron();
 

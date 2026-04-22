@@ -1,8 +1,12 @@
 /**
  * Shared email helper for notifications (favourite room available, etc.)
  */
+function isMailConfigured() {
+    return !!(process.env.MAIL_HOST && process.env.MAIL_USER && process.env.MAIL_PASS);
+}
+
 function getTransporter() {
-    const hasMail = !!(process.env.MAIL_HOST && process.env.MAIL_USER && process.env.MAIL_PASS);
+    const hasMail = isMailConfigured();
     if (!hasMail) return null;
     const nodemailer = require('nodemailer');
     return nodemailer.createTransport({
@@ -31,4 +35,4 @@ async function sendEmail(to, subject, text, html) {
     }
 }
 
-module.exports = { getTransporter, sendEmail };
+module.exports = { isMailConfigured, getTransporter, sendEmail };
