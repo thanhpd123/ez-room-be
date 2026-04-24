@@ -85,6 +85,7 @@ function computeMatchScore(room, params, preference, avgRating) {
     const title = rental?.title || '';
     const desc = rental?.description || '';
     const addr = loc?.address || '';
+    const landlordName = (rental?.users?.fullName || '').toLowerCase();
 
     if (params.minPrice != null && !Number.isNaN(params.minPrice) && price >= params.minPrice)
         score += 5;
@@ -115,7 +116,8 @@ function computeMatchScore(room, params, preference, avgRating) {
             roomDesc.includes(q) ||
             district.toLowerCase().includes(q) ||
             city.toLowerCase().includes(q) ||
-            addr.toLowerCase().includes(q)
+            addr.toLowerCase().includes(q) ||
+            landlordName.includes(q)
         ) {
             score += 15;
         }
@@ -338,6 +340,11 @@ async function getPublicSearch(params, viewer = null) {
             { title: { contains: searchParams.q, mode: 'insensitive' } },
             { description: { contains: searchParams.q, mode: 'insensitive' } },
             {
+                users: {
+                    fullName: { contains: searchParams.q, mode: 'insensitive' },
+                },
+            },
+            {
                 location: {
                     is: { district: { contains: searchParams.q, mode: 'insensitive' } },
                 },
@@ -441,7 +448,7 @@ async function getPublicSearch(params, viewer = null) {
                     location: true,
                     images: true,
                     users: {
-                        select: { id: true, role: true, isVip: true },
+                        select: { id: true, role: true, isVip: true, fullName: true },
                     },
                     rooms: {
                         include: {
