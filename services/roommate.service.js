@@ -30,8 +30,7 @@ const QUANT_MAPS = {
     },
     cleanliness: {
         'không quan tâm': 0.0,
-        'bình thường': 0.33,
-        'sạch': 0.67,
+        'bình thường': 0.5,
         'rất sạch': 1.0,
     },
     noise_tolerance: {
@@ -46,15 +45,13 @@ const QUANT_MAPS = {
     },
     guest_frequency: {
         'không bao giờ': 0.0,
-        'hiếm': 0.33,
-        'thỉnh thoảng': 0.67,
-        'thường xuyên': 1.0,
+        'hiếm': 0.5,
+        'thỉnh thoảng': 1.0,
     },
     cooking_frequency: {
         'không nấu': 0.0,
-        'ít': 0.33,
-        'thường xuyên': 0.67,
-        'hàng ngày': 1.0,
+        'ít': 0.5,
+        'thường xuyên': 1.0,
     },
 };
 
@@ -63,16 +60,16 @@ const QUANT_MAPS = {
  * Custom weights from the frontend multiply these values.
  */
 const LIFESTYLE_WEIGHTS = {
-    smoking:            0.1,   
-    sleep_schedule:     0.1,   
-    pets_allowed:       0.1,   
-    noise_tolerance:    0.1,  
-    guest_frequency:    0.1,  
-    drinking:           0.1,   
-    cooking_frequency:  0.1,  
-    work_from_home:     0.1,  
-    personalityType:    0.1,  
-    interests:          0.1,   
+    cleanliness:        0.20,
+    sleep_schedule:     0.16,
+    smoking:            0.13,
+    noise_tolerance:    0.13,
+    pets_allowed:       0.10,
+    guest_frequency:    0.09,
+    social_level:       0.08,
+    cooking_frequency:  0.06,
+    work_from_home:     0.04,
+    interests:          0.01,
 };
 
 
@@ -124,8 +121,6 @@ function calculateAttributeSim(key, valA, valB) {
         return unionSize > 0 ? overlap / unionSize : 0;
     
     
-    } else if (key === 'personalityType') {
-        return strEq(valA, valB) ? 1.0 : 0.0;
     } else {
         // Numeric ordinal/binary: similarity = 1 - |a - b|
         return 1.0 - Math.abs(valA - valB);
@@ -137,10 +132,13 @@ function calculateAttributeSim(key, valA, valB) {
  * @param {object|null} rawWeights - Object { [criterion]: string|number }
  * @returns {object|null} normalizedWeights với sum = 1.0, hoặc null nếu không có weights hợp lệ
  */
+
+
 function normalizeWeights(rawWeights) {
     if (!rawWeights || typeof rawWeights !== 'object') return null;
 
     const VALID_KEYS = new Set(Object.keys(LIFESTYLE_WEIGHTS));
+    
     const sanitized = {};
 
     for (const [key, val] of Object.entries(rawWeights)) {
@@ -168,6 +166,8 @@ function normalizeWeights(rawWeights) {
 function calculateLifestyleMatch(myLifestyle, candidateLifestyle, customWeights) {
     if (!myLifestyle || !candidateLifestyle) return 0;
     // allZero sentinel: caller should have handled this, but guard here too
+
+
     if (customWeights?.allZero) return 0;
 
     const weights = customWeights || LIFESTYLE_WEIGHTS;
@@ -176,6 +176,8 @@ function calculateLifestyleMatch(myLifestyle, candidateLifestyle, customWeights)
     
     const fields = Object.keys(weights);
     const debugFields = [];
+
+
     for (const key of fields) {
         let valA = myLifestyle[key];
         let valB = candidateLifestyle[key];
@@ -184,7 +186,7 @@ function calculateLifestyleMatch(myLifestyle, candidateLifestyle, customWeights)
         if (weight === 0) continue;
         
         // Quantize numeric values
-        if (key !== 'interests' && key !== 'languages' && key !== 'personalityType') {
+        if (key !== 'interests' && key !== 'languages') {
             valA = quantize(key, valA);
             valB = quantize(key, valB);
         }
@@ -198,6 +200,7 @@ function calculateLifestyleMatch(myLifestyle, candidateLifestyle, customWeights)
         const sim = calculateAttributeSim(key, valA, valB);
         weightedSimSum += weight * sim;
         totalWeight += weight;
+
         debugFields.push(`${key}:sim=${sim.toFixed(2)},w=${weight.toFixed(3)}`);
     }
     
@@ -925,12 +928,7 @@ async function getTopSearchersInArea(currentUserId, areaQuery, limit = 10) {
             const candidateGenderNorm = genderNorm(u.gender);
             const isSameGender = hasUsableGender && candidateGenderNorm === myGenderNorm;
             const baseScore = currentUser
-                ? computeLifestyleScore(
-                      currentUser.lifestyleProfile,
-                      u.lifestyleProfile,
-                      currentUser.preference,
-                      u.preference
-                  )
+                ? calculateLifestyleMatch(currentUser.lifestyleProfile, u.lifestyleProfile, null)
                 : 0;
             return {
                 user: { id: u.id, fullName: u.fullName, avatarUrl: u.avatarUrl, gender: u.gender },
@@ -1086,27 +1084,22 @@ async function getPeopleYouMayKnow(userId) {
         if (m.status === 'BLOCKED') excludeIds.add(otherId);
     }
 
-    // ── Bước 2: Nếu chưa có interaction → random 5 người (song song với CF matrices) ──
+    // ── Bước 2: Nếu chưa có interaction → random 5 người ──
     if (myInteractions.length === 0) {
-        const [randomUsers, roommateMatrix, roomFavMatrix] = await Promise.all([
-            prisma.user.findMany({
-                where: { id: { notIn: Array.from(excludeIds) }, status: 'ACTIVE', role: 'TENANT' },
-                include: { lifestyleProfile: true, preference: true },
-                take: 50,
-            }),
-            buildRoommateInteractionMatrix().catch(() => new Map()),
-            buildRoomFavMatrix().catch(() => new Map()),
-        ]);
+        const randomUsers = await prisma.user.findMany({
+            where: { id: { notIn: Array.from(excludeIds) }, status: 'ACTIVE', role: 'TENANT' },
+            include: { lifestyleProfile: true, preference: true },
+            take: 50,
+        });
 
         const shuffled = randomUsers.sort(() => Math.random() - 0.5).slice(0, 5);
         const data = shuffled.map((u) => {
-            const lifestyleScore = computeLifestyleScore(me.lifestyleProfile, u.lifestyleProfile, me.preference, u.preference);
-            const cfBoost = computeCFBoost(userId, u.id, roommateMatrix, roomFavMatrix);
+            const lifestyleScore = calculateLifestyleMatch(me.lifestyleProfile, u.lifestyleProfile, null);
             return {
                 user: { id: u.id, fullName: u.fullName, avatarUrl: u.avatarUrl, gender: u.gender },
                 reasons: [{ type: 'random_suggestion' }],
                 matchStatus: matchStatusMap.get(u.id) || null,
-                matchScore: Math.min(100, lifestyleScore + cfBoost),
+                matchScore: Math.min(100, lifestyleScore),
                 areaName: null,
             };
         });
@@ -1229,21 +1222,18 @@ async function getPeopleYouMayKnow(userId) {
 
     const allCandidateIds = Array.from(areaUserIdMap.keys());
 
-    // ── Bước 6: Song song — fetch users + experience ──
-    const [candidateUsers, experienceMap] = await Promise.all([
+    // ── Bước 6: Song song — fetch users ──
+    const [candidateUsers] = await Promise.all([
         prisma.user.findMany({
             where: { id: { in: allCandidateIds }, status: 'ACTIVE', role: 'TENANT' },
             include: { lifestyleProfile: true, preference: true },
         }),
-        computeExperienceData(allCandidateIds).catch(() => new Map()),
     ]);
 
     // ── Bước 7: Tính scores và build response ──
     const data = candidateUsers.map((u) => {
         const { area, activity } = areaUserIdMap.get(u.id) || { area: '', activity: { views: 0, favorites: 0, preorders: 0, totalScore: 0 } };
-        const lifestyleMatch = calculateLifestyleMatch(me.lifestyleProfile, u.lifestyleProfile);
-        const preferenceMatch = calculatePreferenceMatch(me.preference, u.preference);
-        const expData = experienceMap.get(u.id) || { experienceBoost: 0, wouldLiveAgainRate: null };
+        const lifestyleMatch = calculateLifestyleMatch(me.lifestyleProfile, u.lifestyleProfile, null);
         return {
             user: { id: u.id, fullName: u.fullName, avatarUrl: u.avatarUrl, gender: u.gender },
             lifestyle: u.lifestyleProfile ? {
@@ -1259,10 +1249,7 @@ async function getPeopleYouMayKnow(userId) {
             } : null,
             reasons: [{ type: 'same_area_search', area, activity }],
             matchStatus: matchStatusMap.get(u.id) || null,
-            lifestyleMatch,
-            preferenceMatch,
-            // 70% Lifestyle, 30% Preference
-            matchScore: Math.min(100, Math.round((lifestyleMatch * 0.7) + (preferenceMatch * 0.3)) + expData.experienceBoost),
+            matchScore: Math.min(100, lifestyleMatch),
             areaName: area,
         };
     });

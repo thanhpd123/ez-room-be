@@ -13,10 +13,10 @@ console.log('=== Attribute-Based Scoring Smoke Test ===\n');
 
 // ─── Test 1: Identical profiles → ~100% ───
 const profileA = {
-    smoking: false, drinking: false, pets_allowed: false, work_from_home: true,
-    sleep_schedule: 'Bình thường (22h-0h)', cleanliness: 'Sạch',
+    smoking: false, pets_allowed: false, work_from_home: true,
+    sleep_schedule: 'Bình thường (22h-0h)', cleanliness: 'Bình thường',
     noise_tolerance: 'Trung bình', social_level: 'Trung bình',
-    guest_frequency: 'Thỉnh thoảng', cooking_frequency: 'Ít',
+    guest_frequency: 'Thỉnh thoảng', cooking_frequency: 'thường xuyên',
     personalityType: 'Hướng nội', interests: ['Đọc sách', 'Gaming'],
     deal_breakers: null,
 };
@@ -27,10 +27,10 @@ console.assert(score1 >= 95, `FAIL: Expected >=95, got ${score1}`);
 
 // ─── Test 2: Completely opposite profiles → low score ───
 const profileB = {
-    smoking: true, drinking: true, pets_allowed: true, work_from_home: false,
+    smoking: true, pets_allowed: true, work_from_home: false,
     sleep_schedule: 'Khuya (sau 0h)', cleanliness: 'Không quan tâm',
     noise_tolerance: 'Cao', social_level: 'Cao',
-    guest_frequency: 'Thường xuyên', cooking_frequency: 'Hàng ngày',
+    guest_frequency: 'Thỉnh thoảng', cooking_frequency: 'không nấu',
     personalityType: 'Hướng ngoại', interests: ['Thể thao', 'Du lịch'],
     deal_breakers: null,
 };
@@ -39,11 +39,11 @@ const score2 = calculateLifestyleMatch(profileA, profileB);
 console.log(`Test 2 - Opposite profiles: ${score2}% (expected low, <40)`);
 console.assert(score2 < 40, `FAIL: Expected <40, got ${score2}`);
 
-// ─── Test 3: "Sạch" vs "Rất sạch" should be HIGH (not 0 like old system) ───
+// ─── Test 3: "Bình thường" vs "Rất sạch" should be medium ───
 const profileC = { ...profileA, cleanliness: 'Rất sạch' };
 const score3 = calculateLifestyleMatch(profileA, profileC);
-console.log(`Test 3 - Sạch vs Rất sạch: ${score3}% (expected high, >85)`);
-console.assert(score3 > 85, `FAIL: Expected >85, got ${score3}`);
+console.log(`Test 3 - Bình thường vs Rất sạch: ${score3}% (expected medium, >70)`);
+console.assert(score3 > 70, `FAIL: Expected >70, got ${score3}`);
 
 // ─── Test 4: "Bình thường (22h-0h)" vs "Khuya (sau 0h)" should score medium ───
 const profileD = { ...profileA, sleep_schedule: 'Khuya (sau 0h)' };
@@ -79,9 +79,14 @@ console.assert(score8 >= 30 && score8 <= 80, `FAIL: Expected 30-80, got ${score8
 
 // ─── Test 9: Quantization maps check ───
 console.log('\n--- Quantization checks ---');
-console.log(`Sạch → ${quantize('cleanliness', 'Sạch')} (expected 0.67)`);
 console.log(`Rất sạch → ${quantize('cleanliness', 'Rất sạch')} (expected 1.0)`);
-console.log(`Bình thường → ${quantize('cleanliness', 'Bình thường')} (expected 0.33)`);
+console.log(`Bình thường → ${quantize('cleanliness', 'Bình thường')} (expected 0.5)`);
+console.log(`Không quan tâm → ${quantize('cleanliness', 'Không quan tâm')} (expected 0.0)`);
+console.log(`thường xuyên (cooking) → ${quantize('cooking_frequency', 'thường xuyên')} (expected 1.0)`);
+console.log(`ít (cooking) → ${quantize('cooking_frequency', 'ít')} (expected 0.5)`);
+console.log(`không nấu → ${quantize('cooking_frequency', 'không nấu')} (expected 0.0)`);
+console.log(`thỉnh thoảng (guest) → ${quantize('guest_frequency', 'thỉnh thoảng')} (expected 1.0)`);
+console.log(`hiếm (guest) → ${quantize('guest_frequency', 'hiếm')} (expected 0.5)`);
 console.log(`smoking true → ${quantize('smoking', true)} (expected 1.0)`);
 console.log(`smoking false → ${quantize('smoking', false)} (expected 0.0)`);
 console.log(`null → ${quantize('cleanliness', null)} (expected null)`);
