@@ -22,11 +22,15 @@ async function getSuggestions(req, res) {
                 weights = null;
             }
         }
+
         console.log('[getSuggestions] req.query.weights =', req.query.weights, '→ parsed weights =', JSON.stringify(weights));
+        
         const result = await roommateService.getSuggestions(
             req.auth.user.id,
             { limit: req.query.limit, weights }
         );
+
+        
         return res.json({
             success: true,
             ...result,
