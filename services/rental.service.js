@@ -83,15 +83,15 @@ async function createRental(ownerId, body, files = {}) {
                 const sanitizedName = docFile.originalname
                     .replace(/[^\w.-]/g, '')  // Remove non-word chars except . - _
                     .substring(0, 200);  // Limit length
-                
+
                 const fileName = `temp/documents/${Date.now()}_${sanitizedName}`;
-                console.log('📝 Document upload START:', { 
+                console.log('📝 Document upload START:', {
                     originalName: docFile.originalname,
                     sanitizedName,
-                    size: docFile.size, 
-                    mime: docFile.mimetype 
+                    size: docFile.size,
+                    mime: docFile.mimetype
                 });
-                
+
                 const { data, error: uploadError } = await supabase.storage
                     .from('rental-documents')
                     .upload(fileName, docFile.buffer, {
@@ -212,11 +212,11 @@ async function createRental(ownerId, body, files = {}) {
             createdAt: completeRental.createdAt,
             location: completeRental.location
                 ? {
-                      id: completeRental.location.id,
-                      address: completeRental.location.address,
-                      district: completeRental.location.district,
-                      city: completeRental.location.city,
-                  }
+                    id: completeRental.location.id,
+                    address: completeRental.location.address,
+                    district: completeRental.location.district,
+                    city: completeRental.location.city,
+                }
                 : null,
             images: (completeRental.images || []).map((img) => img.image_url),
             documentsCount: (completeRental.rental_documents || []).length,
@@ -243,7 +243,7 @@ async function getRentals(params) {
                 location: true,
                 images: {
                     select: { imageUrl: true },
-                    orderBy: { createdAt: 'asc' },
+                    orderBy: { created_at: 'asc' },
                     take: 1,
                 },
                 _count: {
@@ -270,18 +270,18 @@ async function getRentals(params) {
             createdAt: r.createdAt,
             owner: r.users
                 ? {
-                      id: r.users.id,
-                      fullName: r.users.fullName,
-                      avatarUrl: r.users.avatarUrl,
-                  }
+                    id: r.users.id,
+                    fullName: r.users.fullName,
+                    avatarUrl: r.users.avatarUrl,
+                }
                 : null,
             location: r.location
                 ? {
-                      id: r.location.id,
-                      address: r.location.address,
-                      district: r.location.district,
-                      city: r.location.city,
-                  }
+                    id: r.location.id,
+                    address: r.location.address,
+                    district: r.location.district,
+                    city: r.location.city,
+                }
                 : null,
             images: (r.images || []).map((img) => img.imageUrl),
             imageCount: r._count?.images || 0,
@@ -327,20 +327,20 @@ async function getRentalById(rentalId) {
             createdAt: rental.createdAt,
             owner: rental.users
                 ? {
-                      id: rental.users.id,
-                      fullName: rental.users.fullName,
-                      avatarUrl: rental.users.avatarUrl,
-                      email: rental.users.email,
-                      phone: rental.users.phone,
-                  }
+                    id: rental.users.id,
+                    fullName: rental.users.fullName,
+                    avatarUrl: rental.users.avatarUrl,
+                    email: rental.users.email,
+                    phone: rental.users.phone,
+                }
                 : null,
             location: rental.location
                 ? {
-                      id: rental.location.id,
-                      address: rental.location.address,
-                      district: rental.location.district,
-                      city: rental.location.city,
-                  }
+                    id: rental.location.id,
+                    address: rental.location.address,
+                    district: rental.location.district,
+                    city: rental.location.city,
+                }
                 : null,
             rooms: rental.rooms || [],
             images: (rental.images || []).map((img) => img.imageUrl),
@@ -385,18 +385,18 @@ async function getMyRentals(ownerId, params) {
             createdAt: r.createdAt,
             owner: r.users
                 ? {
-                      id: r.users.id,
-                      fullName: r.users.fullName,
-                      avatarUrl: r.users.avatarUrl,
-                  }
+                    id: r.users.id,
+                    fullName: r.users.fullName,
+                    avatarUrl: r.users.avatarUrl,
+                }
                 : null,
             location: r.location
                 ? {
-                      id: r.location.id,
-                      address: r.location.address,
-                      district: r.location.district,
-                      city: r.location.city,
-                  }
+                    id: r.location.id,
+                    address: r.location.address,
+                    district: r.location.district,
+                    city: r.location.city,
+                }
                 : null,
             images: (r.images || []).map((img) => img.imageUrl),
         })),
@@ -451,20 +451,20 @@ async function getRentalsForModeration(params) {
             createdAt: r.createdAt,
             owner: r.users
                 ? {
-                      id: r.users.id,
-                      fullName: r.users.fullName,
-                      avatarUrl: r.users.avatarUrl,
-                      email: r.users.email,
-                      phone: r.users.phone,
-                  }
+                    id: r.users.id,
+                    fullName: r.users.fullName,
+                    avatarUrl: r.users.avatarUrl,
+                    email: r.users.email,
+                    phone: r.users.phone,
+                }
                 : null,
             location: r.location
                 ? {
-                      id: r.location.id,
-                      address: r.location.address,
-                      district: r.location.district,
-                      city: r.location.city,
-                  }
+                    id: r.location.id,
+                    address: r.location.address,
+                    district: r.location.district,
+                    city: r.location.city,
+                }
                 : null,
             images: (r.images || []).map((img) => img.imageUrl),
             documents: (r.rental_documents || []).map((doc) => ({
@@ -521,11 +521,11 @@ async function updateRentalStatus(rentalId, body) {
             status: updatedRental.status,
             location: updatedRental.location
                 ? {
-                      id: updatedRental.location.id,
-                      address: updatedRental.location.address,
-                      district: updatedRental.location.district,
-                      city: updatedRental.location.city,
-                  }
+                    id: updatedRental.location.id,
+                    address: updatedRental.location.address,
+                    district: updatedRental.location.district,
+                    city: updatedRental.location.city,
+                }
                 : null,
         },
     };
@@ -653,20 +653,20 @@ async function getPublicRentalById(rentalId) {
             createdAt: rental.createdAt,
             owner: rental.users
                 ? {
-                      id: rental.users.id,
-                      fullName: rental.users.fullName,
-                      avatarUrl: rental.users.avatarUrl,
-                      email: rental.users.email,
-                      phone: rental.users.phone,
-                  }
+                    id: rental.users.id,
+                    fullName: rental.users.fullName,
+                    avatarUrl: rental.users.avatarUrl,
+                    email: rental.users.email,
+                    phone: rental.users.phone,
+                }
                 : null,
             location: rental.location
                 ? {
-                      id: rental.location.id,
-                      address: rental.location.address,
-                      district: rental.location.district,
-                      city: rental.location.city,
-                  }
+                    id: rental.location.id,
+                    address: rental.location.address,
+                    district: rental.location.district,
+                    city: rental.location.city,
+                }
                 : null,
             rooms: roomsWithDetails,
             amenities: allAmenityNames,
@@ -694,10 +694,10 @@ async function getPublicRentals(params) {
                 districtTerms.length === 1
                     ? { district: { equals: districtTerms[0], mode: 'insensitive' } }
                     : {
-                          OR: districtTerms.map((t) => ({
-                              district: { equals: t, mode: 'insensitive' },
-                          })),
-                      }
+                        OR: districtTerms.map((t) => ({
+                            district: { equals: t, mode: 'insensitive' },
+                        })),
+                    }
             );
         }
         if (cityParam) {
@@ -706,8 +706,8 @@ async function getPublicRentals(params) {
                 cityTerms.length === 1
                     ? { city: { equals: cityTerms[0], mode: 'insensitive' } }
                     : {
-                          OR: cityTerms.map((t) => ({ city: { equals: t, mode: 'insensitive' } })),
-                      }
+                        OR: cityTerms.map((t) => ({ city: { equals: t, mode: 'insensitive' } })),
+                    }
             );
         }
         where.location = {
@@ -740,11 +740,11 @@ async function getPublicRentals(params) {
                 createdAt: r.createdAt,
                 location: r.location
                     ? {
-                          id: r.location.id,
-                          address: r.location.address,
-                          district: r.location.district,
-                          city: r.location.city,
-                      }
+                        id: r.location.id,
+                        address: r.location.address,
+                        district: r.location.district,
+                        city: r.location.city,
+                    }
                     : null,
                 images: imgs.length > 0 ? imgs : [placeholderImage],
             };
@@ -847,10 +847,10 @@ async function getLandlordProfile(userId) {
             createdAt: r.createdAt,
             location: r.location
                 ? {
-                      address: r.location.address,
-                      district: r.location.district,
-                      city: r.location.city,
-                  }
+                    address: r.location.address,
+                    district: r.location.district,
+                    city: r.location.city,
+                }
                 : null,
             images: rentalImgs.length > 0 ? rentalImgs : [placeholderImage],
             roomCount: r.rooms ? r.rooms.length : 0,
@@ -875,17 +875,17 @@ async function getLandlordProfile(userId) {
                 createdAt: room.created_at,
                 location: r.location
                     ? {
-                          address: r.location.address,
-                          district: r.location.district,
-                          city: r.location.city,
-                      }
+                        address: r.location.address,
+                        district: r.location.district,
+                        city: r.location.city,
+                    }
                     : null,
                 images:
                     roomImgs.length > 0
                         ? roomImgs
                         : rentalImgs.length > 0
-                          ? rentalImgs
-                          : [placeholderImage],
+                            ? rentalImgs
+                            : [placeholderImage],
                 amenities: amenityNames,
             });
         }
@@ -920,10 +920,10 @@ async function getLandlordProfile(userId) {
                 createdAt: f.created_at,
                 reviewer: f.users
                     ? {
-                          id: f.users.id,
-                          fullName: f.users.fullName,
-                          avatarUrl: f.users.avatarUrl,
-                      }
+                        id: f.users.id,
+                        fullName: f.users.fullName,
+                        avatarUrl: f.users.avatarUrl,
+                    }
                     : null,
             })),
         },
@@ -1000,7 +1000,7 @@ async function updateRental(rentalId, userId, body, files = {}) {
                     .replace(/[^\w.-]/g, '')
                     .substring(0, 200);
                 const fileName = `temp/documents/${Date.now()}_${sanitizedName}`;
-                
+
                 const { data, error: uploadError } = await supabase.storage
                     .from('rental-documents')
                     .upload(fileName, docFile.buffer, {
@@ -1023,82 +1023,82 @@ async function updateRental(rentalId, userId, body, files = {}) {
 
     const result = await prisma.$transaction(
         async (tx) => {
-        await tx.rental.update({
-            where: { id: rentalId },
-            data: {
-                ...(title ? { title: title.trim() } : {}),
-                ...(description !== undefined ? { description: description?.trim() || null } : {}),
-                ...(locationId !== rental.locationId ? { locationId } : {}),
-                ...(newStatus ? { status: newStatus } : {}),
-            },
-        });
+            await tx.rental.update({
+                where: { id: rentalId },
+                data: {
+                    ...(title ? { title: title.trim() } : {}),
+                    ...(description !== undefined ? { description: description?.trim() || null } : {}),
+                    ...(locationId !== rental.locationId ? { locationId } : {}),
+                    ...(newStatus ? { status: newStatus } : {}),
+                },
+            });
 
-        if (images && Array.isArray(images)) {
-            await tx.rentalImage.deleteMany({ where: { rentalId } });
-            if (images.length > 0) {
-                await tx.rentalImage.createMany({
-                    data: images.map((url) => ({ rentalId, imageUrl: url })),
-                });
-            }
-        }
-
-        // Delete documents marked for removal
-        if (deleted_documents && deleted_documents.length > 0) {
-            await tx.rental_documents.deleteMany({
-                where: {
-                    id: { in: deleted_documents },
-                    rental_id: rentalId
+            if (images && Array.isArray(images)) {
+                await tx.rentalImage.deleteMany({ where: { rentalId } });
+                if (images.length > 0) {
+                    await tx.rentalImage.createMany({
+                        data: images.map((url) => ({ rentalId, imageUrl: url })),
+                    });
                 }
-            });
-        }
+            }
 
-        // Save uploaded document paths to rental_documents table
-        if (uploadedDocuments.length > 0) {
-            // Optional: We can delete old documents here if we want to replace them completely. 
-            // For now, we append them or maybe the landlord just uploads missing ones.
-            // But if it's a completely new submission, we COULD delete old ones.
-            // Let's NOT delete so we don't accidentally wipe approved docs if they just upload 1 new thing.
-            for (let i = 0; i < uploadedDocuments.length; i++) {
-                const doc = uploadedDocuments[i];
-                const VALID_TYPES = ['CCCD', 'SO_DO', 'GPKD', 'HOP_DONG', 'OTHER'];
-                const rawType = (files.documentTypes?.[i] ?? 'OTHER').toUpperCase();
-                const docType = VALID_TYPES.includes(rawType) ? rawType : 'OTHER';
-                await tx.rental_documents.create({
-                    data: {
-                        rental_id: rentalId,
-                        document_type: docType,
-                        image_url: doc.path,
-                        status: 'PENDING',
-                    },
+            // Delete documents marked for removal
+            if (deleted_documents && deleted_documents.length > 0) {
+                await tx.rental_documents.deleteMany({
+                    where: {
+                        id: { in: deleted_documents },
+                        rental_id: rentalId
+                    }
                 });
             }
-        }
 
-        // Resubmit hoặc edit bài đã duyệt: tạo mục mới trong moderation queue
-        if (needsModeration) {
-            const moderatorService = require('./moderator.service');
-            await moderatorService.addToModerationQueue(tx, {
-                target_type: 'RENTAL',
-                target_id: rentalId,
-                priority: 'NORMAL',
-                category: 'NEW_LISTING',
-                source: 'SYSTEM',
+            // Save uploaded document paths to rental_documents table
+            if (uploadedDocuments.length > 0) {
+                // Optional: We can delete old documents here if we want to replace them completely. 
+                // For now, we append them or maybe the landlord just uploads missing ones.
+                // But if it's a completely new submission, we COULD delete old ones.
+                // Let's NOT delete so we don't accidentally wipe approved docs if they just upload 1 new thing.
+                for (let i = 0; i < uploadedDocuments.length; i++) {
+                    const doc = uploadedDocuments[i];
+                    const VALID_TYPES = ['CCCD', 'SO_DO', 'GPKD', 'HOP_DONG', 'OTHER'];
+                    const rawType = (files.documentTypes?.[i] ?? 'OTHER').toUpperCase();
+                    const docType = VALID_TYPES.includes(rawType) ? rawType : 'OTHER';
+                    await tx.rental_documents.create({
+                        data: {
+                            rental_id: rentalId,
+                            document_type: docType,
+                            image_url: doc.path,
+                            status: 'PENDING',
+                        },
+                    });
+                }
+            }
+
+            // Resubmit hoặc edit bài đã duyệt: tạo mục mới trong moderation queue
+            if (needsModeration) {
+                const moderatorService = require('./moderator.service');
+                await moderatorService.addToModerationQueue(tx, {
+                    target_type: 'RENTAL',
+                    target_id: rentalId,
+                    priority: 'NORMAL',
+                    category: 'NEW_LISTING',
+                    source: 'SYSTEM',
+                });
+            }
+
+            return tx.rental.findUnique({
+                where: { id: rentalId },
+                include: { location: true, images: true, rental_documents: true },
             });
-        }
-
-        return tx.rental.findUnique({
-            where: { id: rentalId },
-            include: { location: true, images: true, rental_documents: true },
-        });
-    },
-    { timeout: 10000 }
+        },
+        { timeout: 10000 }
     );
 
     const message = isResubmit
         ? 'Đã gửi lại bài đăng để duyệt'
         : needsModeration
-          ? 'Đã cập nhật và gửi bài đăng để duyệt lại'
-          : 'Cập nhật bài đăng thành công';
+            ? 'Đã cập nhật và gửi bài đăng để duyệt lại'
+            : 'Cập nhật bài đăng thành công';
 
     return {
         message,
@@ -1110,11 +1110,11 @@ async function updateRental(rentalId, userId, body, files = {}) {
             createdAt: result.createdAt,
             location: result.location
                 ? {
-                      id: result.location.id,
-                      address: result.location.address,
-                      district: result.location.district,
-                      city: result.location.city,
-                  }
+                    id: result.location.id,
+                    address: result.location.address,
+                    district: result.location.district,
+                    city: result.location.city,
+                }
                 : null,
             images: (result.images || []).map((img) => img.imageUrl),
         },
@@ -1124,9 +1124,9 @@ async function updateRental(rentalId, userId, body, files = {}) {
 async function deleteRental(rentalId, userId) {
     const rental = await prisma.rental.findUnique({
         where: { id: rentalId },
-        select: { 
-            id: true, 
-            owner_id: true, 
+        select: {
+            id: true,
+            owner_id: true,
             title: true,
             rental_documents: { select: { image_url: true } },
         },
@@ -1227,7 +1227,7 @@ async function getLandlordDashboardStats(landlordId, month) {
                 ...rentalCreatedAtFilter,
             },
         }),
-        
+
         // Tổng số phòng trọ
         prisma.rooms.count({
             where: {
@@ -1266,7 +1266,7 @@ async function getLandlordDashboardStats(landlordId, month) {
                 roomId: true,
             },
         }),
-        
+
         // Trạng thái nhà trọ
         prisma.rental.groupBy({
             by: ['status'],
@@ -1276,13 +1276,13 @@ async function getLandlordDashboardStats(landlordId, month) {
             },
             _count: { id: true },
         }),
-        
+
         // Ví của landlord
         prisma.wallet.findUnique({
             where: { userId: landlordId },
             select: { balance: true },
         }),
-        
+
         // Tổng feedback nhận được
         prisma.feedback.count({
             where: {
@@ -1292,7 +1292,7 @@ async function getLandlordDashboardStats(landlordId, month) {
                 ...feedbackCreatedAtFilter,
             },
         }),
-        
+
         // Thống kê feedback (rating trung bình, etc)
         prisma.feedback.aggregate({
             where: {
@@ -1305,7 +1305,7 @@ async function getLandlordDashboardStats(landlordId, month) {
             _avg: { rating: true },
             _count: { id: true },
         }),
-        
+
         // Tổng đặt cọc
         prisma.preorder.count({
             where: {
@@ -1313,7 +1313,7 @@ async function getLandlordDashboardStats(landlordId, month) {
                 ...preorderCreatedAtFilter,
             },
         }),
-        
+
         // Thống kê đặt cọc theo trạng thái
         prisma.preorder.groupBy({
             by: ['status'],
@@ -1334,7 +1334,7 @@ async function getLandlordDashboardStats(landlordId, month) {
         SUSPEND: 0,
         VIOLATE: 0,
     };
-    
+
     rentalsByStatus.forEach((item) => {
         if (rentalStatusMap.hasOwnProperty(item.status)) {
             rentalStatusMap[item.status] = item._count.id;
@@ -1365,7 +1365,7 @@ async function getLandlordDashboardStats(landlordId, month) {
         CANCELLED: 0,
         EXPIRED: 0,
     };
-    
+
     preorderStats.forEach((item) => {
         if (preorderStatusMap.hasOwnProperty(item.status)) {
             preorderStatusMap[item.status] = item._count.id;
@@ -1406,7 +1406,7 @@ async function getLandlordPerformanceMetrics(landlordId, month) {
     const thisMonthEndExclusive = monthRange
         ? monthRange.endExclusive
         : new Date(now.getFullYear(), now.getMonth() + 1, 1);
-    
+
     const [
         totalRooms,
         activeRoomsThisMonth,
@@ -1421,7 +1421,7 @@ async function getLandlordPerformanceMetrics(landlordId, month) {
         prisma.rooms.count({
             where: { rentals: { owner_id: landlordId } },
         }),
-        
+
         // Số phòng có thuê active trong tháng (không trùng room)
         prisma.roomRentalPeriod.findMany({
             where: {
@@ -1433,7 +1433,7 @@ async function getLandlordPerformanceMetrics(landlordId, month) {
             select: { roomId: true },
             distinct: ['roomId'],
         }),
-        
+
         // Doanh thu tháng này
         prisma.roomRentalPeriod.aggregate({
             where: {
@@ -1442,7 +1442,7 @@ async function getLandlordPerformanceMetrics(landlordId, month) {
             },
             _sum: { actualPrice: true },
         }),
-        
+
         // Tổng doanh thu
         prisma.roomRentalPeriod.aggregate({
             where: {
@@ -1450,7 +1450,7 @@ async function getLandlordPerformanceMetrics(landlordId, month) {
             },
             _sum: { actualPrice: true },
         }),
-        
+
         // Số đơn hủy
         prisma.roomRentalPeriod.count({
             where: {
@@ -1459,7 +1459,7 @@ async function getLandlordPerformanceMetrics(landlordId, month) {
                 createdAt: { gte: thisMonthStart, lt: thisMonthEndExclusive },
             },
         }),
-        
+
         // Tổng đơn kết thúc (COMPLETED hoặc CANCELLED)
         prisma.roomRentalPeriod.count({
             where: {
@@ -1471,7 +1471,7 @@ async function getLandlordPerformanceMetrics(landlordId, month) {
                 createdAt: { gte: thisMonthStart, lt: thisMonthEndExclusive },
             },
         }),
-        
+
         // Đơn đã xác nhận
         prisma.preorder.count({
             where: {
@@ -1480,7 +1480,7 @@ async function getLandlordPerformanceMetrics(landlordId, month) {
                 createdAt: { gte: thisMonthStart, lt: thisMonthEndExclusive },
             },
         }),
-        
+
         // Tổng đơn đặt cọc
         prisma.preorder.count({
             where: {
