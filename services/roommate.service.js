@@ -56,21 +56,35 @@ const QUANT_MAPS = {
 };
 
 /**
- * Weights for each lifestyle criterion – equal baseline.
- * Custom weights from the frontend multiply these values.
+ * Baseline weights w_k for each lifestyle criterion – encoded from domain knowledge.
+ * Σ w_k = 1. Custom weights ω_k from the frontend act as MULTIPLIERS on these
+ * baseline values, not as absolute weight overrides.
  */
 const LIFESTYLE_WEIGHTS = {
-    cleanliness:        0.20,
-    sleep_schedule:     0.16,
-    smoking:            0.13,
-    noise_tolerance:    0.13,
-    pets_allowed:       0.10,
-    guest_frequency:    0.09,
-    social_level:       0.08,
-    cooking_frequency:  0.06,
-    work_from_home:     0.04,
-    interests:          0.01,
+    cleanliness: 0.20,
+    sleep_schedule: 0.16,
+    smoking: 0.13,
+    noise_tolerance: 0.13,
+    pets_allowed: 0.10,
+    guest_frequency: 0.09,
+    social_level: 0.08,
+    cooking_frequency: 0.06,
+    work_from_home: 0.04,
+    interests: 0.01,
 };
+
+/**
+ * Slider range constraints for ω_k.
+ * MIN = 1 (cannot disable a criterion entirely; minimum importance)
+ * MAX = 10 (maximum importance)
+ * DEFAULT = 5 (midpoint → cancels out, score reduces to baseline-only)
+ *   ω_k > 5 → tăng tầm quan trọng so với baseline
+ *   ω_k < 5 → giảm tầm quan trọng so với baseline
+ *   ω_k = 1 → tầm quan trọng tối thiểu (vẫn được tính)
+ */
+const OMEGA_MIN = 1;
+const OMEGA_MAX = 10;
+const DEFAULT_USER_SCORE = 5;
 
 
 
@@ -106,7 +120,7 @@ function calculateAttributeSim(key, valA, valB) {
         const arrA = Array.isArray(valA) ? valA : [];
         const arrB = Array.isArray(valB) ? valB : [];
         if (arrA.length === 0 && arrB.length === 0) return 1.0;
-        
+
         const tokensA = new Set(arrA.flatMap((s) => tokenize(s)));
         const tokensB = new Set(arrB.flatMap((s) => tokenize(s)));
 
@@ -119,94 +133,96 @@ function calculateAttributeSim(key, valA, valB) {
 
         const unionSize = new Set([...tokensA, ...tokensB]).size;
         return unionSize > 0 ? overlap / unionSize : 0;
-    
-    
+
+
     } else {
         // Numeric ordinal/binary: similarity = 1 - |a - b|
         return 1.0 - Math.abs(valA - valB);
     }
 }
 
-/**
- * Validate và normalize custom weights từ query string.
- * @param {object|null} rawWeights - Object { [criterion]: string|number }
- * @returns {object|null} normalizedWeights với sum = 1.0, hoặc null nếu không có weights hợp lệ
- */
 
 
-function normalizeWeights(rawWeights) {
+function sanitizeUserWeights(rawWeights) {
     if (!rawWeights || typeof rawWeights !== 'object') return null;
 
-    const VALID_KEYS = new Set(Object.keys(LIFESTYLE_WEIGHTS));
-    
+    const VALID_KEYS = Object.keys(LIFESTYLE_WEIGHTS);
     const sanitized = {};
 
+    // 1. Sanitize: chỉ nhận keys hợp lệ và values trong [1, 10]
     for (const [key, val] of Object.entries(rawWeights)) {
-        if (!VALID_KEYS.has(key)) continue;
+        if (!LIFESTYLE_WEIGHTS.hasOwnProperty(key)) continue;
         const num = Number(val);
-        if (!Number.isFinite(num) || num < 0 || num > 10) continue;
+        if (!Number.isFinite(num) || num < OMEGA_MIN || num > OMEGA_MAX) continue;
         sanitized[key] = num;
     }
 
     if (Object.keys(sanitized).length === 0) return null;
 
-    const total = Object.values(sanitized).reduce((s, v) => s + v, 0);
-    if (total === 0) return { allZero: true };
-
-    const normalized = {};
-    for (const [key, val] of Object.entries(sanitized)) {
-        normalized[key] = val / total;
+    // 2. Fill defaults: keys user không gửi → DEFAULT_USER_SCORE (neutral)
+    const omega = {};
+    for (const key of VALID_KEYS) {
+        omega[key] = sanitized[key] !== undefined
+            ? sanitized[key]
+            : DEFAULT_USER_SCORE;
     }
-    return normalized;
+    return omega;
 }
 
 /**
  * Compute Lifestyle Match (0 - 100) directly from LifestyleProfiles.
+ *
+ * Công thức:
+ *   C(a, b) = 100 × Σ (w_k · ω_k · s_k) / Σ (w_k · ω_k)
+ *
+ * với k chạy trong K*(a,b) — tập thuộc tính có dữ liệu hợp lệ ở cả hai phía.
+ *   w_k = LIFESTYLE_WEIGHTS[k]   (baseline domain knowledge)
+ *   ω_k = userOmega[k]            (slider người dùng, mặc định 5, ràng buộc [1, 10])
+ *   s_k = calculateAttributeSim(k, valA, valB)
+ *
+ * Khi userOmega = null → ω_k = 5 cho mọi k → công thức thoái biến về
+ * trung bình có trọng số chỉ với baseline w_k.
  */
-function calculateLifestyleMatch(myLifestyle, candidateLifestyle, customWeights) {
+function calculateLifestyleMatch(myLifestyle, candidateLifestyle, userOmega) {
     if (!myLifestyle || !candidateLifestyle) return 0;
-    // allZero sentinel: caller should have handled this, but guard here too
 
+    let weightedSimSum = 0;   // Σ w_k · ω_k · s_k
+    let totalWeight = 0;       // Σ w_k · ω_k
 
-    if (customWeights?.allZero) return 0;
-
-    const weights = customWeights || LIFESTYLE_WEIGHTS;
-    let weightedSimSum = 0;
-    let totalWeight = 0;
-    
-    const fields = Object.keys(weights);
     const debugFields = [];
 
+    for (const key of Object.keys(LIFESTYLE_WEIGHTS)) {
+        const w_k = LIFESTYLE_WEIGHTS[key];
+        const omega_k = userOmega ? userOmega[key] : DEFAULT_USER_SCORE;
+        const effectiveWeight = w_k * omega_k;
 
-    for (const key of fields) {
+        // Vì ω_k ≥ 1 và w_k > 0, effectiveWeight luôn > 0 (không cần check == 0)
+
         let valA = myLifestyle[key];
         let valB = candidateLifestyle[key];
-        const weight = weights[key] || 0;
-        
-        if (weight === 0) continue;
-        
+
         // Quantize numeric values
         if (key !== 'interests' && key !== 'languages') {
             valA = quantize(key, valA);
             valB = quantize(key, valB);
         }
-        
+
         // Skip if either user is missing data for this field
         if (valA === null || valA === undefined || valB === null || valB === undefined) {
             debugFields.push(`${key}:SKIP(valA=${valA},valB=${valB})`);
             continue;
         }
-        
-        const sim = calculateAttributeSim(key, valA, valB);
-        weightedSimSum += weight * sim;
-        totalWeight += weight;
 
-        debugFields.push(`${key}:sim=${sim.toFixed(2)},w=${weight.toFixed(3)}`);
+        const sim = calculateAttributeSim(key, valA, valB);
+        weightedSimSum += effectiveWeight * sim;
+        totalWeight += effectiveWeight;
+
+        debugFields.push(`${key}:sim=${sim.toFixed(2)},w·ω=${effectiveWeight.toFixed(3)}`);
     }
-    
+
     if (totalWeight === 0) return 0;
     const score = Math.round((weightedSimSum / totalWeight) * 100);
-    if (customWeights) {
+    if (userOmega) {
         console.log(`[calcMatch] score=${score} fields=[${debugFields.join(' | ')}]`);
     }
     return score;
@@ -219,14 +235,14 @@ function calculateLifestyleMatch(myLifestyle, candidateLifestyle, customWeights)
  */
 // function calculatePreferenceMatch(myPrefs, candidatePrefs) {
 //     if (!myPrefs || !candidatePrefs) return 0;
-    
+
 //     let score = 0;
 //     let weight = 0;
 
 //     // 1. District match (60% weight)
 //     const myDistricts = Array.isArray(myPrefs.preferred_districts) ? myPrefs.preferred_districts : [];
 //     const theirDistricts = Array.isArray(candidatePrefs.preferred_districts) ? candidatePrefs.preferred_districts : [];
-    
+
 //     if (myDistricts.length > 0 && theirDistricts.length > 0) {
 //         const overlap = myDistricts.filter(d => theirDistricts.includes(d)).length;
 //         if (overlap > 0) score += 60;
@@ -243,7 +259,7 @@ function calculateLifestyleMatch(myLifestyle, candidateLifestyle, customWeights)
 //     const maxA = Number(myPrefs.budget_max) || Infinity;
 //     const minB = Number(candidatePrefs.budget_min) || 0;
 //     const maxB = Number(candidatePrefs.budget_max) || Infinity;
-    
+
 //     if (Math.max(minA, minB) <= Math.min(maxA, maxB)) {
 //         score += 20; 
 //     }
@@ -282,17 +298,18 @@ function calculateLifestyleMatch(myLifestyle, candidateLifestyle, customWeights)
 
 async function getSuggestions(userId, params) {
     const limit = Math.min(50, Math.max(1, parseInt(params.limit) || 20));
-    const normalizedWeights = normalizeWeights(params.weights);
-    console.log('[getSuggestions] params.weights =', JSON.stringify(params.weights), '→ normalizedWeights =', JSON.stringify(normalizedWeights));
+    const userOmega = sanitizeUserWeights(params.weights);
+    console.log('[getSuggestions] params.weights =', JSON.stringify(params.weights), '→ userOmega =', JSON.stringify(userOmega));
 
-    const me = await prisma.user.findUnique({        where: { id: userId },
+    const me = await prisma.user.findUnique({
+        where: { id: userId },
         include: { lifestyleProfile: true, preference: true },
     });
     if (!me) {
         throw Object.assign(new Error('User not found'), { statusCode: 404 });
     }
 
-    
+
     const existingMatches = await prisma.roommateMatch.findMany({
         where: { OR: [{ requester_id: userId }, { target_id: userId }] },
         select: { requester_id: true, target_id: true, status: true },
@@ -337,7 +354,7 @@ async function getSuggestions(userId, params) {
     });
 
     if (hasUsableGender && (myGenderNorm === 'nam' || myGenderNorm === 'nữ')) {
-  
+
         candidates = candidates.filter((u) => {
             const cg = genderNorm(u.gender);
             return cg === myGenderNorm || cg === null;
@@ -352,7 +369,7 @@ async function getSuggestions(userId, params) {
         const candidateGenderNorm = genderNorm(u.gender);
         const isSameGender = hasUsableGender && candidateGenderNorm === myGenderNorm;
 
-        const lifestyleMatch = calculateLifestyleMatch(me.lifestyleProfile, u.lifestyleProfile, normalizedWeights);
+        const lifestyleMatch = calculateLifestyleMatch(me.lifestyleProfile, u.lifestyleProfile, userOmega);
 
         // Match Score = 100% Lifestyle
         const matchScore = lifestyleMatch;
@@ -366,28 +383,28 @@ async function getSuggestions(userId, params) {
             },
             lifestyle: u.lifestyleProfile
                 ? {
-                      smoking: u.lifestyleProfile.smoking,
-                      drinking: u.lifestyleProfile.drinking,
-                      pets_allowed: u.lifestyleProfile.pets_allowed,
-                      sleep_schedule: u.lifestyleProfile.sleep_schedule,
-                      work_from_home: u.lifestyleProfile.work_from_home,
-                      personalityType: u.lifestyleProfile.personalityType,
-                      social_level: u.lifestyleProfile.social_level,
-                      cleanliness: u.lifestyleProfile.cleanliness,
-                      noise_tolerance: u.lifestyleProfile.noise_tolerance,
-                      guest_frequency: u.lifestyleProfile.guest_frequency,
-                      interests: u.lifestyleProfile.interests || [],
-                      languages: u.lifestyleProfile.languages || [],
-                  }
+                    smoking: u.lifestyleProfile.smoking,
+                    drinking: u.lifestyleProfile.drinking,
+                    pets_allowed: u.lifestyleProfile.pets_allowed,
+                    sleep_schedule: u.lifestyleProfile.sleep_schedule,
+                    work_from_home: u.lifestyleProfile.work_from_home,
+                    personalityType: u.lifestyleProfile.personalityType,
+                    social_level: u.lifestyleProfile.social_level,
+                    cleanliness: u.lifestyleProfile.cleanliness,
+                    noise_tolerance: u.lifestyleProfile.noise_tolerance,
+                    guest_frequency: u.lifestyleProfile.guest_frequency,
+                    interests: u.lifestyleProfile.interests || [],
+                    languages: u.lifestyleProfile.languages || [],
+                }
                 : null,
             preference: u.preference
                 ? {
-                      preferred_districts: u.preference.preferred_districts || [],
-                      room_type: u.preference.room_type,
-                      budget_min: u.preference.budget_min ? Number(u.preference.budget_min) : null,
-                      budget_max: u.preference.budget_max ? Number(u.preference.budget_max) : null,
-                      preferredLocation: u.preference.preferredLocation || null,
-                  }
+                    preferred_districts: u.preference.preferred_districts || [],
+                    room_type: u.preference.room_type,
+                    budget_min: u.preference.budget_min ? Number(u.preference.budget_min) : null,
+                    budget_max: u.preference.budget_max ? Number(u.preference.budget_max) : null,
+                    preferredLocation: u.preference.preferredLocation || null,
+                }
                 : null,
             matchScore,
             lifestyleMatch,
@@ -406,7 +423,6 @@ async function getSuggestions(userId, params) {
 }
 
 // ─── Match management ─────────────────────────────────────────────────────────
-
 async function sendRequest(requesterId, targetId) {
     if (requesterId === targetId) {
         throw Object.assign(new Error('Không thể gửi lời mời cho chính mình'), { statusCode: 400 });
@@ -489,9 +505,9 @@ async function getMyMatches(userId) {
     const users =
         otherIds.length > 0
             ? await prisma.user.findMany({
-                  where: { id: { in: otherIds } },
-                  select: { id: true, fullName: true, avatarUrl: true, gender: true },
-              })
+                where: { id: { in: otherIds } },
+                select: { id: true, fullName: true, avatarUrl: true, gender: true },
+            })
             : [];
     const userMap = new Map(users.map((u) => [u.id, u]));
 
@@ -499,10 +515,10 @@ async function getMyMatches(userId) {
     const inviteNotifs =
         allUserIds.length > 0
             ? await prisma.notification.findMany({
-                  where: { userId: { in: allUserIds }, type: 'ROOMMATE_INVITE' },
-                  orderBy: { createdAt: 'desc' },
-                  select: { userId: true, body: true, createdAt: true },
-              })
+                where: { userId: { in: allUserIds }, type: 'ROOMMATE_INVITE' },
+                orderBy: { createdAt: 'desc' },
+                select: { userId: true, body: true, createdAt: true },
+            })
             : [];
 
     const roomIdByUser = new Map();
@@ -551,10 +567,10 @@ async function updateMatchStatus(userId, matchId, body) {
     try {
         const targetUser = await prisma.user.findUnique({ where: { id: userId }, select: { fullName: true } });
         const targetName = targetUser?.fullName || 'Người dùng';
-        
+
         let notifTitle = '';
         let notifBody = '';
-        
+
         if (status === 'ACCEPTED') {
             notifTitle = 'Lời mời ở ghép được chấp nhận';
             notifBody = `${targetName} đã chấp nhận lời mời kết bạn ở ghép của bạn.`;
@@ -562,7 +578,7 @@ async function updateMatchStatus(userId, matchId, body) {
             notifTitle = 'Lời mời ở ghép bị từ chối';
             notifBody = `${targetName} đã từ chối lời mời kết bạn ở ghép của bạn.`;
         }
-    
+
         await prisma.notification.create({
             data: {
                 userId: match.requester_id,
@@ -624,39 +640,39 @@ async function getPublicProfile(userId) {
             },
             lifestyle: lp
                 ? {
-                      smoking: lp.smoking,
-                      drinking: lp.drinking,
-                      pets_allowed: lp.pets_allowed,
-                      sleep_schedule: lp.sleep_schedule,
-                      work_from_home: lp.work_from_home,
-                      personalityType: lp.personalityType,
-                      social_level: lp.social_level,
-                      cleanliness: lp.cleanliness,
-                      noise_tolerance: lp.noise_tolerance,
-                      guest_frequency: lp.guest_frequency,
-                      cooking_frequency: lp.cooking_frequency,
-                      wake_time: lp.wake_time,
-                      bedtime: lp.bedtime,
-                      occupation_type: lp.occupation_type,
-                      temperature_preference: lp.temperature_preference,
-                      quiet_hours_preference: lp.quiet_hours_preference,
-                      interests: lp.interests || [],
-                      languages: lp.languages || [],
-                      preferred_lease_months: lp.preferred_lease_months,
-                  }
+                    smoking: lp.smoking,
+                    drinking: lp.drinking,
+                    pets_allowed: lp.pets_allowed,
+                    sleep_schedule: lp.sleep_schedule,
+                    work_from_home: lp.work_from_home,
+                    personalityType: lp.personalityType,
+                    social_level: lp.social_level,
+                    cleanliness: lp.cleanliness,
+                    noise_tolerance: lp.noise_tolerance,
+                    guest_frequency: lp.guest_frequency,
+                    cooking_frequency: lp.cooking_frequency,
+                    wake_time: lp.wake_time,
+                    bedtime: lp.bedtime,
+                    occupation_type: lp.occupation_type,
+                    temperature_preference: lp.temperature_preference,
+                    quiet_hours_preference: lp.quiet_hours_preference,
+                    interests: lp.interests || [],
+                    languages: lp.languages || [],
+                    preferred_lease_months: lp.preferred_lease_months,
+                }
                 : null,
             preference: user.preference
                 ? {
-                      preferred_districts: user.preference.preferred_districts || [],
-                      room_type: user.preference.room_type,
-                      budget_min: user.preference.budget_min ? Number(user.preference.budget_min) : null,
-                      budget_max: user.preference.budget_max ? Number(user.preference.budget_max) : null,
-                      preferred_amenities: user.preference.preferred_amenities || [],
-                      must_have_amenities: user.preference.must_have_amenities || [],
-                      preferred_lease_months: user.preference.preferred_lease_months,
-                      pet_friendly: user.preference.pet_friendly,
-                      transport_nearby: user.preference.transport_nearby,
-                  }
+                    preferred_districts: user.preference.preferred_districts || [],
+                    room_type: user.preference.room_type,
+                    budget_min: user.preference.budget_min ? Number(user.preference.budget_min) : null,
+                    budget_max: user.preference.budget_max ? Number(user.preference.budget_max) : null,
+                    preferred_amenities: user.preference.preferred_amenities || [],
+                    must_have_amenities: user.preference.must_have_amenities || [],
+                    preferred_lease_months: user.preference.preferred_lease_months,
+                    pet_friendly: user.preference.pet_friendly,
+                    transport_nearby: user.preference.transport_nearby,
+                }
                 : null,
         },
     };
@@ -934,25 +950,25 @@ async function getTopSearchersInArea(currentUserId, areaQuery, limit = 10) {
                 user: { id: u.id, fullName: u.fullName, avatarUrl: u.avatarUrl, gender: u.gender },
                 lifestyle: u.lifestyleProfile
                     ? {
-                          smoking: u.lifestyleProfile.smoking,
-                          drinking: u.lifestyleProfile.drinking,
-                          pets_allowed: u.lifestyleProfile.pets_allowed,
-                          sleep_schedule: u.lifestyleProfile.sleep_schedule,
-                          personalityType: u.lifestyleProfile.personalityType,
-                          cleanliness: u.lifestyleProfile.cleanliness,
-                          noise_tolerance: u.lifestyleProfile.noise_tolerance,
-                          guest_frequency: u.lifestyleProfile.guest_frequency,
-                          interests: u.lifestyleProfile.interests || [],
-                      }
+                        smoking: u.lifestyleProfile.smoking,
+                        drinking: u.lifestyleProfile.drinking,
+                        pets_allowed: u.lifestyleProfile.pets_allowed,
+                        sleep_schedule: u.lifestyleProfile.sleep_schedule,
+                        personalityType: u.lifestyleProfile.personalityType,
+                        cleanliness: u.lifestyleProfile.cleanliness,
+                        noise_tolerance: u.lifestyleProfile.noise_tolerance,
+                        guest_frequency: u.lifestyleProfile.guest_frequency,
+                        interests: u.lifestyleProfile.interests || [],
+                    }
                     : null,
                 preference: u.preference
                     ? {
-                          preferred_districts: u.preference.preferred_districts || [],
-                          room_type: u.preference.room_type,
-                          budget_min: u.preference.budget_min ? Number(u.preference.budget_min) : null,
-                          budget_max: u.preference.budget_max ? Number(u.preference.budget_max) : null,
-                          preferredLocation: u.preference.preferredLocation || null,
-                      }
+                        preferred_districts: u.preference.preferred_districts || [],
+                        room_type: u.preference.room_type,
+                        budget_min: u.preference.budget_min ? Number(u.preference.budget_min) : null,
+                        budget_max: u.preference.budget_max ? Number(u.preference.budget_max) : null,
+                        preferredLocation: u.preference.preferredLocation || null,
+                    }
                     : null,
                 matchScore: Math.min(100, baseScore),
                 isSameGender,
