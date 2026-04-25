@@ -68,9 +68,11 @@ async function reconcilePreorderPayoutsOnce(options = {}) {
         });
     } catch (dbError) {
         logger.error('[preorder-reconcile] fetch phase failed', { error: dbError?.message || String(dbError) });
-        // Handle Prisma Engine Panic gracefully instead of throwing unhandled exception
+        // Nếu Prisma bị PANIC (chết lõi), ta BẮT BUỘC TRẢ VỀ LỖI CẤP THẤP ĐỂ TẮT SERVER
+        // Nhờ đó Hostinger sẽ ngay lập tức tự động Restart lại bản sạch. Không được phép giấu lỗi này.
         if (dbError && dbError.name === 'PrismaClientRustPanicError') {
-            logger.error('[preorder-reconcile] CRITICAL: Prisma Engine panicked. Subsequent queries will fail. The Node.js process should ideally be restarted.');
+            logger.error('[preorder-reconcile] CRITICAL: Prisma Engine panicked. Exiting process to allow host to auto-restart...');
+            process.exit(1);
         }
         return { scanned: 0, fixed: 0, skipped: 0, errors: 1 };
     }
