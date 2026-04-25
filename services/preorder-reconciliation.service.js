@@ -54,16 +54,26 @@ async function reconcilePreorderPayoutsOnce(options = {}) {
     const logger = options.logger || console;
     const batchSize = Math.max(1, Number(options.batchSize || DEFAULT_BATCH_SIZE));
 
-    const successfulDepositOrders = await prisma.payment_orders.findMany({
-        where: {
-            purpose: 'PREORDER_DEPOSIT',
-            status: 'SUCCESS',
-            ref_type: 'PREORDER',
-            ref_id: { not: null },
-        },
-        orderBy: { created_at: 'desc' },
-        take: batchSize,
-    });
+    let successfulDepositOrders = [];
+    try {
+        successfulDepositOrders = await prisma.payment_orders.findMany({
+            where: {
+                purpose: 'PREORDER_DEPOSIT',
+                status: 'SUCCESS',
+                ref_type: 'PREORDER',
+                ref_id: { not: null },
+            },
+            orderBy: { created_at: 'desc' },
+            take: batchSize,
+        });
+    } catch (dbError) {
+        logger.error('[preorder-reconcile] fetch phase failed', { error: dbError?.message || String(dbError) });
+        // Handle Prisma Engine Panic gracefully instead of throwing unhandled exception
+        if (dbError && dbError.name === 'PrismaClientRustPanicError') {
+            logger.error('[preorder-reconcile] CRITICAL: Prisma Engine panicked. Subsequent queries will fail. The Node.js process should ideally be restarted.');
+        }
+        return { scanned: 0, fixed: 0, skipped: 0, errors: 1 };
+    }
 
     const summary = {
         scanned: successfulDepositOrders.length,
@@ -267,7 +277,8 @@ function startPreorderPayoutReconciliationJob() {
         void run();
     }, intervalMs);
 
-    if (typeof timer.unref === 'function') timer.unref();
+    // Xóa unref() để tránh Hostinger giết process do lầm tưởng không còn tác vụ nào đang chạy.
+    // if (typeof timer.unref === 'function') timer.unref();
 
     console.info(`[preorder-reconcile] started, interval=${intervalMs}ms`);
 
