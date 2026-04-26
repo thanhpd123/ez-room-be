@@ -528,47 +528,16 @@ async function getPublicSearch(params, viewer = null) {
             daysUntilAvailable >= 0 &&
             daysUntilAvailable <= NEARLY_AVAILABLE_DAYS;
 
-        const boostedScore = isVipLandlord
-            ? Math.min(100, score + VIP_LANDLORD_SEARCH_BOOST)
-            : score;
-
-        const otherRooms = allRooms
-            .filter((r) => r.id !== room.id)
-            .map((r) => ({
-                id: r.id,
-                roomName: r.room_name,
-                price: Number(r.price),
-                area: r.size_m2 != null ? Number(r.size_m2) : null,
-                roomType: mapDbToFe(r.room_type, 'apartment'),
-                image:
-                    (r.images || [])[0]?.imageUrl ||
-                    rentalImgs[0] ||
-                    placeholderImage,
-            }));
+        const boostAmount = isVipLandlord ? VIP_LANDLORD_SEARCH_BOOST : 0;
+        const boostedScore = Math.min(100, score + boostAmount);
 
         return {
             id: room.id,
-            rentalId: rental?.id,
-            roomName: room.room_name,
-            title: rental?.title || room.room_name || 'Phòng trọ',
-            price: Number(room.price),
-            area: room.size_m2 != null ? Number(room.size_m2) : null,
-            roomType: mapDbToFe(room.room_type, 'apartment'),
-            amenities: amenityNames,
-            images: imgs.length > 0 ? imgs : [placeholderImage],
-            location: loc
-                ? { district: loc.district, city: loc.city, address: loc.address }
-                : null,
-            available: room.status === 'AVAILABLE' || Boolean(isNearlyAvailable),
-            isNearlyAvailable: Boolean(isNearlyAvailable),
-            availableFrom: nearestEndDate ? nearestEndDate.toISOString() : null,
-            daysUntilAvailable,
             matchScore: Math.round(boostedScore * 10) / 10,
-            rating: avgRating != null ? Math.round(avgRating * 10) / 10 : null,
-            otherRoomsInRental: otherRooms,
             isVipLandlord,
-            roomStatus: room.status,
-            available: room.status === 'AVAILABLE',
+            isNearlyAvailable,
+            daysUntilAvailable,
+            nearestEndDate: nearestEndDate ? nearestEndDate.toISOString() : null,
         };
     });
 
@@ -576,13 +545,98 @@ async function getPublicSearch(params, viewer = null) {
     const ranked = applyFairnessGuard(scored);
 
     const total = ranked.length;
-    const paginated = ranked.slice(
+    const paginatedScores = ranked.slice(
         (pageNum - 1) * limitNum,
         pageNum * limitNum
-    ).map(({ isVipLandlord, ...item }) => item);
+    );
+    const paginatedIds = paginatedScores.map(item => item.id);
+
+    // Phase 2: Fetch full data only for the requested page
+    const fullPaginatedRooms = await prisma.rooms.findMany({
+        where: { id: { in: paginatedIds } },
+        include: {
+            rentals: {
+                include: {
+                    location: true,
+                    images: true,
+                    users: {
+                        select: { id: true, role: true, isVip: true, fullName: true },
+                    },
+                    rooms: {
+                        include: {
+                            roomAmenities: { include: { amenity: true } },
+                            images: true,
+                        },
+                    },
+                },
+            },
+            rentalPeriods: {
+                where: { status: 'ACTIVE' },
+                select: { endDate: true },
+                orderBy: { endDate: 'asc' },
+                take: 1,
+            },
+            roomAmenities: { include: { amenity: true } },
+            images: true,
+        },
+    });
+
+    const fullRoomMap = new Map();
+    for (const fr of fullPaginatedRooms) fullRoomMap.set(fr.id, fr);
+
+    const paginatedData = paginatedScores.map((s) => {
+        const fullRoom = fullRoomMap.get(s.id);
+        if (!fullRoom) return null;
+
+        const rental = fullRoom.rentals;
+        const loc = rental?.location;
+        const allRooms = rental?.rooms || [];
+        const roomImgs = (fullRoom.images || []).map((img) => img.imageUrl);
+        const rentalImgs = (rental?.images || []).map((img) => img.imageUrl);
+        const imgs = roomImgs.length > 0 ? roomImgs : rentalImgs;
+        const amenityNames = (fullRoom.roomAmenities || [])
+            .map((ra) => ra.amenity?.name)
+            .filter(Boolean);
+
+        const avgRating = ratingByRoom[fullRoom.id] ?? null;
+
+        const otherRooms = allRooms
+            .filter((r) => r.id !== fullRoom.id)
+            .map((r) => ({
+                id: r.id,
+                roomName: r.room_name,
+                price: Number(r.price),
+                area: r.size_m2 != null ? Number(r.size_m2) : null,
+                roomType: mapDbToFe(r.room_type, 'apartment'),
+                image: (r.images || [])[0]?.imageUrl || rentalImgs[0] || placeholderImage,
+            }));
+
+        return {
+            id: fullRoom.id,
+            rentalId: rental?.id,
+            roomName: fullRoom.room_name,
+            title: rental?.title || fullRoom.room_name || 'Phòng trọ',
+            price: Number(fullRoom.price),
+            area: fullRoom.size_m2 != null ? Number(fullRoom.size_m2) : null,
+            roomType: mapDbToFe(fullRoom.room_type, 'apartment'),
+            amenities: amenityNames,
+            images: imgs.length > 0 ? imgs : [placeholderImage],
+            location: loc
+                ? { district: loc.district, city: loc.city, address: loc.address }
+                : null,
+            available: fullRoom.status === 'AVAILABLE' || Boolean(s.isNearlyAvailable),
+            isNearlyAvailable: Boolean(s.isNearlyAvailable),
+            availableFrom: s.nearestEndDate,
+            daysUntilAvailable: s.daysUntilAvailable,
+            matchScore: s.matchScore,
+            rating: avgRating != null ? Math.round(avgRating * 10) / 10 : null,
+            otherRoomsInRental: otherRooms,
+            roomStatus: fullRoom.status,
+        };
+    }).filter(Boolean);
 
     return {
-        data: paginated,
+        data: paginatedData,
         pagination: {
             page: pageNum,
             limit: limitNum,
@@ -632,10 +686,10 @@ async function getRecommend(userId) {
                     districtTerms.length === 1
                         ? { district: { equals: districtTerms[0], mode: 'insensitive' } }
                         : {
-                              OR: districtTerms.map((t) => ({
-                                  district: { equals: t, mode: 'insensitive' },
-                              })),
-                          },
+                            OR: districtTerms.map((t) => ({
+                                district: { equals: t, mode: 'insensitive' },
+                            })),
+                        },
             };
         }
     }

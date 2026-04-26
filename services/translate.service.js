@@ -87,38 +87,24 @@ const CONCURRENCY = 15; // allow 15 parallel requests — fast enough, won't ove
 async function runWithConcurrency(tasks, limit) {
     const results = [];
     const queue = [...tasks];
-    const active = [];
 
-    async function runNext() {
-        if (queue.length === 0) return;
-        const { fn, index } = queue.shift();
-        const promise = fn().then((result) => {
-            results[index] = result;
-        }).catch(() => {
-            results[index] = null; // will be handled by caller
-        });
-        active.push(promise);
-        promise.finally(() => {
-            active.splice(active.indexOf(promise), 1);
-        });
-        return promise;
-    }
-
-    // Fill concurrency slots
-    while (queue.length > 0 && active.length < limit) {
-        runNext();
-    }
-
-    // Wait for all
-    await new Promise((resolve) => {
-        const check = setInterval(() => {
-            if (active.length === 0 && queue.length === 0) {
-                clearInterval(check);
-                resolve();
+    async function worker() {
+        while (queue.length > 0) {
+            const { fn, index } = queue.shift();
+            try {
+                results[index] = await fn();
+            } catch (err) {
+                results[index] = null; // will be handled by caller
             }
-        }, 50);
-    });
+        }
+    }
 
+    const workers = [];
+    for (let i = 0; i < Math.min(tasks.length, limit); i++) {
+        workers.push(worker());
+    }
+
+    await Promise.all(workers);
     return results;
 }
 

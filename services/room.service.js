@@ -274,26 +274,43 @@ async function getRooms(params) {
         if (maxPrice) where.price.lte = parseFloat(maxPrice);
     }
 
-    const [rooms, total] = await Promise.all([
-        prisma.rooms.findMany({
-            where,
-            skip,
-            take: pageSize,
-            orderBy: { created_at: 'desc' },
-            include: {
-                images: true,
-                roomAmenities: { include: { amenity: true } },
-                rentalPeriods: {
-                    where: { status: 'ACTIVE' },
-                    select: { status: true, endDate: true },
-                    orderBy: { endDate: 'asc' },
-                    take: 1,
-                },
-                rentals: { include: { location: true } },
+    const total = await prisma.rooms.count({ where });
+
+    if (total === 0) {
+        return {
+            data: [],
+            pagination: { page: pageNum, limit: pageSize, total: 0, pages: 0 },
+        };
+    }
+
+    const basicRooms = await prisma.rooms.findMany({
+        where,
+        skip,
+        take: pageSize,
+        orderBy: { created_at: 'desc' },
+        select: { id: true },
+    });
+
+    const roomIds = basicRooms.map((r) => r.id);
+
+    const fullRooms = await prisma.rooms.findMany({
+        where: { id: { in: roomIds } },
+        orderBy: { created_at: 'desc' },
+        include: {
+            images: true,
+            roomAmenities: { include: { amenity: true } },
+            rentalPeriods: {
+                where: { status: 'ACTIVE' },
+                select: { status: true, endDate: true },
+                orderBy: { endDate: 'asc' },
+                take: 1,
             },
-        }),
-        prisma.rooms.count({ where }),
-    ]);
+            rentals: { include: { location: true } },
+        },
+    });
+
+    const roomsMap = new Map(fullRooms.map((r) => [r.id, r]));
+    const rooms = roomIds.map((id) => roomsMap.get(id)).filter(Boolean);
 
     return {
         data: rooms.map((room) => ({
