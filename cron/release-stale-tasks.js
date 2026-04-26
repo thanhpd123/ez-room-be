@@ -5,9 +5,9 @@
  * task se tu dong duoc tra ve OPEN de moderator khac nhan.
  */
 const prisma = require('../config/prisma');
+const cron = require('node-cron');
 
 const STALE_MINUTES = 60;
-const CHECK_INTERVAL_MS = 15 * 60 * 1000; // Chay moi 15 phut
 
 async function releaseStaleQueueItems() {
     try {
@@ -53,29 +53,29 @@ async function releaseStaleQueueItems() {
             });
         }
 
-         // console.log('[Cron] Auto-released ' + staleItems.length + ' stale queue item(s)');
+        // console.log('[Cron] Auto-released ' + staleItems.length + ' stale queue item(s)');
     } catch (err) {
         console.error('[Cron] Error releasing stale queue items:', err.message);
     }
 }
 
 function startStaleCron() {
-    // Chay lan dau sau 30 giay (cho server khoi dong xong)
-    setTimeout(function () {
-        releaseStaleQueueItems();
-        // Sau do lap lai moi 15 phut
-        setInterval(releaseStaleQueueItems, CHECK_INTERVAL_MS);
-    }, 30000);
+    let running = false;
 
-    /*
-    console.log(
-        '[Cron] Stale queue auto-release scheduled: every ' +
-            (CHECK_INTERVAL_MS / 60000) +
-            ' min, threshold ' +
-            STALE_MINUTES +
-            ' min'
-    );
-    */
+    // Chạy vào 00:01 mỗi ngày
+    cron.schedule('1 0 * * *', async () => {
+        if (running) return;
+        running = true;
+        try {
+            await releaseStaleQueueItems();
+        } catch (error) {
+            console.error('[Cron] releaseStaleQueueItems failed:', error);
+        } finally {
+            running = false;
+        }
+    });
+
+    console.log('[Cron] Stale queue auto-release scheduled: 00:01 AM daily');
 }
 
 module.exports = { startStaleCron, releaseStaleQueueItems };

@@ -1,6 +1,6 @@
 const prisma = require('../config/prisma');
+const cron = require('node-cron');
 
-const DEFAULT_INTERVAL_MS = Number(process.env.PREORDER_PAYOUT_RECONCILE_INTERVAL_MS || 3 * 60 * 1000);
 const DEFAULT_BATCH_SIZE = Number(process.env.PREORDER_PAYOUT_RECONCILE_BATCH_SIZE || 100);
 
 function toNumber(value) {
@@ -256,7 +256,6 @@ function startPreorderPayoutReconciliationJob() {
         return null;
     }
 
-    const intervalMs = Math.max(30000, Number(DEFAULT_INTERVAL_MS) || DEFAULT_INTERVAL_MS);
     let running = false;
 
     const run = async () => {
@@ -271,21 +270,12 @@ function startPreorderPayoutReconciliationJob() {
         }
     };
 
-    setTimeout(() => {
-        void run();
-    }, 5000);
+    const task = cron.schedule('1 0 * * *', run);
 
-    const timer = setInterval(() => {
-        void run();
-    }, intervalMs);
-
-    // Xóa unref() để tránh Hostinger giết process do lầm tưởng không còn tác vụ nào đang chạy.
-    // if (typeof timer.unref === 'function') timer.unref();
-
-    console.info(`[preorder-reconcile] started, interval=${intervalMs}ms`);
+    console.info(`[preorder-reconcile] scheduled: 00:01 AM daily`);
 
     return {
-        stop: () => clearInterval(timer),
+        stop: () => task.stop(),
         runNow: run,
     };
 }
