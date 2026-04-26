@@ -715,19 +715,36 @@ async function getPublicRentals(params) {
         };
     }
 
-    const [total, rentals] = await Promise.all([
-        prisma.rental.count({ where }),
-        prisma.rental.findMany({
-            where,
-            skip,
-            take: limitNum,
-            orderBy,
-            include: {
-                location: true,
-                images: true,
-            },
-        }),
-    ]);
+    const total = await prisma.rental.count({ where });
+
+    if (total === 0) {
+        return {
+            data: [],
+            pagination: { page: pageNum, limit: limitNum, total: 0, totalPages: 0 },
+        };
+    }
+
+    const basicRentals = await prisma.rental.findMany({
+        where,
+        skip,
+        take: limitNum,
+        orderBy,
+        select: { id: true },
+    });
+
+    const rentalIds = basicRentals.map((r) => r.id);
+
+    const fullRentals = await prisma.rental.findMany({
+        where: { id: { in: rentalIds } },
+        orderBy,
+        include: {
+            location: true,
+            images: true,
+        },
+    });
+
+    const rentalsMap = new Map(fullRentals.map((r) => [r.id, r]));
+    const rentals = rentalIds.map((id) => rentalsMap.get(id)).filter(Boolean);
 
     return {
         data: rentals.map((r) => {
