@@ -400,10 +400,33 @@ async function createDepositPayment(userId, body) {
                 id: true,
                 status: true,
                 rentals: { select: { owner_id: true } },
+                rentalPeriods: {
+                    where: { status: 'ACTIVE' },
+                    select: { endDate: true },
+                    orderBy: { endDate: 'asc' },
+                    take: 1,
+                },
             },
         });
 
-        if (!roomNow || roomNow.status !== 'AVAILABLE') {
+        if (!roomNow) {
+            throw Object.assign(new Error('Phòng không tồn tại'), { statusCode: 404 });
+        }
+
+        const txNearestEnd = roomNow.rentalPeriods?.[0]?.endDate
+            ? new Date(roomNow.rentalPeriods[0].endDate)
+            : null;
+        const txDaysUntilAvail = txNearestEnd
+            ? Math.ceil((txNearestEnd.getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+            : null;
+        const txIsNearlyAvailable =
+            roomNow.status === 'RENTED' &&
+            txNearestEnd &&
+            txDaysUntilAvail != null &&
+            txDaysUntilAvail >= 0 &&
+            txDaysUntilAvail <= NEARLY_AVAILABLE_DAYS;
+
+        if (roomNow.status !== 'AVAILABLE' && !txIsNearlyAvailable) {
             throw Object.assign(new Error('Phòng hiện không khả dụng để đặt cọc'), {
                 statusCode: 400,
             });
