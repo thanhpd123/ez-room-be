@@ -433,27 +433,30 @@ async function getAdvancedSearch(req, res) {
             embeddingRoomIds = Object.keys(embeddingSimilarityMap);
         }
 
-        // 5. Fetch rooms
+        // 5. Fetch rooms (Phase 1: Minimal data for scoring)
+        const roomSelectForScoring = {
+            id: true,
+            room_name: true,
+            description: true,
+            price: true,
+            room_type: true,
+            status: true,
+            rentals: {
+                select: {
+                    id: true,
+                    title: true,
+                    description: true,
+                    location: true,
+                    users: { select: { fullName: true } },
+                },
+            },
+            roomAmenities: { include: { amenity: true } },
+        };
+
         const [filteredRooms, embeddingRooms] = await Promise.all([
             prisma.rooms.findMany({
                 where: roomWhere,
-                include: {
-                    rentals: {
-                        include: {
-                            location: true,
-                            images: true,
-                            users: { select: { id: true, fullName: true, role: true, isVip: true } },
-                            rooms: {
-                                include: {
-                                    roomAmenities: { include: { amenity: true } },
-                                    images: true,
-                                },
-                            },
-                        },
-                    },
-                    roomAmenities: { include: { amenity: true } },
-                    images: true,
-                },
+                select: roomSelectForScoring,
             }),
             embeddingRoomIds.length > 0
                 ? prisma.rooms.findMany({
@@ -462,23 +465,7 @@ async function getAdvancedSearch(req, res) {
                         status: 'AVAILABLE',
                         rentals: { status: 'AVAILABLE' },
                     },
-                    include: {
-                        rentals: {
-                            include: {
-                                location: true,
-                                images: true,
-                                users: { select: { id: true, fullName: true, role: true, isVip: true } },
-                                rooms: {
-                                    include: {
-                                        roomAmenities: { include: { amenity: true } },
-                                        images: true,
-                                    },
-                                },
-                            },
-                        },
-                        roomAmenities: { include: { amenity: true } },
-                        images: true,
-                    },
+                    select: roomSelectForScoring,
                 })
                 : [],
         ]);
@@ -577,18 +564,52 @@ async function getAdvancedSearch(req, res) {
             let finalScore = computeFinalScore(components, activeWeights);
             const popularityScore = popularityByRoom[room.id] ?? 0;
             finalScore = 0.8 * finalScore + 0.2 * popularityScore;
-            return formatRoom(room, Math.round(finalScore * 10) / 10, ratingByRoom, extra);
+            return {
+                id: room.id,
+                matchScore: Math.round(finalScore * 10) / 10,
+                extra,
+            };
         });
 
         scored.sort((a, b) => b.matchScore - a.matchScore);
 
         const total = scored.length;
-        const paginated = scored.slice((page - 1) * limit, page * limit);
+        const paginatedScores = scored.slice((page - 1) * limit, page * limit);
+        const paginatedIds = paginatedScores.map((s) => s.id);
+
+        const fullPaginatedRooms = await prisma.rooms.findMany({
+            where: { id: { in: paginatedIds } },
+            include: {
+                rentals: {
+                    include: {
+                        location: true,
+                        images: true,
+                        users: { select: { id: true, fullName: true, role: true, isVip: true } },
+                        rooms: {
+                            include: {
+                                roomAmenities: { include: { amenity: true } },
+                                images: true,
+                            },
+                        },
+                    },
+                },
+                roomAmenities: { include: { amenity: true } },
+                images: true,
+            },
+        });
+
+        const fullRoomMap = new Map();
+        for (const fr of fullPaginatedRooms) fullRoomMap.set(fr.id, fr);
+
+        const paginatedData = paginatedScores.map((s) => {
+            const fullRoom = fullRoomMap.get(s.id);
+            return formatRoom(fullRoom, s.matchScore, ratingByRoom, s.extra);
+        });
 
         const searchMode = hasEmbeddings && q.length > 0 ? 'hybrid' : hasEmbeddings ? 'ai_embedding' : 'smart_keyword';
         return res.json({
             success: true,
-            data: paginated,
+            data: paginatedData,
             pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
             searchMode,
         });
@@ -774,10 +795,10 @@ async function searchByImage(req, res) {
                     topClipCosine == null
                         ? null
                         : topClipCosine >= 0.35
-                          ? 'Strong visual match in CLIP space.'
-                          : topClipCosine >= 0.22
-                            ? 'Moderate match; try another photo angle or check room image quality in DB.'
-                            : 'Weak match; CLIP is working but this image may not resemble listings — see docs/AI-SEARCH-SETUP.md',
+                            ? 'Strong visual match in CLIP space.'
+                            : topClipCosine >= 0.22
+                                ? 'Moderate match; try another photo angle or check room image quality in DB.'
+                                : 'Weak match; CLIP is working but this image may not resemble listings — see docs/AI-SEARCH-SETUP.md',
             },
         });
     } catch (err) {
