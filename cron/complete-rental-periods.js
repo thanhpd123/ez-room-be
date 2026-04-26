@@ -6,8 +6,7 @@
  * Cập nhật phòng về trạng thái AVAILABLE
  */
 const prisma = require('../config/prisma');
-
-const CHECK_INTERVAL_MS = 5 * 60 * 1000; // Chạy mỗi 5 phút
+const cron = require('node-cron');
 
 async function completeExpiredRentalPeriods() {
     try {
@@ -121,15 +120,22 @@ async function completeExpiredRentalPeriods() {
 }
 
 function startCompleteRentalCron() {
-    // Run immediately on startup, then repeat periodically.
-    completeExpiredRentalPeriods();
-    setInterval(completeExpiredRentalPeriods, CHECK_INTERVAL_MS);
+    let running = false;
 
-    console.log(
-        '[Cron] Rental period auto-completion scheduled: every ' +
-        (CHECK_INTERVAL_MS / 60000) +
-        ' minute(s)'
-    );
+    // Chạy vào 00:01 mỗi ngày
+    cron.schedule('1 0 * * *', async () => {
+        if (running) return;
+        running = true;
+        try {
+            await completeExpiredRentalPeriods();
+        } catch (error) {
+            console.error('[Cron] completeExpiredRentalPeriods failed:', error);
+        } finally {
+            running = false;
+        }
+    });
+
+    console.log('[Cron] Rental period auto-completion scheduled: 00:01 AM daily');
 }
 
 module.exports = { startCompleteRentalCron, completeExpiredRentalPeriods };
