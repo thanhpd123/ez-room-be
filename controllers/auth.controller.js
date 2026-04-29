@@ -38,7 +38,14 @@ function getRefreshTokenFromRequest(req) {
 function handleError(err, res, defaultMessage) {
     const statusCode = err.statusCode || 500;
     const message = err.message || defaultMessage;
-    console.error('Auth error:', err);
+
+    // Chỉ in ra error stack trace nếu là lỗi server (500), nếu là lỗi client (4xx) thì chỉ in warning
+    if (statusCode >= 500) {
+        console.error('Auth error HTTP 500:', err);
+    } else {
+        console.warn(`Auth warning HTTP ${statusCode}:`, message, err.errors || '');
+    }
+
     return res.status(statusCode).json({
         success: false,
         message,
