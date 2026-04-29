@@ -1,5 +1,6 @@
 const prisma = require('../config/prisma');
 const cache = require('../utils/simple-cache');
+const redisClient = require('../utils/redis');
 const feedbackConfig = require('../config/feedback.config');
 const { mapFeToDb, mapDbToFe } = require('../utils/room-type-mapper');
 const { sendEmail } = require('../utils/email');
@@ -11,6 +12,23 @@ const FREE_TIER_LANDLORD_MAX_ROOMS = Math.max(
     1,
     Number(process.env.FREE_TIER_LANDLORD_MAX_ROOMS || 5)
 );
+
+// Clear Redis cache helper
+async function invalidateRoomsCache() {
+    if (!redisClient) return;
+    try {
+        const stream = redisClient.scanStream({ match: 'rooms_list:*', count: 100 });
+        const keys = [];
+        for await (const chunk of stream) {
+            keys.push(...chunk);
+        }
+        if (keys.length > 0) {
+            await redisClient.del(keys);
+        }
+    } catch (err) {
+        console.error('Error clearing Redis cache for rooms:', err);
+    }
+}
 
 function isActiveVipLandlord(authUser) {
     if (!authUser) return false;
@@ -236,6 +254,8 @@ async function createRoom(userId, body, authUser = null) {
         return created;
     });
 
+    await invalidateRoomsCache();
+
     return { message: 'Tạo phòng thành công', data: formatRoomResponse(room) };
 }
 
@@ -251,6 +271,20 @@ async function getRooms(params) {
         page = 1,
         limit = 20,
     } = params;
+
+    const cacheKey = `rooms_list:${JSON.stringify(params)}`;
+
+    if (redisClient) {
+        try {
+            const cachedData = await redisClient.get(cacheKey);
+            if (cachedData) {
+                return JSON.parse(cachedData);
+            }
+        } catch (err) {
+            console.error('Redis GET Error:', err);
+        }
+    }
+
     const pageNum = Math.max(1, parseInt(page));
     const pageSize = Math.min(100, Math.max(1, parseInt(limit)));
     const skip = (pageNum - 1) * pageSize;
@@ -312,7 +346,7 @@ async function getRooms(params) {
     const roomsMap = new Map(fullRooms.map((r) => [r.id, r]));
     const rooms = roomIds.map((id) => roomsMap.get(id)).filter(Boolean);
 
-    return {
+    const responseData = {
         data: rooms.map((room) => ({
             ...formatRoomResponse(room),
             rental: room.rentals
@@ -332,6 +366,16 @@ async function getRooms(params) {
         })),
         pagination: { page: pageNum, limit: pageSize, total, pages: Math.ceil(total / pageSize) },
     };
+
+    if (redisClient) {
+        try {
+            await redisClient.set(cacheKey, JSON.stringify(responseData), 'EX', 300);
+        } catch (err) {
+            console.error('Redis SET Error:', err);
+        }
+    }
+
+    return responseData;
 }
 
 async function getRoomById(roomId, userId = null) {
@@ -542,6 +586,8 @@ async function updateRoom(roomId, userId, body) {
         notifyFavoritersRoomAvailable(room).catch((err) => console.error('Notify favoriters error:', err));
     }
 
+    await invalidateRoomsCache();
+
     const message = isResubmit
         ? 'Đã gửi lại phòng để duyệt'
         : needsModeration
@@ -566,6 +612,8 @@ async function deleteRoom(roomId, userId) {
     }
 
     await prisma.rooms.delete({ where: { id: roomId } });
+
+    await invalidateRoomsCache();
 
     return { message: 'Xóa phòng thành công' };
 }
@@ -602,6 +650,8 @@ async function moderateRoom(roomId, body) {
             rentals: { include: { location: true } },
         },
     });
+
+    await invalidateRoomsCache();
 
     return {
         message: decision === 'approved' ? 'Đã duyệt phòng' : 'Đã từ chối phòng',
@@ -854,6 +904,8 @@ async function createRentalContract(roomId, userId, body) {
 
         return period;
     });
+
+    await invalidateRoomsCache();
 
     return {
         message: 'Tạo hợp đồng thuê thành công',
@@ -1214,6 +1266,8 @@ async function completeRentalPeriod(rentalPeriodId, userId) {
 
         return updated;
     });
+
+    await invalidateRoomsCache();
 
     return {
         message: 'Kết thúc kỳ thuê thành công',
