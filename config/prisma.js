@@ -1,15 +1,28 @@
 const { PrismaClient } = require('@prisma/client');
+const { Pool } = require('pg');
+const { PrismaPg } = require('@prisma/adapter-pg');
 
 /**
  * Single PrismaClient per process. In dev, bind to globalThis so hot reload / odd
  * require graphs do not spawn extra pools (each client holds DB connections).
- *
- * Tune Supabase pooler DATABASE_URL, e.g.:
- *   ?pgbouncer=true&connection_limit=8&pool_timeout=30&connect_timeout=15
- * @see https://www.prisma.io/docs/orm/prisma-client/setup-and-configuration/databases-connections
  */
 function createPrismaClient() {
+    const connectionString = process.env.DATABASE_URL;
+    const pool = new Pool({
+        connectionString,
+        max: 20,
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: 10000
+    });
+
+    pool.on('error', (err, client) => {
+        console.error('Unexpected error on idle pg client', err);
+    });
+
+    const adapter = new PrismaPg(pool);
+
     return new PrismaClient({
+        adapter,
         log:
             process.env.NODE_ENV === 'development'
                 ? ['error', 'warn']

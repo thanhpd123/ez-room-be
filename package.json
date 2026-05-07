@@ -35,6 +35,7 @@
     "@google/generative-ai": "^0.24.1",
     "@huggingface/transformers": "^3.8.1",
     "@payos/node": "^2.0.5",
+    "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^6.19.2",
     "@supabase/supabase-js": "^2.95.3",
     "axios": "^1.7.9",
@@ -52,6 +53,7 @@
     "node-cron": "^4.2.1",
     "nodemailer": "^8.0.1",
     "openai": "^6.27.0",
+    "pg": "^8.20.0",
     "socket.io": "^4.8.3",
     "swagger-jsdoc": "^6.2.8",
     "swagger-ui-express": "^5.0.1"
