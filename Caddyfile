@@ -1,0 +1,3 @@
+api.ezroom-vn.com {
+    reverse_proxy ez-room-be: 3000
+}
