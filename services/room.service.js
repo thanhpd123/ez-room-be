@@ -5,7 +5,7 @@ const feedbackConfig = require('../config/feedback.config');
 const { mapFeToDb, mapDbToFe } = require('../utils/room-type-mapper');
 const { sendEmail } = require('../utils/email');
 
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5174';
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
 const AMENITIES_CACHE_KEY = 'rooms:amenities';
 const NEARLY_AVAILABLE_DAYS = Math.max(1, Number(process.env.NEARLY_AVAILABLE_DAYS || 7));
 const FREE_TIER_LANDLORD_MAX_ROOMS = Math.max(
