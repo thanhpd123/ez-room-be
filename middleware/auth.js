@@ -168,6 +168,18 @@ async function verifyJWT(req, res, next) {
  * @param  {...string} allowedRoles - Roles allowed to access the route
  */
 function requireRole(...allowedRoles) {
+    return authorize({ roles: allowedRoles });
+}
+
+/**
+ * Flexible authorization middleware that supports both RBAC and ABAC-style conditions.
+ * It evaluates a role allow-list first, then optional context-based conditions.
+ *
+ * Usage:
+ * - authorize({ roles: ['ADMIN'] })
+ * - authorize({ roles: ['ADMIN', 'MODERATOR'], allowIf: ({ req, user }) => req.params.userId === user.id })
+ */
+function authorize({ roles = [], allowIf = null } = {}) {
     return (req, res, next) => {
         const user = req.auth?.user;
 
@@ -179,12 +191,23 @@ function requireRole(...allowedRoles) {
         }
 
         const userRole = user.role;
+        const allowedRoles = Array.isArray(roles) ? roles : [roles].filter(Boolean);
 
         if (!allowedRoles.includes(userRole)) {
             return res.status(403).json({
                 success: false,
                 message: `Bạn không có quyền truy cập. Yêu cầu role: ${allowedRoles.join(' hoặc ')}`,
             });
+        }
+
+        if (allowIf && typeof allowIf === 'function') {
+            const result = allowIf({ req, res, user });
+            if (!result) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Bạn không có quyền thực hiện hành động này trong ngữ cảnh hiện tại',
+                });
+            }
         }
 
         next();
@@ -288,4 +311,4 @@ async function resolveUserIdFromBearerToken(token) {
     }
 }
 
-module.exports = { verifyJWT, requireRole, optionalJWT, resolveUserIdFromBearerToken };
+module.exports = { verifyJWT, requireRole, authorize, optionalJWT, resolveUserIdFromBearerToken };

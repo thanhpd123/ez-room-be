@@ -1,6 +1,7 @@
 const prisma = require('../config/prisma');
 const { reconcilePreorderPayoutsOnce } = require('./preorder-reconciliation.service');
 const cache = require('../utils/simple-cache');
+const { getRolePolicyConfig, DEFAULT_ROLE_POLICIES } = require('../utils/role-policy');
 
 const VALID_ROLES = ['ADMIN', 'LANDLORD', 'TENANT', 'GUEST', 'MODERATOR'];
 const VALID_STATUSES = ['ACTIVE', 'INACTIVE', 'SUSPENDED', 'BANNED'];
@@ -1252,7 +1253,22 @@ async function getSystemSettings() {
         };
     }
 
-    return { data: { settings, meta } };
+    const rolePolicies = Array.isArray(settings[SETTINGS_KEYS.SITE_HOME_LAYOUT]?.rolePolicies)
+        ? settings[SETTINGS_KEYS.SITE_HOME_LAYOUT].rolePolicies
+        : [];
+
+    return {
+        data: {
+            settings: {
+                ...settings,
+                [SETTINGS_KEYS.SITE_HOME_LAYOUT]: {
+                    ...(settings[SETTINGS_KEYS.SITE_HOME_LAYOUT] || {}),
+                    rolePolicies: getRolePolicyConfig(rolePolicies),
+                },
+            },
+            meta,
+        },
+    };
 }
 
 async function updateSystemSettings(body, adminId) {
@@ -1274,7 +1290,16 @@ async function updateSystemSettings(body, adminId) {
         } else if (key === SETTINGS_KEYS.SITE_HOME_BANNER) {
             updates.push({ key, value: validateHomeBannerSettings(value) });
         } else if (key === SETTINGS_KEYS.SITE_HOME_LAYOUT) {
-            updates.push({ key, value: validateHomeLayoutSettings(value) });
+            const normalizedLayout = validateHomeLayoutSettings(value);
+            const rolePolicies = Array.isArray(value?.rolePolicies) ? value.rolePolicies : [];
+            const normalizedPolicies = getRolePolicyConfig(rolePolicies);
+            updates.push({
+                key,
+                value: {
+                    ...normalizedLayout,
+                    rolePolicies: normalizedPolicies,
+                },
+            });
         }
     }
 

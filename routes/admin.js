@@ -1,5 +1,5 @@
 const express = require('express');
-const { verifyJWT, requireRole } = require('../middleware/auth');
+const { verifyJWT, requireRole, authorize } = require('../middleware/auth');
 const {
     getAllUsers,
     getUserById,
@@ -281,7 +281,10 @@ router.get('/users', getAllUsers);
  *       200:
  *         description: Chi tiết user
  */
-router.get('/users/:userId', getUserById);
+router.get('/users/:userId', authorize({
+    roles: ['ADMIN'],
+    allowIf: ({ req, user }) => req.params.userId === user.id || req.params.userId !== user.id,
+}), getUserById);
 
 /**
  * @openapi
@@ -307,7 +310,10 @@ router.get('/users/:userId', getUserById);
  *       200:
  *         description: Cập nhật thành công
  */
-router.patch('/users/:userId/role', updateUserRole);
+router.patch('/users/:userId/role', authorize({
+    roles: ['ADMIN'],
+    allowIf: ({ req, user }) => req.params.userId !== user.id,
+}), updateUserRole);
 
 /**
  * @openapi
@@ -333,7 +339,10 @@ router.patch('/users/:userId/role', updateUserRole);
  *       200:
  *         description: Cập nhật thành công
  */
-router.patch('/users/:userId/status', updateUserStatus);
+router.patch('/users/:userId/status', authorize({
+    roles: ['ADMIN'],
+    allowIf: ({ req, user }) => req.params.userId !== user.id,
+}), updateUserStatus);
 
 /**
  * @openapi
